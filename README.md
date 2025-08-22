@@ -1,15 +1,12 @@
 # Product-Form Queueing Networks (PFQN) Solvers
 
-A comprehensive C/C++ library for solving product-form queueing networks using **exact multiprecision arithmetic**. This codebase provides multiple high-performance algorithms for computing performance metrics of multi-class queueing network models with guaranteed numerical accuracy through arbitrary precision arithmetic, eliminating the numerical stability issues common in floating-point implementations.
+A comprehensive C library for solving product-form queueing networks using exact multiprecision arithmetic for computing normalizing constants. 
 
 ## Features
 
-- **Exact Multiprecision Arithmetic**: All algorithms use GMP (GNU Multiple Precision Arithmetic Library) to provide exact rational arithmetic, ensuring numerical stability even for large models or extreme parameter values
 - **Multiple Solving Algorithms**:
   - Mean Value Analysis (MVA)
   - Method of Moments (MoM)
-- **Guaranteed Accuracy**: Eliminates rounding errors and numerical instabilities inherent in floating-point implementations
-- **Support for Large Models**: Can handle queueing networks with hundreds of queues and classes without numerical degradation
 
 ## Prerequisites
 
@@ -99,7 +96,7 @@ Classic iterative algorithm for product-form networks. Efficient for small to me
 
 ### MoM (Method of Moments)
 Normalizing constant-based approach using moment generating functions. Suitable for models with moderate populations.  
-*Reference: Casale (2006), "An efficient algorithm for the exact analysis of multiclass queueing networks with large population sizes," SIGMETRICS 34(1).*
+*Reference: Casale (2006), "An efficient algorithm for the exact analysis of multiclass queueing networks with large population sizes," Proc. of ACM SIGMETRICS 2006.*
 ```bash
 ./bin/mom model.qn
 ```
