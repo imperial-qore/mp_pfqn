@@ -6,11 +6,6 @@ A C library for solving product-form queueing networks using exact multiprecisio
   - Mean Value Analysis (MVA)
   - Method of Moments (MoM)
 
-## Prerequisites
-
-- C/C++ compiler (gcc/g++ recommended)
-- GNU Make
-
 ## Quick Start
 
 ```bash
