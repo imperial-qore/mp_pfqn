@@ -2,9 +2,7 @@
 
 A C library for solving product-form queueing networks using exact multiprecision arithmetic. The latter allows to compute normalizing constants of the state probabilities in large models. 
 
-## Features
-
-- **Multiple Solving Algorithms**:
+- Current solvers:
   - Mean Value Analysis (MVA)
   - Method of Moments (MoM)
 
