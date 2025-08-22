@@ -1,6 +1,6 @@
 # Product-Form Queueing Networks (PFQN) Solvers
 
-A comprehensive C library for solving product-form queueing networks using exact multiprecision arithmetic for computing normalizing constants. 
+A C library for solving product-form queueing networks using exact multiprecision arithmetic. The latter allows to compute normalizing constants of the state probabilities in large models. 
 
 ## Features
 
@@ -24,13 +24,7 @@ make
 
 # Run a solver
 ./bin/mva models/02_bottleneck_study.qn
-```
-
-## Build Commands
-
-```bash
-# Build all programs
-make clean; make
+./bin/mom models/02_bottleneck_study.qn
 ```
 
 ## Usage
@@ -64,25 +58,7 @@ mM LM1 LM2 ... LMR  # Queue M: multiplicity, demands per class
 ./bin/mom model.qn      # Method of Moments
 ```
 
-### Example
-
-Create a simple model file `example.qn`:
-```
-2          # 2 job classes
-10 5       # 10 jobs of class 1, 5 jobs of class 2
-0 0        # No think times
-3          # 3 queues
-1 10 5     # Queue 1 (multiplicity 1, class-1 demand = 10, class-2 demand = 5)
-1 5 9      # Queue 2
-1 11 7     # Queue 3
-```
-
-Run the MVA solver:
-```bash
-./bin/mom example.qn
-```
-
-## Solvers & References
+## References
 
 ### MVA (Mean Value Analysis)
 Classic iterative algorithm for product-form networks. Efficient for small to medium-sized models.  
@@ -97,12 +73,6 @@ Normalizing constant-based approach using moment generating functions. Suitable 
 ```bash
 ./bin/mom models/02_bottleneck_study.qn
 ```
-
-## Performance Considerations
-
-- For small models (< 50 jobs), MVA is typically fastest
-- For larger populations, MoM may be more efficient
-- The MoM algorithm may fail on particular combinations of demands due to the underpinning systems of linear equations becoming singular. Use -p to introduce perturbations on the demand and solve an approximate model. 
 
 ## License
 
