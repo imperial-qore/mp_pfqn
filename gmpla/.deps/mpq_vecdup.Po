@@ -1,0 +1,6 @@
+mpq_vecdup.o mpq_vecdup.o: mpq_vecdup.c /usr/include/gmp.h \
+  /usr/lib/gcc/i586-suse-linux/4.2.1/include/stddef.h
+
+/usr/include/gmp.h:
+
+/usr/lib/gcc/i586-suse-linux/4.2.1/include/stddef.h:

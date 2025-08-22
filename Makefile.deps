@@ -1,0 +1,16 @@
+# Automatic dependency generation
+# Include this file in subdirectory Makefiles to get automatic header dependency tracking
+
+# Generate dependencies automatically
+%.d: %.c
+	@set -e; rm -f $@; \
+	$(CC) -MM $(CFLAGS) $< > $@.$$$$; \
+	sed 's,\($*\)\.o[ :]*,\1.o $@ : ,g' < $@.$$$$ > $@; \
+	rm -f $@.$$$$
+
+# Include the dependency files if they exist
+-include $(SRCS:.c=.d)
+
+# Clean should also remove dependency files
+clean-deps:
+	$(RM) *.d

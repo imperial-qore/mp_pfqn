@@ -1,0 +1,8 @@
+mpq_mspget.o mpq_mspget.o: mpq_mspget.c /usr/include/gmp.h \
+  /usr/lib/gcc/i586-suse-linux/4.2.1/include/stddef.h gmpla.h
+
+/usr/include/gmp.h:
+
+/usr/lib/gcc/i586-suse-linux/4.2.1/include/stddef.h:
+
+gmpla.h:
