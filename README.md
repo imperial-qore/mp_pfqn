@@ -12,7 +12,6 @@ A comprehensive C library for solving product-form queueing networks using exact
 
 - C/C++ compiler (gcc/g++ recommended)
 - GNU Make
-- Additional dependencies (see [DEPENDENCIES.md](DEPENDENCIES.md))
 
 ## Quick Start
 
@@ -26,8 +25,6 @@ make
 # Run a solver
 ./bin/mva models/example.qn
 ```
-
-For detailed dependency information and installation options, see [DEPENDENCIES.md](DEPENDENCIES.md).
 
 ## Build Commands
 
