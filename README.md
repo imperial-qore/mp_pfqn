@@ -60,19 +60,12 @@ mM LM1 LM2 ... LMR  # Queue M: multiplicity, demands per class
 
 ## References
 
-### MVA (Mean Value Analysis)
-Classic iterative algorithm for product-form networks. Efficient for small to medium-sized models.  
 *Reference: Reiser & Lavenberg (1980), "Mean-Value Analysis of Closed Multichain Queuing Networks," Journal of the ACM 27(2).*
 ```bash
 ./bin/mva models/02_bottleneck_study.qn
 ```
 
-### MoM (Method of Moments)
-Normalizing constant-based approach using moment generating functions. Suitable for models with moderate populations.  
 *Reference: Casale (2006), "An efficient algorithm for the exact analysis of multiclass queueing networks with large population sizes," Proc. of ACM SIGMETRICS 2006.*
-```bash
-./bin/mom models/02_bottleneck_study.qn
-```
 
 ## License
 
