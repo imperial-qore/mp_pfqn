@@ -43,6 +43,8 @@ mM LM1 LM2 ... LMR  # Queue M: multiplicity, demands per class
 ```
 *IMPORTANT*: All values must be passed as integers. 
 
+Examples are available under the models/ folders.
+
 ### Running Solvers
 
 ```bash
