@@ -3,8 +3,8 @@
 A C library for solving product-form queueing networks using exact multiprecision arithmetic. The latter allows to compute normalizing constants of the state probabilities in large models. 
 
 - Current solvers:
-  - Mean Value Analysis (MVA)
-  - Method of Moments (MoM)
+  - Mean Value Analysis (MVA) [1]
+  - Method of Moments (MoM) [2]
 
 ## Quick Start
 
