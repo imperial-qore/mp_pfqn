@@ -6,7 +6,7 @@
 #include "mom.h"
 
 /* setuls - setup the linear system for the current class */
-LS* setupls(int** L, int* n, int*Z, int* mi, int m, int r)
+LS* setupls(int** L, int* n, mpz_t *Z, int* mi, int m, int r)
 {
 	int i,j,k,s,h,t,w;
 	combsrep Ik;
@@ -106,7 +106,7 @@ LS* setupls(int** L, int* n, int*Z, int* mi, int m, int r)
 		int* d = I.combs[i];
 		t=0;
 		for (s=0;s<=r-1;s++)
-			mpq_mspset_si(ls->B2r,lastB2r++,(Ik.card+i)*r+s,Z[r-1],maxL[r-1]);
+			mpq_mspset_z(ls->B2r,lastB2r++,(Ik.card+i)*r+s,Z[r-1],maxL[r-1]);
 		
 		for (j=0;j<m;j++)
 		{
@@ -143,7 +143,13 @@ LS* setupls(int** L, int* n, int*Z, int* mi, int m, int r)
 		for (s=1;s<=r-1;s++)
 		{
 			mpq_mspset_si(ls->A12,pcpos[lastpcpos],i*r,n[s-1],1);
-			mpq_mspset_si(ls->A12,pcpos[lastpcpos++],i*r+s,-Z[s-1],maxL[s-1]);
+			{
+				mpz_t neg_z;
+				mpz_init(neg_z);
+				mpz_neg(neg_z, Z[s-1]);
+				mpq_mspset_z(ls->A12,pcpos[lastpcpos++],i*r+s,neg_z,maxL[s-1]);
+				mpz_clear(neg_z);
+			}
 		}
 		w++;
 		last[t]+=r-1;

@@ -48,7 +48,7 @@ int mdecrease(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, mpq_vec_t g, mpq_vec_t gr
 			/* compute Gs using the population contraints */
 			for (s=1;s<=qnm->R;s++)
 			{
-				if (qnm->Z[s-1]==0)
+				if (mpz_cmp_ui(qnm->Z[s-1], 0) == 0)
 				{
 					mpq_set_si(G[i*(qnm->R+1)+s],0,1);
 					int msum=0; // sum of multiplicities
@@ -71,7 +71,7 @@ int mdecrease(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, mpq_vec_t g, mpq_vec_t gr
 				else
 				{
 					mpq_set_si(G[i*(qnm->R+1)+s],qnm->N[s-1],1);
-					mpq_set_si(tmp,qnm->Z[s-1],1);
+					mpq_set_z(tmp,qnm->Z[s-1]);
 					mpq_div(G[i*(qnm->R+1)+s],G[i*(qnm->R+1)+s],tmp);
 					mpq_mul(G[i*(qnm->R+1)+s],G[i*(qnm->R+1)+s],G[i*(qnm->R+1)]);
 					for (j=0;j<qnm->M;j++)
@@ -82,7 +82,7 @@ int mdecrease(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, mpq_vec_t g, mpq_vec_t gr
 						mpq_set_si(tmp,qnm->L[j][s-1],1);
 						mpq_set_si(tmp2,qnm->mi[j]+I.combs[i][j],1);
 						mpq_mul(tmp2,tmp2,tmp);
-						mpq_set_si(tmp,qnm->Z[s-1],1);
+						mpq_set_z(tmp,qnm->Z[s-1]);
 						mpq_div(tmp2,tmp2,tmp);
 						mpq_mul(tmp2,tmp2,Gk[t*(qnm->R+1)+s]);
 						mpq_sub(G[i*(qnm->R+1)+s],G[i*(qnm->R+1)+s],tmp2);

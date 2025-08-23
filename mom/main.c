@@ -165,7 +165,7 @@ int main(int argc, char**argv)
 	
 	// Store original parameters for printing
 	int** original_L = NULL;
-	int* original_Z = NULL;
+	mpz_t* original_Z = NULL;
 	if(perturbation_digit > 0) {
 		// Allocate memory for original parameters
 		original_L = (int**)malloc(qnm->M * sizeof(int*));
@@ -175,9 +175,10 @@ int main(int argc, char**argv)
 				original_L[i][j] = qnm->L[i][j];
 			}
 		}
-		original_Z = (int*)malloc(qnm->R * sizeof(int));
+		original_Z = (mpz_t*)malloc(qnm->R * sizeof(mpz_t));
 		for(int j = 0; j < qnm->R; j++) {
-			original_Z[j] = qnm->Z[j];
+			mpz_init(original_Z[j]);
+			mpz_set(original_Z[j], qnm->Z[j]);
 		}
 	}
 	
@@ -200,7 +201,7 @@ int main(int argc, char**argv)
 		}
 		
 		for(int j = 0; j < qnm->R; j++) {
-			qnm->Z[j] = qnm->Z[j] * scale_factor;
+			mpz_mul_ui(qnm->Z[j], qnm->Z[j], scale_factor);
 		}
 		
 		if (debug_output && !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
@@ -317,7 +318,7 @@ int main(int argc, char**argv)
 		copy_Gk_in_g(Gk,g);
 		copy_G_in_g(G,g);
 		/* annihilate unused normalizing constants */
-		for(s=0;s<r;s++) if(qnm->Z[s]==0) for(t=0;t<nck(m+r-2,r-1);t++) mpq_set_si(g[cardGk+t*r+1+s],0,1);
+		for(s=0;s<r;s++) if(mpz_cmp_ui(qnm->Z[s], 0) == 0) for(t=0;t<nck(m+r-2,r-1);t++) mpq_set_si(g[cardGk+t*r+1+s],0,1);
 	}
 	/* start solving the sequence of linear systems */
 	for (n[r-1]=1;n[r-1]<=qnm->N[r-1];n[r-1]++) /* for all population of class r */ 
@@ -359,7 +360,7 @@ int main(int argc, char**argv)
 		copy_G_in_g(G,g);
 		free_Gk();
 		/* annihilate unused normalizing constants */
-		for(s=0;s<r;s++) if(qnm->Z[s]==0) for(t=0;t<nck(m+r-2,r-1);t++) mpq_set_si(g[cardGk+t*r+1+s],0,1);
+		for(s=0;s<r;s++) if(mpz_cmp_ui(qnm->Z[s], 0) == 0) for(t=0;t<nck(m+r-2,r-1);t++) mpq_set_si(g[cardGk+t*r+1+s],0,1);
 		/* G,g and gr are not freed because we need them at the next cycle */	
 	}
 	n[r-1]=qnm->N[r-1];
@@ -387,6 +388,9 @@ int main(int argc, char**argv)
 			free(original_L[i]);
 		}
 		free(original_L);
+		for(int j = 0; j < qnm->R; j++) {
+			mpz_clear(original_Z[j]);
+		}
 		free(original_Z);
 	}
 
