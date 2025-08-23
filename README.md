@@ -21,6 +21,8 @@ make
 ./bin/mom models/02_bottleneck_study.qn
 ```
 
+If you wish to recompile, run ``make clean; make''.
+
 ## Usage
 
 ### Model File Format
