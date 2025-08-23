@@ -1,6 +1,6 @@
 # Product-Form Queueing Networks (PFQN) Solvers
 
-A C library for solving product-form queueing networks using exact multiprecision arithmetic. The latter allows to compute normalizing constants of the state probabilities in large models. 
+A C library for solving product-form queueing networks using exact multiprecision arithmetic. Exact arithmetic allows to compute normalizing constants for the equilibrium state probabilities on large models. 
 
 - Current solvers:
   - Mean Value Analysis (MVA) [1]
