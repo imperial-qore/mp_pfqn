@@ -63,7 +63,15 @@ int main(int argc,char ** argv)
 			printf("  -q, --qlen       : Print only queue lengths, one per row\n");
 			printf("  -h, --help       : Print this help message\n");
 			return 0;
+		} else if(argv[i][0] == '-') {
+			// Skip unknown options
+			if(strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "-s") == 0) {
+				// Skip the next argument too (option value)
+				if(i + 1 < argc) i++;
+			}
+			// Otherwise just skip this unknown option
 		} else {
+			// Not an option, must be the model file
 			model_file = argv[i];
 		}
 	}
@@ -220,7 +228,7 @@ int main(int argc,char ** argv)
 		printf("=========================================\n");
 		
 		t1 = CPUTIME;
-		printf("\nElapsed time (MVA): %g s\n", t1-t0);
+		printf("\nElapsed time (MVA): %.6f s\n", t1-t0);
 	}
 	
 	for (r=0;r<qn->R;r++)

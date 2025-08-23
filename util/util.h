@@ -39,6 +39,7 @@ int sum(int* v, int n);
 /* queueing network model */
 qnmodel* readmodel(char* filename);
 void printmodel(qnmodel* qn);
+void printmodel_with_perturbation(qnmodel* qn, int perturbation_digit, long scale_factor, int perturbation_seed, int** original_L, int* original_Z);
 
 /* queueing network population */
 int* initpop(int R);

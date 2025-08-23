@@ -63,20 +63,22 @@ int main(int argc, char**argv)
 	bool queue_output = false;
 	bool debug_output = false;
 	int perturbation_digit = 0;
+	int perturbation_seed = 23000;
 	char* model_file = NULL;
 	
 	if(argc < 2)
 	{
-		printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-d|--debug] [-h|--help] [-p digit] model.qn\n", argv[0]);
+		printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-d|--debug] [-h|--help] [-p digit] [-s seed] model.qn\n", argv[0]);
 		printf("  -v, --verbose    : Print exact ratios for all performance measures\n");
-		printf("  -l, --log      : Print only log of normalizing constant as double\n");
-		printf("  -e, --ex       : Print exact normalizing constant numerator and denominator\n");
+		printf("  -l, --log        : Print only log of normalizing constant as double\n");
+		printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
 		printf("  -g, --nc         : Print normalizing constant as double\n");
 		printf("  -t, --tput       : Print only throughputs, one per row\n");
 		printf("  -q, --qlen       : Print only queue lengths, one per row\n");
 		printf("  -d, --debug      : Enable debug output (progress messages, timing, etc.)\n");
 		printf("  -h, --help       : Print this help message\n");
 		printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
+		printf("  -s seed          : Set perturbation seed (default: 23000)\n");
 		return -1;
 	}
 	
@@ -96,16 +98,17 @@ int main(int argc, char**argv)
 		} else if(strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--debug") == 0) {
 			debug_output = true;
 		} else if(strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-			printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-d|--debug] [-h|--help] [-p digit] model.qn\n", argv[0]);
+			printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-d|--debug] [-h|--help] [-p digit] [-s seed] model.qn\n", argv[0]);
 			printf("  -v, --verbose    : Print exact ratios for all performance measures\n");
-			printf("  -l, --log      : Print only log of normalizing constant as double\n");
-			printf("  -e, --ex       : Print exact normalizing constant numerator and denominator\n");
+			printf("  -l, --log        : Print only log of normalizing constant as double\n");
+			printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
 			printf("  -g, --nc         : Print normalizing constant as double\n");
 			printf("  -t, --tput       : Print only throughputs, one per row\n");
 			printf("  -q, --qlen       : Print only queue lengths, one per row\n");
 			printf("  -d, --debug      : Enable debug output (progress messages, timing, etc.)\n");
 			printf("  -h, --help       : Print this help message\n");
 			printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
+			printf("  -s seed          : Set perturbation seed (default: 23000)\n");
 			return 0;
 		} else if(strcmp(argv[i], "-p") == 0) {
 			if(i + 1 < argc) {
@@ -118,26 +121,54 @@ int main(int argc, char**argv)
 				printf("Error: -p option requires a digit argument\n");
 				return -1;
 			}
+		} else if(strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--seed") == 0) {
+			if(i + 1 < argc) {
+				perturbation_seed = atoi(argv[++i]);
+			} else {
+				printf("Error: -s option requires a seed argument\n");
+				return -1;
+			}
+		} else if(argv[i][0] == '-') {
+			// Skip unknown options silently - no additional logic needed
 		} else {
 			model_file = argv[i];
 		}
 	}
 	
 	if(model_file == NULL) {
-		printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-d|--debug] [-h|--help] [-p digit] model.qn\n", argv[0]);
+		printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-d|--debug] [-h|--help] [-p digit] [-s seed] model.qn\n", argv[0]);
 		printf("  -v, --verbose    : Print exact ratios for all performance measures\n");
-		printf("  -l, --log      : Print only log of normalizing constant as double\n");
-		printf("  -e, --ex       : Print exact normalizing constant numerator and denominator\n");
+		printf("  -l, --log        : Print only log of normalizing constant as double\n");
+		printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
 		printf("  -g, --nc         : Print normalizing constant as double\n");
 		printf("  -t, --tput       : Print only throughputs, one per row\n");
 		printf("  -q, --qlen       : Print only queue lengths, one per row\n");
 		printf("  -d, --debug      : Enable debug output (progress messages, timing, etc.)\n");
 		printf("  -h, --help       : Print this help message\n");
 		printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
+		printf("  -s seed          : Set perturbation seed (default: 23000)\n");
 		return -1;
 	}
 	
 	qnm=(qnmodel*)readmodel(model_file);
+	
+	// Store original parameters for printing
+	int** original_L = NULL;
+	int* original_Z = NULL;
+	if(perturbation_digit > 0) {
+		// Allocate memory for original parameters
+		original_L = (int**)malloc(qnm->M * sizeof(int*));
+		for(int i = 0; i < qnm->M; i++) {
+			original_L[i] = (int*)malloc(qnm->R * sizeof(int));
+			for(int j = 0; j < qnm->R; j++) {
+				original_L[i][j] = qnm->L[i][j];
+			}
+		}
+		original_Z = (int*)malloc(qnm->R * sizeof(int));
+		for(int j = 0; j < qnm->R; j++) {
+			original_Z[j] = qnm->Z[j];
+		}
+	}
 	
 	// Apply perturbation if requested
 	long scale_factor = 1;
@@ -151,7 +182,7 @@ int main(int argc, char**argv)
 		for(int i = 0; i < qnm->M; i++) {
 			for(int j = 0; j < qnm->R; j++) {
 				// Add small perturbation to avoid exact zeros and symmetries
-				long perturb = (i * qnm->R + j + 1) % 10; // Small perturbation 0-9
+				long perturb = (perturbation_seed + i * qnm->R + j + 1) % 10; // Small perturbation 0-9
 				qnm->L[i][j] = qnm->L[i][j] * scale_factor + perturb;
 			}
 		}
@@ -166,7 +197,11 @@ int main(int argc, char**argv)
 	}
 	
 	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
-		printmodel(qnm);
+		if(perturbation_digit > 0) {
+			printmodel_with_perturbation(qnm, perturbation_digit, scale_factor, perturbation_seed, original_L, original_Z);
+		} else {
+			printmodel(qnm);
+		}
 	}
 	/* initializations */
 	nckinit(qnm->M+qnm->R-1,qnm->R); /* declare maximum nck term */
@@ -315,7 +350,16 @@ int main(int argc, char**argv)
 	mpq_clear(tmp2);
 	t1=CPUTIME;
 	if (debug_output && !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
-		printf("\nElapsed time (MOM): %g s\n",t1-t0);
+		printf("\nElapsed time (MOM): %.6f s\n",t1-t0);
+	}
+
+	// Clean up original parameter storage
+	if(perturbation_digit > 0) {
+		for(int i = 0; i < qnm->M; i++) {
+			free(original_L[i]);
+		}
+		free(original_L);
+		free(original_Z);
 	}
 
 	return 0;

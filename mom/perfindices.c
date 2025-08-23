@@ -139,28 +139,13 @@ void perfindices(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, bool verbose_output, b
 	// Default verbose output
 	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
 		printf("\n========== Performance Metrics ==========\n");
-		printf("G = %.15e\n", mpf_get_d(fval));
-		printf("log(G) = %.15e\n", logG);
-		
 		if (debug_output) {
-			// Debug: Show which normalizing constants are used
-			printf("\nDebug: Normalizing constants used for performance metrics:\n");
-			printf("G[0] = G(N) = %.15e (used as denominator)\n", mpf_get_d(fval));
-			for (r=1;r<=qnm->R;r++) {
-				mpf_set_q(fval, G[r]);
-				printf("G[%d] = G(N-e_%d) = %.15e (used for X[%d])\n", r, r, mpf_get_d(fval), r);
-			}
-			printf("\nDebug: G^k values stored in Gk array:\n");
-			printf("Gk array has %d elements total\n", (qnm->R+1)*qnm->M);
-			// Show first few G^k values
-			for (int k=1; k<=qnm->M && k<=3; k++) {
-				for (int r=1; r<=qnm->R && r<=3; r++) {
-					int idx = (k-1)*(qnm->R+1)+r;
-					mpf_set_q(fval, Gk[idx]);
-					printf("Gk[%d] = G^%d_%d(N-e_%d) = %.15e (used for Q[%d,%d])\n", 
-					       idx, k, r, r, mpf_get_d(fval), k, r);
-				}
-			}
+			// Print exact rational G, omit log(G)
+			gmp_printf("G = %Qd\n", G_scaled);
+		} else {
+			// Print double G and log(G)
+			printf("G = %.15e\n", mpf_get_d(fval));
+			printf("log(G) = %.15e\n", logG);
 		}
 	}
 	
@@ -183,8 +168,14 @@ void perfindices(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, bool verbose_output, b
 				mpq_clear(multiplier);
 			}
 			
-			mpf_set_q(fval, X_scaled);
-			printf("X[%d] = %.15e\n", r, mpf_get_d(fval));
+			if (debug_output) {
+				// Print exact rational throughputs
+				gmp_printf("X[%d] = %Qd\n", r, X_scaled);
+			} else {
+				// Print double throughputs
+				mpf_set_q(fval, X_scaled);
+				printf("X[%d] = %.15e\n", r, mpf_get_d(fval));
+			}
 			mpq_clear(X_scaled);
 		}
 		
@@ -199,7 +190,6 @@ void perfindices(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, bool verbose_output, b
 			{
 				mpq_set_si(tmp, qnm->L[k-1][r-1], 1);
 				mpq_mul(tmp2, Gk[(k-1)*(qnm->R+1)+r], tmp);
-				mpf_set_q(fval, tmp2);
 				mpq_div(tmp2, tmp2, G[0]);
 				
 				// Multiply by station multiplicity
@@ -210,12 +200,25 @@ void perfindices(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, bool verbose_output, b
 				
 				mpq_add(total_q, total_q, tmp2);
 				
-				mpf_set_q(fval, tmp2);
-				printf("\t%.15e", mpf_get_d(fval));
+				if (debug_output) {
+					// Print exact rational queue lengths
+					printf("\t");
+					gmp_printf("%Qd", tmp2);
+				} else {
+					// Print double queue lengths
+					mpf_set_q(fval, tmp2);
+					printf("\t%.15e", mpf_get_d(fval));
+				}
 			}
 			
-			mpf_set_q(fval, total_q);
-			printf("\t(total: %.15e)\n", mpf_get_d(fval));
+			if (debug_output) {
+				printf("\t(total: ");
+				gmp_printf("%Qd", total_q);
+				printf(")\n");
+			} else {
+				mpf_set_q(fval, total_q);
+				printf("\t(total: %.15e)\n", mpf_get_d(fval));
+			}
 			mpq_clear(total_q);
 		}
 		

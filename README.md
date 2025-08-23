@@ -95,7 +95,7 @@ Both solvers support various command-line options to control their output format
 | `-q` | `--qlen` | Print only queue lengths, one per row |
 | `-d` | `--debug` | Enable debug output (progress messages, timing, etc.) |
 | `-p digit` | | Apply perturbation at the specified digit (e.g., `-p 5`) |
-| `-s seed` | | Random seed for perturbation (default: 0) |
+| `-s seed` | `--seed` | Random seed for perturbation (default: 23000) |
 | `-h` | `--help` | Print help message |
 
 #### Examples
@@ -117,10 +117,10 @@ Both solvers support various command-line options to control their output format
 ./bin/mom -p 5 models/02_bottleneck_study.qn
 
 # Apply perturbation with specific random seed (MOM only)
-./bin/mom -p 5 -s 42 models/02_bottleneck_study.qn
+./bin/mom -p 5 -s 12345 models/02_bottleneck_study.qn
 ```
 
-**Note**: The perturbation option (`-p`) is only available in the MOM solver and is useful when the exact solution fails due to singular systems. It introduces small randomized numerical perturbations to enable approximate solutions. The `-s` option allows you to specify a random seed for reproducible perturbations.
+**Note**: The perturbation option (`-p`) is only available in the MOM solver and is useful when the exact solution fails due to singular systems. It introduces small randomized numerical perturbations to enable approximate solutions. When perturbation is applied, model parameters are displayed as original integer values with separate perturbation annotations (e.g., `50 eps=1.0e-05`). The `-s` option allows you to specify a random seed for reproducible perturbations.
 
 ## References
 

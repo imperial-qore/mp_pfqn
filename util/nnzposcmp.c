@@ -1,4 +1,5 @@
 #include "gmp.h"
+#include "util.h"
 
 int nnzposcmp(int*i1, int*i2, int n)
 {
