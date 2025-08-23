@@ -59,6 +59,69 @@ Examples are available under the models/ folders.
 ./bin/mom model.qn      # Method of Moments
 ```
 
+### Solver Options
+
+Both solvers support various command-line options to control their output format and behavior.
+
+#### MVA Solver Options
+
+```bash
+./bin/mva [options] model.qn
+```
+
+| Option | Long Form | Description |
+|--------|-----------|-------------|
+| `-v` | `--verbose` | Print exact ratios for all performance measures |
+| `-l` | `--log` | Print only log of normalizing constant as double |
+| `-e` | `--ex` | Print exact normalizing constant numerator and denominator |
+| `-g` | `--nc` | Print normalizing constant as double |
+| `-t` | `--tput` | Print only throughputs, one per row |
+| `-q` | `--qlen` | Print only queue lengths, one per row |
+| `-h` | `--help` | Print help message |
+
+#### MOM Solver Options
+
+```bash
+./bin/mom [options] model.qn
+```
+
+| Option | Long Form | Description |
+|--------|-----------|-------------|
+| `-v` | `--verbose` | Print exact ratios for all performance measures |
+| `-l` | `--log` | Print only log of normalizing constant as double |
+| `-e` | `--ex` | Print exact normalizing constant numerator and denominator |
+| `-g` | `--nc` | Print normalizing constant as double |
+| `-t` | `--tput` | Print only throughputs, one per row |
+| `-q` | `--qlen` | Print only queue lengths, one per row |
+| `-d` | `--debug` | Enable debug output (progress messages, timing, etc.) |
+| `-p digit` | | Apply perturbation at the specified digit (e.g., `-p 5`) |
+| `-s seed` | | Random seed for perturbation (default: 0) |
+| `-h` | `--help` | Print help message |
+
+#### Examples
+
+```bash
+# Get only throughputs
+./bin/mva -t models/02_bottleneck_study.qn
+
+# Get only queue lengths  
+./bin/mom -q models/02_bottleneck_study.qn
+
+# Get exact normalizing constant (numerator and denominator)
+./bin/mva -e models/02_bottleneck_study.qn
+
+# Run MOM solver with debug output
+./bin/mom -d models/02_bottleneck_study.qn
+
+# Apply perturbation for approximate solution (MOM only)
+./bin/mom -p 5 models/02_bottleneck_study.qn
+
+# Apply perturbation with specific random seed (MOM only)
+./bin/mom -p 5 -s 42 models/02_bottleneck_study.qn
+```
+
+**Note**: The perturbation option (`-p`) is only available in the MOM solver and is useful when the exact solution fails due to singular systems. It introduces small randomized numerical perturbations to enable approximate solutions. The `-s` option allows you to specify a random seed for reproducible perturbations.
+
 ## References
 
 [1]: Reiser & Lavenberg (1980), *Mean-Value Analysis of Closed Multichain Queuing Networks,* Journal of the ACM 27(2).
