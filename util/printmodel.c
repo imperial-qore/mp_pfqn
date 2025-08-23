@@ -29,7 +29,7 @@ void printmodel(qnmodel* qn)
 	printf("\n");
 }
 
-void printmodel_with_perturbation(qnmodel* qn, int perturbation_digit, long scale_factor, int perturbation_seed, mpz_t** original_L, mpz_t* original_Z)
+void printmodel_with_perturbation(qnmodel* qn, int perturbation_digit, mpz_t scale_factor, int perturbation_seed, mpz_t** original_L, mpz_t* original_Z)
 {
 	int m,r,mtot=0;
 	for(m=1;m<=qn->M;m++)
@@ -70,7 +70,7 @@ void printmodel_with_perturbation(qnmodel* qn, int perturbation_digit, long scal
 				// Ensure all entries get perturbation, especially zeros
 				long hash_val = perturbation_seed * 1103515245 + (m-1) * 12345 + (r-1) * 67891;
 				long perturb = (abs(hash_val) % 9) + 1;  // 1-9 range, always positive
-				double perturb_value = (double)perturb / (double)scale_factor;
+				double perturb_value = (double)perturb / mpz_get_d(scale_factor);
 				printf(" eps=%.1e", perturb_value);
 			} else {
 				gmp_printf("%12Zd",qn->L[m-1][r-1]);

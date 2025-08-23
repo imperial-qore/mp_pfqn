@@ -10,7 +10,7 @@
 #endif
 #include <gmpla.h>
 
-void perfindices(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, bool verbose_output, bool log_output, bool normconst_output, bool normconst_g_output, bool throughput_output, bool queue_output, bool debug_output, bool bounds_output, long scale_factor)
+void perfindices(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, bool verbose_output, bool log_output, bool normconst_output, bool normconst_g_output, bool throughput_output, bool queue_output, bool debug_output, bool bounds_output, mpz_t scale_factor)
 {
 	int r;
 	mpq_t tmp; mpq_init(tmp);
@@ -27,11 +27,11 @@ void perfindices(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, bool verbose_output, b
 	mpq_t G_scaled; mpq_init(G_scaled);
 	mpq_set(G_scaled, G[0]);
 	
-	if (scale_factor > 1) {
+	if (mpz_cmp_ui(scale_factor, 1) > 0) {
 		// G needs to be divided by scale_factor^Ntot
 		mpz_t scale_power;
 		mpz_init(scale_power);
-		mpz_ui_pow_ui(scale_power, scale_factor, Ntot);
+		mpz_pow_ui(scale_power, scale_factor, Ntot);
 		mpq_t divisor;
 		mpq_init(divisor);
 		mpq_set_z(divisor, scale_power);
@@ -85,10 +85,10 @@ void perfindices(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, bool verbose_output, b
 			mpq_t X_scaled; mpq_init(X_scaled);
 			mpq_set(X_scaled, G[r]);
 			
-			if (scale_factor > 1) {
+			if (mpz_cmp_ui(scale_factor, 1) > 0) {
 				mpq_t multiplier;
 				mpq_init(multiplier);
-				mpq_set_ui(multiplier, scale_factor, 1);
+				mpq_set_z(multiplier, scale_factor);
 				mpq_mul(X_scaled, X_scaled, multiplier);
 				mpq_clear(multiplier);
 			}
@@ -166,10 +166,10 @@ void perfindices(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, bool verbose_output, b
 			mpq_t X_scaled; mpq_init(X_scaled);
 			mpq_set(X_scaled, G[r]);
 			
-			if (scale_factor > 1) {
+			if (mpz_cmp_ui(scale_factor, 1) > 0) {
 				mpq_t multiplier;
 				mpq_init(multiplier);
-				mpq_set_ui(multiplier, scale_factor, 1);
+				mpq_set_z(multiplier, scale_factor);
 				mpq_mul(X_scaled, X_scaled, multiplier);
 				mpq_clear(multiplier);
 			}

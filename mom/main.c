@@ -38,12 +38,32 @@ void printcompact(int*n,int R, double elapsed_time)
 	fflush(stdout);
 }
 
+void apply_perturbation_to_model(qnmodel* qnm, int perturbation_digit, int perturbation_seed, mpz_t scale_factor) {
+	// Calculate scale factor: 10^d where d is the perturbation digit
+	mpz_set_ui(scale_factor, 10);
+	mpz_pow_ui(scale_factor, scale_factor, perturbation_digit);
+	
+	// Scale all parameters
+	for(int i = 0; i < qnm->M; i++) {
+		for(int j = 0; j < qnm->R; j++) {
+			// Add small perturbation using improved randomization
+			long hash_val = perturbation_seed * 1103515245 + i * 12345 + j * 67891;
+			long perturb = (abs(hash_val) % 9) + 1; // 1-9 range
+			mpz_mul(qnm->L[i][j], qnm->L[i][j], scale_factor);
+			mpz_add_ui(qnm->L[i][j], qnm->L[i][j], perturb);
+		}
+	}
+	
+	for(int j = 0; j < qnm->R; j++) {
+		mpz_mul(qnm->Z[j], qnm->Z[j], scale_factor);
+	}
+}
 
-int main(int argc, char**argv)
-{
-	t0=CPUTIME;
-	DEBUG=false;
-	VERBOSE=true;
+int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool log_output, 
+                bool normconst_output, bool normconst_g_output, bool throughput_output, 
+                bool queue_output, bool debug_output, bool bounds_output, 
+                int perturbation_digit, int perturbation_seed, bool auto_perturbation,
+                mpz_t scale_factor, mpz_t** original_L, mpz_t* original_Z) {
 	int t,i,r,s,Ntot,h,k;
 	int *n;
 	int cardG, cardGk;
@@ -53,6 +73,151 @@ int main(int argc, char**argv)
 	LS* A=NULL;
 	double step_start, step_elapsed;
 	double class_start, class_elapsed;
+	
+	mpq_init(tmp);
+	mpq_init(tmp2);
+	
+	/* initializations */
+	nckinit(qnm->M+qnm->R-1,qnm->R); /* declare maximum nck term */
+	n=(int*)int_vec(qnm->R,0); /* current population vector */
+	int m=qnm->M;
+	Ntot=0;
+	
+	/* solve the linear system for all classes */
+	for(r=1;r<=qnm->R;r++)
+	{
+		class_start = CPUTIME;
+		Ntot += qnm->N[r-1];
+		cardGk=nck(m+r-1,r)*r;
+		cardG=nck(m+r-2,r-1)*r;
+		
+		if(r==1) /* if this is the first processed population */
+		{
+			/* initialize linear system */	
+			A =(LS*) setupls(qnm->L,n,qnm->Z,qnm->mi,m,r);
+			if (A == NULL) {
+				return -1; // Signal singular matrix
+			}
+			b=(mpq_vec_t)mpq_vec(m,0,1);
+			b2=(mpq_vec_t)mpq_vec(m,0,1);
+			/* the norm.consts for n=(0,0,...,0) are equal to 1 */
+			g=(mpq_vec_t)mpq_vec(m+1,1,1); 
+			gr=(mpq_vec_t)mpq_vec(m+1,1,1);
+			Gk=(mpq_vec_t)mpq_vec(m,1,1);
+			G=(mpq_vec_t)mpq_vec(1,1,1);
+		}
+		else
+		{
+			t=0;
+			for (h=1;h<=A->H;h++)
+			for (k=0;k<nck(m,h);k++)
+			{
+				free(A->C[t].diag);
+				free(A->C[t++].nondiag->coeff);
+			}
+			free(A->A12); free(A->B1r); free(A->B2r); free(A);
+			A =(LS*) setupls(qnm->L,n,qnm->Z,qnm->mi,m,r);
+			if (A == NULL) {
+				return -1; // Signal singular matrix
+			}
+			for (t=0;t<nck(m+r-2,r-1)*(r-1);t++)
+			{
+				mpq_clear(b[t]);
+				mpq_clear(b2[t]);
+			}
+			for (t=0;t<nck(m+r-3,r-2)*(r-1);t++)
+				mpq_clear(G[t]);
+			b=(mpq_vec_t)mpq_vec(cardGk,0,1);
+			b2=(mpq_vec_t)mpq_vec(cardGk,0,1);
+			G=(mpq_vec_t)mpq_vec(cardG,0,1);
+			Gk=(mpq_vec_t)mpq_vec(cardGk,0,1);
+			for (i=0;i<nck(m+r-2,r-1);i++)
+			{
+				for (s=0;s<=r-2;s++)
+				{
+					mpq_set(G[i*r+s],g[i*(r-1)+s]);
+				}
+				mpq_set(G[i*r+r-1],gr[i*(r-1)]);
+			}
+			mpq_mspvecmul(b,A->A12,G);
+			for(t=0;t<cardGk;t++)
+				mpq_neg(b[t],b[t]);	
+			Gk=(mpq_vec_t)blocksolve(A,b);
+			if (Gk == NULL) {
+				return -1; // Signal singular matrix
+			}
+			for (t=0;t<nck(m+r-2,r-1)*(r-1);t++)
+			{
+				mpq_clear(g[t]);
+				mpq_clear(gr[t]);
+			}
+			g=(mpq_vec_t)mpq_vec(cardGk+cardG,0,1);
+			gr=(mpq_vec_t)mpq_vec(cardGk+cardG,0,1);
+			copy_Gk_in_g(Gk,g);
+			copy_G_in_g(G,g);
+			/* annihilate unused normalizing constants */
+			for(s=0;s<r;s++) if(mpz_cmp_ui(qnm->Z[s], 0) == 0) for(t=0;t<nck(m+r-2,r-1);t++) mpq_set_si(g[cardGk+t*r+1+s],0,1);
+		}
+		/* start solving the sequence of linear systems */
+		for (n[r-1]=1;n[r-1]<=qnm->N[r-1];n[r-1]++) /* for all population of class r */ 
+		{
+			step_start = CPUTIME;
+			step_elapsed = step_start - t0;
+			if (debug_output && !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
+				printcompact(n,qnm->R,step_elapsed);
+			}
+			/** at this point g is equal to gr **/
+			/* if this is the last iteration, save gr */
+			if(n[r-1]==qnm->N[r-1]) mpq_vecdup(gr,g,cardGk+cardG);
+
+			/* compute G=B2r*gr/nr */
+
+			mpq_mspvecmul(G,A->B2r,g);
+			mpq_t ninv; mpq_init(ninv); mpq_set_si(ninv,1,n[r-1]); 
+			for(t=0;t<cardG;t++) mpq_mul(G[t],ninv,G[t]);
+
+			/* compute b=B1r*gr - A12*G */
+			mpq_mspvecmul(b,A->B1r,g);
+			mpq_mspvecmul(b2,A->A12,G);
+			for(t=0;t<cardGk;t++) mpq_sub(b[t],b[t],b2[t]);
+
+			/* compute Gk */
+			Gk=(mpq_vec_t)blocksolve(A,b);
+			if (Gk == NULL) {
+				return -1; // Signal singular matrix
+			}
+			
+			/** after this point g is no longer equal to gr **/
+			copy_Gk_in_g(Gk,g);
+			copy_G_in_g(G,g);
+			free_Gk();
+			/* annihilate unused normalizing constants */
+			for(s=0;s<r;s++) if(mpz_cmp_ui(qnm->Z[s], 0) == 0) for(t=0;t<nck(m+r-2,r-1);t++) mpq_set_si(g[cardGk+t*r+1+s],0,1);
+			/* G,g and gr are not freed because we need them at the next cycle */	
+		}
+		n[r-1]=qnm->N[r-1];
+		step_elapsed = CPUTIME - t0;
+		if (debug_output && !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
+			printcompact(n,qnm->R,step_elapsed);
+			class_elapsed = CPUTIME - class_start;
+			printf(" (Class %d: %.6f s)\n", r, class_elapsed);
+		}
+	}
+	if (debug_output && !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
+		printf("\n");
+	}
+	mdecrease(qnm,G,Gk,g,gr,verbose_output,log_output,normconst_output,normconst_g_output,throughput_output,queue_output,debug_output,bounds_output,scale_factor);
+	mpq_clear(tmp);
+	mpq_clear(tmp2);
+	
+	return 0; // Success
+}
+
+int main(int argc, char**argv)
+{
+	t0=CPUTIME;
+	DEBUG=false;
+	VERBOSE=true;
 
 	/* parse command line arguments */
 	bool verbose_output = false;
@@ -66,6 +231,7 @@ int main(int argc, char**argv)
 	int perturbation_digit = 0;
 	int perturbation_seed = 23000;
 	char* model_file = NULL;
+	bool auto_perturbation = false;
 	
 	if(argc < 2)
 	{
@@ -117,8 +283,8 @@ int main(int argc, char**argv)
 		} else if(strcmp(argv[i], "-p") == 0) {
 			if(i + 1 < argc) {
 				perturbation_digit = atoi(argv[++i]);
-				if(perturbation_digit < 1 || perturbation_digit > 15) {
-					printf("Error: Perturbation digit must be between 1 and 15\n");
+				if(perturbation_digit < 1) {
+					printf("Error: Perturbation digit must be at least 1\n");
 					return -1;
 				}
 			} else {
@@ -184,30 +350,15 @@ int main(int argc, char**argv)
 	}
 	
 	// Apply perturbation if requested
-	long scale_factor = 1;
+	mpz_t scale_factor;
+	mpz_init(scale_factor);
 	if(perturbation_digit > 0) {
-		// Calculate scale factor: 10^d where d is the perturbation digit
-		for(int i = 0; i < perturbation_digit; i++) {
-			scale_factor *= 10;
-		}
-		
-		// Scale all parameters
-		for(int i = 0; i < qnm->M; i++) {
-			for(int j = 0; j < qnm->R; j++) {
-				// Add small perturbation using improved randomization
-				long hash_val = perturbation_seed * 1103515245 + i * 12345 + j * 67891;
-				long perturb = (abs(hash_val) % 9) + 1; // 1-9 range
-				mpz_mul_ui(qnm->L[i][j], qnm->L[i][j], scale_factor);
-				mpz_add_ui(qnm->L[i][j], qnm->L[i][j], perturb);
-			}
-		}
-		
-		for(int j = 0; j < qnm->R; j++) {
-			mpz_mul_ui(qnm->Z[j], qnm->Z[j], scale_factor);
-		}
+		apply_perturbation_to_model(qnm, perturbation_digit, perturbation_seed, scale_factor);
 		
 		if (debug_output && !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
-			if (bounds_output) {
+			if (auto_perturbation) {
+				printf("\nNote: Automatic perturbation applied at digit %d due to singular matrix.\n", perturbation_digit);
+			} else if (bounds_output) {
 				printf("\nWarning: Perturbation applied at digit %d. Bounds will be computed using ±perturbation.\n\n", perturbation_digit);
 			} else {
 				printf("\nWarning: Perturbation applied at digit %d. An approximate solution will be computed.\n\n", perturbation_digit);
@@ -222,163 +373,68 @@ int main(int argc, char**argv)
 			printmodel(qnm);
 		}
 	}
-	/* initializations */
-	nckinit(qnm->M+qnm->R-1,qnm->R); /* declare maximum nck term */
-	n=(int*)int_vec(qnm->R,0); /* current population vector */
-	mpq_init(tmp);
-	mpq_init(tmp2);
-	int m=qnm->M;
-	Ntot=0;
-	/* solve the linear system for all classes */
-	for(r=1;r<=qnm->R;r++)
-	{
-	class_start = CPUTIME;
-	Ntot += qnm->N[r-1];
-	cardGk=nck(m+r-1,r)*r;
-	cardG=nck(m+r-2,r-1)*r;
 	
-	if(r==1) /* if this is the first processed population */
-	{
-		/* initialize linear system */	
-		A =(LS*) setupls(qnm->L,n,qnm->Z,qnm->mi,m,r);
-		if (A == NULL) {
-			fprintf(stderr, "\nError: Model cannot be solved exactly by the MoM solver.\n");
-			fprintf(stderr, "The system of equations is singular. Consider introducing small perturbations\n");
-			fprintf(stderr, "to the service demands to allow approximate solution.\n");
-			fprintf(stderr, "\nExample invocations:\n");
-			fprintf(stderr, "  %s %s -p 6     # Apply perturbation at 6th digit\n", argv[0], model_file);
-			fprintf(stderr, "  %s %s -p 12    # Apply perturbation at 12th digit\n\n", argv[0], model_file);
-			return 1;
-		}
-		b=(mpq_vec_t)mpq_vec(m,0,1);
-		b2=(mpq_vec_t)mpq_vec(m,0,1);
-		/* the norm.consts for n=(0,0,...,0) are equal to 1 */
-		g=(mpq_vec_t)mpq_vec(m+1,1,1); 
-		gr=(mpq_vec_t)mpq_vec(m+1,1,1);
-		Gk=(mpq_vec_t)mpq_vec(m,1,1);
-		G=(mpq_vec_t)mpq_vec(1,1,1);
-	}
-	else
-	{
-		t=0;
-		for (h=1;h<=A->H;h++)
-		for (k=0;k<nck(m,h);k++)
-		{
-			free(A->C[t].diag);
-			free(A->C[t++].nondiag->coeff);
-		}
-		free(A->A12); free(A->B1r); free(A->B2r); free(A);
-		A =(LS*) setupls(qnm->L,n,qnm->Z,qnm->mi,m,r);
-		if (A == NULL) {
-			fprintf(stderr, "\nError: Model cannot be solved exactly by the MoM solver.\n");
-			fprintf(stderr, "The system of equations is singular. Consider introducing small perturbations\n");
-			fprintf(stderr, "to the service demands to allow approximate solution.\n");
-			fprintf(stderr, "\nExample invocations:\n");
-			fprintf(stderr, "  %s %s -p 6     # Apply perturbation at 6th digit\n", argv[0], model_file);
-			fprintf(stderr, "  %s %s -p 12    # Apply perturbation at 12th digit\n\n", argv[0], model_file);
-			return 1;
-		}
-		for (t=0;t<nck(m+r-2,r-1)*(r-1);t++)
-		{
-			mpq_clear(b[t]);
-			mpq_clear(b2[t]);
-		}
-		for (t=0;t<nck(m+r-3,r-2)*(r-1);t++)
-			mpq_clear(G[t]);
-		b=(mpq_vec_t)mpq_vec(cardGk,0,1);
-		b2=(mpq_vec_t)mpq_vec(cardGk,0,1);
-		G=(mpq_vec_t)mpq_vec(cardG,0,1);
-		Gk=(mpq_vec_t)mpq_vec(cardGk,0,1);
-		for (i=0;i<nck(m+r-2,r-1);i++)
-		{
-			for (s=0;s<=r-2;s++)
-			{
-				mpq_set(G[i*r+s],g[i*(r-1)+s]);
+	// Try to solve the model
+	int result = solve_model(qnm, argc, argv, verbose_output, log_output, 
+	                        normconst_output, normconst_g_output, throughput_output, 
+	                        queue_output, debug_output, bounds_output, 
+	                        perturbation_digit, perturbation_seed, auto_perturbation,
+	                        scale_factor, original_L, original_Z);
+	
+	// If singular and no perturbation yet, apply automatic perturbation
+	if (result == -1 && !auto_perturbation && perturbation_digit == 0) {
+		fprintf(stderr, "\nWarning: Model cannot be solved exactly by the MoM solver.\n");
+		fprintf(stderr, "The system of equations is singular. Automatically applying perturbation at digit 20.\n\n");
+		perturbation_digit = 20;
+		auto_perturbation = true;
+		
+		// Store original parameters
+		if (original_L == NULL) {
+			original_L = (mpz_t**)malloc(qnm->M * sizeof(mpz_t*));
+			for(int i = 0; i < qnm->M; i++) {
+				original_L[i] = (mpz_t*)malloc(qnm->R * sizeof(mpz_t));
+				for(int j = 0; j < qnm->R; j++) {
+					mpz_init(original_L[i][j]);
+					mpz_set(original_L[i][j], qnm->L[i][j]);
+				}
 			}
-			mpq_set(G[i*r+r-1],gr[i*(r-1)]);
-		}
-		mpq_mspvecmul(b,A->A12,G);
-		for(t=0;t<cardGk;t++)
-			mpq_neg(b[t],b[t]);	
-		Gk=(mpq_vec_t)blocksolve(A,b);
-		if (Gk == NULL) {
-			fprintf(stderr, "\nError: Model cannot be solved exactly by the MoM solver.\n");
-			fprintf(stderr, "The system of equations is singular. Consider introducing small perturbations\n");
-			fprintf(stderr, "to the service demands to allow approximate solution.\n");
-			fprintf(stderr, "\nExample invocations:\n");
-			fprintf(stderr, "  %s %s -p 6     # Apply perturbation at 6th digit\n", argv[0], model_file);
-			fprintf(stderr, "  %s %s -p 12    # Apply perturbation at 12th digit\n\n", argv[0], model_file);
-			return 1;
-		}
-		for (t=0;t<nck(m+r-2,r-1)*(r-1);t++)
-		{
-			mpq_clear(g[t]);
-			mpq_clear(gr[t]);
-		}
-		g=(mpq_vec_t)mpq_vec(cardGk+cardG,0,1);
-		gr=(mpq_vec_t)mpq_vec(cardGk+cardG,0,1);
-		copy_Gk_in_g(Gk,g);
-		copy_G_in_g(G,g);
-		/* annihilate unused normalizing constants */
-		for(s=0;s<r;s++) if(mpz_cmp_ui(qnm->Z[s], 0) == 0) for(t=0;t<nck(m+r-2,r-1);t++) mpq_set_si(g[cardGk+t*r+1+s],0,1);
-	}
-	/* start solving the sequence of linear systems */
-	for (n[r-1]=1;n[r-1]<=qnm->N[r-1];n[r-1]++) /* for all population of class r */ 
-	{
-		step_start = CPUTIME;
-		step_elapsed = step_start - t0;
-		if (debug_output && !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
-			printcompact(n,qnm->R,step_elapsed);
-		}
-		/** at this point g is equal to gr **/
-		/* if this is the last iteration, save gr */
-		if(n[r-1]==qnm->N[r-1]) mpq_vecdup(gr,g,cardGk+cardG);
-
-		/* compute G=B2r*gr/nr */
-
-		mpq_mspvecmul(G,A->B2r,g);
-		mpq_t ninv; mpq_init(ninv); mpq_set_si(ninv,1,n[r-1]); 
-		for(t=0;t<cardG;t++) mpq_mul(G[t],ninv,G[t]);
-
-		/* compute b=B1r*gr - A12*G */
-		mpq_mspvecmul(b,A->B1r,g);
-		mpq_mspvecmul(b2,A->A12,G);
-		for(t=0;t<cardGk;t++) mpq_sub(b[t],b[t],b2[t]);
-
-		/* compute Gk */
-		Gk=(mpq_vec_t)blocksolve(A,b);
-		if (Gk == NULL) {
-			fprintf(stderr, "\nError: Model cannot be solved exactly by then MoM solver.\n");
-			fprintf(stderr, "The system of equations is singular. Consider introducing small perturbations\n");
-			fprintf(stderr, "to the service demands to allow approximate solution.\n");
-			fprintf(stderr, "\nExample invocations:\n");
-			fprintf(stderr, "  %s %s -p 6     # Apply perturbation at 6th digit\n", argv[0], model_file);
-			fprintf(stderr, "  %s %s -p 12    # Apply perturbation at 12th digit\n\n", argv[0], model_file);
-			return 1;
+			original_Z = (mpz_t*)malloc(qnm->R * sizeof(mpz_t));
+			for(int j = 0; j < qnm->R; j++) {
+				mpz_init(original_Z[j]);
+				mpz_set(original_Z[j], qnm->Z[j]);
+			}
 		}
 		
-		/** after this point g is no longer equal to gr **/
-		copy_Gk_in_g(Gk,g);
-		copy_G_in_g(G,g);
-		free_Gk();
-		/* annihilate unused normalizing constants */
-		for(s=0;s<r;s++) if(mpz_cmp_ui(qnm->Z[s], 0) == 0) for(t=0;t<nck(m+r-2,r-1);t++) mpq_set_si(g[cardGk+t*r+1+s],0,1);
-		/* G,g and gr are not freed because we need them at the next cycle */	
+		// Apply perturbation
+		mpz_clear(scale_factor);
+		mpz_init(scale_factor);
+		apply_perturbation_to_model(qnm, perturbation_digit, perturbation_seed, scale_factor);
+		
+		// Print model with perturbation info
+		if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
+			printmodel_with_perturbation(qnm, perturbation_digit, scale_factor, perturbation_seed, original_L, original_Z);
+		}
+		
+		// Retry with perturbation
+		result = solve_model(qnm, argc, argv, verbose_output, log_output, 
+		                    normconst_output, normconst_g_output, throughput_output, 
+		                    queue_output, debug_output, bounds_output, 
+		                    perturbation_digit, perturbation_seed, auto_perturbation,
+		                    scale_factor, original_L, original_Z);
+		if (result == -1) {
+			fprintf(stderr, "\nError: Model is still singular even with automatic perturbation at digit 20.\n");
+			fprintf(stderr, "Please try running manually with a different perturbation digit.\n");
+			fprintf(stderr, "\nExample invocations:\n");
+			fprintf(stderr, "  %s %s -p 25     # Apply perturbation at 25th digit\n", argv[0], model_file);
+			fprintf(stderr, "  %s %s -p 30     # Apply perturbation at 30th digit\n", argv[0], model_file);
+			fprintf(stderr, "  %s %s -p 15 -s 12345  # Different perturbation at 15th digit with custom seed\n\n", argv[0], model_file);
+			return 1;
+		}
+	} else if (result == -1) {
+		fprintf(stderr, "\nError: Model cannot be solved even with perturbation.\n");
+		return 1;
 	}
-	n[r-1]=qnm->N[r-1];
-	step_elapsed = CPUTIME - t0;
-	if (debug_output && !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
-		printcompact(n,qnm->R,step_elapsed);
-		class_elapsed = CPUTIME - class_start;
-		printf(" (Class %d: %.6f s)\n", r, class_elapsed);
-	}
-	}
-	if (debug_output && !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
-		printf("\n");
-	}
-	mdecrease(qnm,G,Gk,g,gr,verbose_output,log_output,normconst_output,normconst_g_output,throughput_output,queue_output,debug_output,bounds_output,scale_factor);
-	mpq_clear(tmp);
-	mpq_clear(tmp2);
+	
 	t1=CPUTIME;
 	if (debug_output && !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
 		printf("\nElapsed time (MOM): %.6f s\n",t1-t0);
@@ -398,7 +454,8 @@ int main(int argc, char**argv)
 		}
 		free(original_Z);
 	}
-
+	
+	mpz_clear(scale_factor);
 	return 0;
 }
 
