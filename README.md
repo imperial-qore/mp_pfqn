@@ -1,6 +1,6 @@
 # Product-Form Queueing Networks (PFQN) Solvers
 
-A C library for solving product-form queueing networks using the GNU Multiple Precision Arithmetic Library (GMP). Exact arithmetic in GMP allows to compute normalizing constants for the equilibrium state probabilities on large models. 
+The mp_pfqn library offers fast C solvers for product-form queueing networks using the GNU Multiple Precision Arithmetic Library (GMP). Exact arithmetic in GMP allows to compute normalizing constants for the equilibrium state probabilities on large closed multiclass models. 
 
 - Current solvers:
   - Mean Value Analysis (MVA) [1]
