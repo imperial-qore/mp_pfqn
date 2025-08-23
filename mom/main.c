@@ -62,13 +62,14 @@ int main(int argc, char**argv)
 	bool throughput_output = false;
 	bool queue_output = false;
 	bool debug_output = false;
+	bool bounds_output = false;
 	int perturbation_digit = 0;
 	int perturbation_seed = 23000;
 	char* model_file = NULL;
 	
 	if(argc < 2)
 	{
-		printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-d|--debug] [-h|--help] [-p digit] [-s seed] model.qn\n", argv[0]);
+		printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-d|--debug] [-b|--bounds] [-h|--help] [-p digit] [-s seed] model.qn\n", argv[0]);
 		printf("  -v, --verbose    : Print exact ratios for all performance measures\n");
 		printf("  -l, --log        : Print only log of normalizing constant as double\n");
 		printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
@@ -76,6 +77,7 @@ int main(int argc, char**argv)
 		printf("  -t, --tput       : Print only throughputs, one per row\n");
 		printf("  -q, --qlen       : Print only queue lengths, one per row\n");
 		printf("  -d, --debug      : Enable debug output (progress messages, timing, etc.)\n");
+		printf("  -b, --bounds     : Compute performance bounds (requires -p, shows ranges)\n");
 		printf("  -h, --help       : Print this help message\n");
 		printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
 		printf("  -s seed          : Set perturbation seed (default: 23000)\n");
@@ -97,8 +99,10 @@ int main(int argc, char**argv)
 			queue_output = true;
 		} else if(strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--debug") == 0) {
 			debug_output = true;
+		} else if(strcmp(argv[i], "-b") == 0 || strcmp(argv[i], "--bounds") == 0) {
+			bounds_output = true;
 		} else if(strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-			printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-d|--debug] [-h|--help] [-p digit] [-s seed] model.qn\n", argv[0]);
+			printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-d|--debug] [-b|--bounds] [-h|--help] [-p digit] [-s seed] model.qn\n", argv[0]);
 			printf("  -v, --verbose    : Print exact ratios for all performance measures\n");
 			printf("  -l, --log        : Print only log of normalizing constant as double\n");
 			printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
@@ -136,7 +140,7 @@ int main(int argc, char**argv)
 	}
 	
 	if(model_file == NULL) {
-		printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-d|--debug] [-h|--help] [-p digit] [-s seed] model.qn\n", argv[0]);
+		printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-d|--debug] [-b|--bounds] [-h|--help] [-p digit] [-s seed] model.qn\n", argv[0]);
 		printf("  -v, --verbose    : Print exact ratios for all performance measures\n");
 		printf("  -l, --log        : Print only log of normalizing constant as double\n");
 		printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
@@ -144,9 +148,16 @@ int main(int argc, char**argv)
 		printf("  -t, --tput       : Print only throughputs, one per row\n");
 		printf("  -q, --qlen       : Print only queue lengths, one per row\n");
 		printf("  -d, --debug      : Enable debug output (progress messages, timing, etc.)\n");
+		printf("  -b, --bounds     : Compute performance bounds (requires -p, shows ranges)\n");
 		printf("  -h, --help       : Print this help message\n");
 		printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
 		printf("  -s seed          : Set perturbation seed (default: 23000)\n");
+		return -1;
+	}
+	
+	// Validate bounds option
+	if(bounds_output && perturbation_digit == 0) {
+		printf("Error: -b/--bounds option requires -p option to be specified\n");
 		return -1;
 	}
 	
@@ -181,8 +192,9 @@ int main(int argc, char**argv)
 		// Scale all parameters
 		for(int i = 0; i < qnm->M; i++) {
 			for(int j = 0; j < qnm->R; j++) {
-				// Add small perturbation to avoid exact zeros and symmetries
-				long perturb = (perturbation_seed + i * qnm->R + j + 1) % 10; // Small perturbation 0-9
+				// Add small perturbation using improved randomization
+				long hash_val = perturbation_seed * 1103515245 + i * 12345 + j * 67891;
+				long perturb = (abs(hash_val) % 9) + 1; // 1-9 range
 				qnm->L[i][j] = qnm->L[i][j] * scale_factor + perturb;
 			}
 		}
@@ -192,7 +204,11 @@ int main(int argc, char**argv)
 		}
 		
 		if (debug_output && !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
-			printf("\nWarning: Perturbation applied at digit %d. An approximate solution will be computed.\n\n", perturbation_digit);
+			if (bounds_output) {
+				printf("\nWarning: Perturbation applied at digit %d. Bounds will be computed using ±perturbation.\n\n", perturbation_digit);
+			} else {
+				printf("\nWarning: Perturbation applied at digit %d. An approximate solution will be computed.\n\n", perturbation_digit);
+			}
 		}
 	}
 	
@@ -225,7 +241,10 @@ int main(int argc, char**argv)
 		if (A == NULL) {
 			fprintf(stderr, "\nError: Model cannot be solved exactly by the MoM solver.\n");
 			fprintf(stderr, "The system of equations is singular. Consider introducing small perturbations\n");
-			fprintf(stderr, "to the service demands to allow approximate solution.\n\n");
+			fprintf(stderr, "to the service demands to allow approximate solution.\n");
+			fprintf(stderr, "\nExample invocations:\n");
+			fprintf(stderr, "  %s %s -p 6     # Apply perturbation at 6th digit\n", argv[0], model_file);
+			fprintf(stderr, "  %s %s -p 12    # Apply perturbation at 12th digit\n\n", argv[0], model_file);
 			return 1;
 		}
 		b=(mpq_vec_t)mpq_vec(m,0,1);
@@ -250,7 +269,10 @@ int main(int argc, char**argv)
 		if (A == NULL) {
 			fprintf(stderr, "\nError: Model cannot be solved exactly by the MoM solver.\n");
 			fprintf(stderr, "The system of equations is singular. Consider introducing small perturbations\n");
-			fprintf(stderr, "to the service demands to allow approximate solution.\n\n");
+			fprintf(stderr, "to the service demands to allow approximate solution.\n");
+			fprintf(stderr, "\nExample invocations:\n");
+			fprintf(stderr, "  %s %s -p 6     # Apply perturbation at 6th digit\n", argv[0], model_file);
+			fprintf(stderr, "  %s %s -p 12    # Apply perturbation at 12th digit\n\n", argv[0], model_file);
 			return 1;
 		}
 		for (t=0;t<nck(m+r-2,r-1)*(r-1);t++)
@@ -279,7 +301,10 @@ int main(int argc, char**argv)
 		if (Gk == NULL) {
 			fprintf(stderr, "\nError: Model cannot be solved exactly by the MoM solver.\n");
 			fprintf(stderr, "The system of equations is singular. Consider introducing small perturbations\n");
-			fprintf(stderr, "to the service demands to allow approximate solution.\n\n");
+			fprintf(stderr, "to the service demands to allow approximate solution.\n");
+			fprintf(stderr, "\nExample invocations:\n");
+			fprintf(stderr, "  %s %s -p 6     # Apply perturbation at 6th digit\n", argv[0], model_file);
+			fprintf(stderr, "  %s %s -p 12    # Apply perturbation at 12th digit\n\n", argv[0], model_file);
 			return 1;
 		}
 		for (t=0;t<nck(m+r-2,r-1)*(r-1);t++)
@@ -322,7 +347,10 @@ int main(int argc, char**argv)
 		if (Gk == NULL) {
 			fprintf(stderr, "\nError: Model cannot be solved exactly by then MoM solver.\n");
 			fprintf(stderr, "The system of equations is singular. Consider introducing small perturbations\n");
-			fprintf(stderr, "to the service demands to allow approximate solution.\n\n");
+			fprintf(stderr, "to the service demands to allow approximate solution.\n");
+			fprintf(stderr, "\nExample invocations:\n");
+			fprintf(stderr, "  %s %s -p 6     # Apply perturbation at 6th digit\n", argv[0], model_file);
+			fprintf(stderr, "  %s %s -p 12    # Apply perturbation at 12th digit\n\n", argv[0], model_file);
 			return 1;
 		}
 		
@@ -345,7 +373,7 @@ int main(int argc, char**argv)
 	if (debug_output && !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
 		printf("\n");
 	}
-	mdecrease(qnm,G,Gk,g,gr,verbose_output,log_output,normconst_output,normconst_g_output,throughput_output,queue_output,debug_output,scale_factor);
+	mdecrease(qnm,G,Gk,g,gr,verbose_output,log_output,normconst_output,normconst_g_output,throughput_output,queue_output,debug_output,bounds_output,scale_factor);
 	mpq_clear(tmp);
 	mpq_clear(tmp2);
 	t1=CPUTIME;

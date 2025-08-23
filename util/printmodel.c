@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <gmp.h>
 #include "util.h"
 
 void printmodel(qnmodel* qn)
@@ -14,7 +15,7 @@ void printmodel(qnmodel* qn)
 	printf("\n");
 	printf("          Z[1:%d]:",qn->R);
 	for (r=1;r<=qn->R;r++)
-		printf("%12d",qn->Z[r-1]);
+		gmp_printf("%12Zd",qn->Z[r-1]);
 	printf("\n");
 	for(m=1;m<=qn->M;m++)
 	{
@@ -28,7 +29,7 @@ void printmodel(qnmodel* qn)
 	printf("\n");
 }
 
-void printmodel_with_perturbation(qnmodel* qn, int perturbation_digit, long scale_factor, int perturbation_seed, int** original_L, int* original_Z)
+void printmodel_with_perturbation(qnmodel* qn, int perturbation_digit, long scale_factor, int perturbation_seed, int** original_L, mpz_t* original_Z)
 {
 	int m,r,mtot=0;
 	for(m=1;m<=qn->M;m++)
@@ -50,11 +51,11 @@ void printmodel_with_perturbation(qnmodel* qn, int perturbation_digit, long scal
 	printf("          Z[1:%d]:",qn->R);
 	for (r=1;r<=qn->R;r++) {
 		if (perturbation_digit > 0) {
-			printf("%12d",original_Z[r-1]);
+			gmp_printf("%12Zd",original_Z[r-1]);
 			// Phantom spacing to match L line formatting  
 			printf("            ");  // 12 spaces to match " eps=X.0e-0X" format (12 chars)
 		} else {
-			printf("%12d",qn->Z[r-1]);
+			gmp_printf("%12Zd",qn->Z[r-1]);
 		}
 	}
 	printf("\n");

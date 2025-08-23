@@ -1,6 +1,8 @@
 #ifndef UTIL 
 #define UTIL
 
+#include <gmp.h>
+
 #ifndef __cplusplus
   #ifndef _STDBOOL_H
     #define bool unsigned int
@@ -17,7 +19,7 @@ typedef struct
 	int M; /* number of queues */
 	int R; /* number of classes */
 	int *N; /* job populations */
-	int *Z; /* think times */
+	mpz_t *Z; /* think times */
 	int **L; /* service demands */
 	int *mi; /* multiplicities */
 } qnmodel;
@@ -39,7 +41,7 @@ int sum(int* v, int n);
 /* queueing network model */
 qnmodel* readmodel(char* filename);
 void printmodel(qnmodel* qn);
-void printmodel_with_perturbation(qnmodel* qn, int perturbation_digit, long scale_factor, int perturbation_seed, int** original_L, int* original_Z);
+void printmodel_with_perturbation(qnmodel* qn, int perturbation_digit, long scale_factor, int perturbation_seed, int** original_L, mpz_t* original_Z);
 
 /* queueing network population */
 int* initpop(int R);

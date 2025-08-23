@@ -6,7 +6,7 @@
 #include <gmpla.h>
 #include "mom.h"
 
-int mdecrease(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, mpq_vec_t g, mpq_vec_t gr, bool verbose_output, bool log_output, bool normconst_output, bool normconst_g_output, bool throughput_output, bool queue_output, bool debug_output, long scale_factor) /* G and Gk are passed by reference */
+int mdecrease(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, mpq_vec_t g, mpq_vec_t gr, bool verbose_output, bool log_output, bool normconst_output, bool normconst_g_output, bool throughput_output, bool queue_output, bool debug_output, bool bounds_output, long scale_factor) /* G and Gk are passed by reference */
 {
 	mpq_t tmp; mpq_init(tmp);
 	mpq_t tmp2; mpq_init(tmp2);
@@ -94,7 +94,7 @@ int mdecrease(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, mpq_vec_t g, mpq_vec_t gr
 	}
 	mpq_clear(tmp);
 	mpq_clear(tmp2);
-	perfindices(qnm,G,Gk,verbose_output,log_output,normconst_output,normconst_g_output,throughput_output,queue_output,debug_output,scale_factor);
+	perfindices(qnm,G,Gk,verbose_output,log_output,normconst_output,normconst_g_output,throughput_output,queue_output,debug_output,bounds_output,scale_factor);
 	return 0;
 }
 

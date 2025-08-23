@@ -72,7 +72,7 @@ double mva_multi(qnmodel* qn, mpq_t *X, mpq_t **Q, mpq_t G)
 			// Compute Cr = Z[r] + sum(L[m][r] * (mi[m] + q[N-1r][m])) using exact arithmetic
 			mpq_t Cr;
 			mpq_init(Cr);
-			mpq_set_ui(Cr, qn->Z[r-1], 1);
+			mpq_set_z(Cr, qn->Z[r-1]);
 			
 			for (m=1;m<=M;m++)
 			{

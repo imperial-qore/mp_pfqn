@@ -36,10 +36,11 @@ qnmodel* readmodel(char* filename)
 		/* Newline consumed, continue */
 	}
 	/* read Z */
-	qn->Z=(int*)int_vec(qn->R,0);
+	qn->Z=(mpz_t*)malloc(qn->R * sizeof(mpz_t));
 	for (r=1;r<=qn->R;r++)
 	{
-		if (fscanf(f,"%d",&qn->Z[r-1]) != 1) {
+		mpz_init(qn->Z[r-1]);
+		if (gmp_fscanf(f,"%Zd",&qn->Z[r-1]) != 1) {
 			printf("Error reading Z[%d] from file\n", r-1);
 			exit(1);
 		}

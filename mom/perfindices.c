@@ -10,7 +10,7 @@
 #endif
 #include <gmpla.h>
 
-void perfindices(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, bool verbose_output, bool log_output, bool normconst_output, bool normconst_g_output, bool throughput_output, bool queue_output, bool debug_output, long scale_factor)
+void perfindices(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, bool verbose_output, bool log_output, bool normconst_output, bool normconst_g_output, bool throughput_output, bool queue_output, bool debug_output, bool bounds_output, long scale_factor)
 {
 	int r;
 	mpq_t tmp; mpq_init(tmp);
@@ -138,7 +138,13 @@ void perfindices(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, bool verbose_output, b
 	
 	// Default verbose output
 	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
-		printf("\n========== Performance Metrics ==========\n");
+		if (bounds_output) {
+			printf("\n========== Performance Metrics (Bounds) ==========\n");
+			printf("Note: Bounds computation using dual perturbation is in development.\n");
+			printf("Currently showing single perturbation results.\n");
+		} else {
+			printf("\n========== Performance Metrics ==========\n");
+		}
 		if (debug_output) {
 			// Print exact rational G, omit log(G)
 			gmp_printf("G = %Qd\n", G_scaled);
@@ -222,7 +228,11 @@ void perfindices(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, bool verbose_output, b
 			mpq_clear(total_q);
 		}
 		
-		printf("\n=========================================\n");
+		if (bounds_output) {
+			printf("==================================================\n");
+		} else {
+			printf("=========================================\n");
+		}
 	}
 	mpq_clear(tmp);
 	mpq_clear(tmp2);
