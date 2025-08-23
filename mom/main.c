@@ -164,15 +164,16 @@ int main(int argc, char**argv)
 	qnm=(qnmodel*)readmodel(model_file);
 	
 	// Store original parameters for printing
-	int** original_L = NULL;
+	mpz_t** original_L = NULL;
 	mpz_t* original_Z = NULL;
 	if(perturbation_digit > 0) {
 		// Allocate memory for original parameters
-		original_L = (int**)malloc(qnm->M * sizeof(int*));
+		original_L = (mpz_t**)malloc(qnm->M * sizeof(mpz_t*));
 		for(int i = 0; i < qnm->M; i++) {
-			original_L[i] = (int*)malloc(qnm->R * sizeof(int));
+			original_L[i] = (mpz_t*)malloc(qnm->R * sizeof(mpz_t));
 			for(int j = 0; j < qnm->R; j++) {
-				original_L[i][j] = qnm->L[i][j];
+				mpz_init(original_L[i][j]);
+				mpz_set(original_L[i][j], qnm->L[i][j]);
 			}
 		}
 		original_Z = (mpz_t*)malloc(qnm->R * sizeof(mpz_t));
@@ -196,7 +197,8 @@ int main(int argc, char**argv)
 				// Add small perturbation using improved randomization
 				long hash_val = perturbation_seed * 1103515245 + i * 12345 + j * 67891;
 				long perturb = (abs(hash_val) % 9) + 1; // 1-9 range
-				qnm->L[i][j] = qnm->L[i][j] * scale_factor + perturb;
+				mpz_mul_ui(qnm->L[i][j], qnm->L[i][j], scale_factor);
+				mpz_add_ui(qnm->L[i][j], qnm->L[i][j], perturb);
 			}
 		}
 		
@@ -385,6 +387,9 @@ int main(int argc, char**argv)
 	// Clean up original parameter storage
 	if(perturbation_digit > 0) {
 		for(int i = 0; i < qnm->M; i++) {
+			for(int j = 0; j < qnm->R; j++) {
+				mpz_clear(original_L[i][j]);
+			}
 			free(original_L[i]);
 		}
 		free(original_L);

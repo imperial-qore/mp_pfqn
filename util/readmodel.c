@@ -54,7 +54,13 @@ qnmodel* readmodel(char* filename)
 		exit(1);
 	}
 	/* read mi and L */
-	qn->L=(int**)int_mat(qn->M,qn->R,0);
+	qn->L=(mpz_t**)malloc(qn->M * sizeof(mpz_t*));
+	for(m=0; m<qn->M; m++) {
+		qn->L[m] = (mpz_t*)malloc(qn->R * sizeof(mpz_t));
+		for(r=0; r<qn->R; r++) {
+			mpz_init(qn->L[m][r]);
+		}
+	}
 	qn->mi=(int*)int_vec(qn->M,0);
 	for(m=1;m<=qn->M;m++)
 	{
@@ -64,7 +70,7 @@ qnmodel* readmodel(char* filename)
 	 }
 	 for (r=1;r<=qn->R;r++)
 	 {
-		if (fscanf(f,"%d",&qn->L[m-1][r-1]) != 1) {
+		if (gmp_fscanf(f,"%Zd",&qn->L[m-1][r-1]) != 1) {
 			printf("Error reading L[%d][%d] from file\n", m-1, r-1);
 			exit(1);
 		}

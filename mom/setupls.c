@@ -6,7 +6,7 @@
 #include "mom.h"
 
 /* setuls - setup the linear system for the current class */
-LS* setupls(int** L, int* n, mpz_t *Z, int* mi, int m, int r)
+LS* setupls(mpz_t** L, int* n, mpz_t *Z, int* mi, int m, int r)
 {
 	int i,j,k,s,h,t,w;
 	combsrep Ik;
@@ -79,11 +79,22 @@ LS* setupls(int** L, int* n, mpz_t *Z, int* mi, int m, int r)
 			 {
 			 	mpq_set_si(ls->C[t].diag[last[t]][i*r+0],1,1);
 				for (s=1;s<r;s++)
-			 		mpq_set_si(ls->C[t].diag[last[t]][i*r+s],-L[j][s-1],maxL[s-1]);
+			 		{
+						mpz_t neg_L;
+						mpz_init(neg_L);
+						mpz_neg(neg_L, L[j][s-1]);
+						mpq_t divisor;
+						mpq_init(divisor);
+						mpq_set_ui(divisor, maxL[s-1], 1);
+						mpq_set_z(ls->C[t].diag[last[t]][i*r+s], neg_L);
+						mpq_div(ls->C[t].diag[last[t]][i*r+s], ls->C[t].diag[last[t]][i*r+s], divisor);
+						mpz_clear(neg_L);
+						mpq_clear(divisor);
+					}
 				d[j]--;
 				mpq_mspset_si(ls->A12,lastA12,int_matmatchrow(I.combs,I.card,I.n,d)*r,-1,1);
 				d[j]++;
-				mpq_mspset_si(ls->B1r,lastD,w*r,L[j][r-1],maxL[r-1]);
+				mpq_mspset_z(ls->B1r,lastD,w*r,L[j][r-1],maxL[r-1]);
 				lastA12++;
 				lastD++;
 				last[t]++;
@@ -116,11 +127,30 @@ LS* setupls(int** L, int* n, mpz_t *Z, int* mi, int m, int r)
 			w=int_matmatchrow(Ik.combs,Ik.card,Ik.n,d);
 			t=d2diagblock[w];
 			d[j]--;
-			mpq_mspset_si(ls->B2r,lastB2r-r,w*r,(mi[j]+d[j])*L[j][r-1],maxL[r-1]);
+			{
+				mpz_t L_times_mi;
+				mpz_init(L_times_mi);
+				mpz_mul_ui(L_times_mi, L[j][r-1], mi[j]+d[j]);
+				mpq_mspset_z(ls->B2r,lastB2r-r,w*r,L_times_mi,maxL[r-1]);
+				mpz_clear(L_times_mi);
+			}
 			for (s=1;s<=r-1;s++)
 			{
-				mpq_mspset_si(ls->B2r,lastB2r-r+s,w*r+s,(mi[j]+d[j])*L[j][r-1],maxL[r-1]);
-				mpq_set_si(ls->C[t].diag[last[t]+s-1][d2relpos[w]*r+s],-(mi[j]+d[j])*L[j][s-1],maxL[s-1]);
+				mpz_t L_times_mi_r, neg_L_times_mi_s;
+				mpz_init(L_times_mi_r);
+				mpz_init(neg_L_times_mi_s);
+				mpz_mul_ui(L_times_mi_r, L[j][r-1], mi[j]+d[j]);
+				mpq_mspset_z(ls->B2r,lastB2r-r+s,w*r+s,L_times_mi_r,maxL[r-1]);
+				mpz_mul_ui(neg_L_times_mi_s, L[j][s-1], mi[j]+d[j]);
+				mpz_neg(neg_L_times_mi_s, neg_L_times_mi_s);
+				mpq_t divisor;
+				mpq_init(divisor);
+				mpq_set_ui(divisor, maxL[s-1], 1);
+				mpq_set_z(ls->C[t].diag[last[t]+s-1][d2relpos[w]*r+s], neg_L_times_mi_s);
+				mpq_div(ls->C[t].diag[last[t]+s-1][d2relpos[w]*r+s], ls->C[t].diag[last[t]+s-1][d2relpos[w]*r+s], divisor);
+				mpq_clear(divisor);
+				mpz_clear(L_times_mi_r);
+				mpz_clear(neg_L_times_mi_s);
 			}
 			}
 		}
@@ -131,11 +161,25 @@ LS* setupls(int** L, int* n, mpz_t *Z, int* mi, int m, int r)
 			d[j]++;
 			w=int_matmatchrow(Ik.combs,Ik.card,Ik.n,d);
 			d[j]--;
-			mpq_mspset_si(ls->B2r,lastB2r-r,w*r,(mi[j]+d[j])*L[j][r-1],maxL[r-1]);
+			{
+				mpz_t L_times_mi;
+				mpz_init(L_times_mi);
+				mpz_mul_ui(L_times_mi, L[j][r-1], mi[j]+d[j]);
+				mpq_mspset_z(ls->B2r,lastB2r-r,w*r,L_times_mi,maxL[r-1]);
+				mpz_clear(L_times_mi);
+			}
 			for (s=1;s<=r-1;s++)
 			{
-				mpq_mspset_si(ls->B2r,lastB2r-r+s,w*r+s,(mi[j]+d[j])*L[j][r-1],maxL[r-1]);
-				mpq_mspset_si(ls->C[t].nondiag,last[t]+s-1,w*r+s,-(mi[j]+d[j])*L[j][s-1],maxL[s-1]);
+				mpz_t L_times_mi_r, neg_L_times_mi_s;
+				mpz_init(L_times_mi_r);
+				mpz_init(neg_L_times_mi_s);
+				mpz_mul_ui(L_times_mi_r, L[j][r-1], mi[j]+d[j]);
+				mpq_mspset_z(ls->B2r,lastB2r-r+s,w*r+s,L_times_mi_r,maxL[r-1]);
+				mpz_mul_ui(neg_L_times_mi_s, L[j][s-1], mi[j]+d[j]);
+				mpz_neg(neg_L_times_mi_s, neg_L_times_mi_s);
+				mpq_mspset_z(ls->C[t].nondiag,last[t]+s-1,w*r+s,neg_L_times_mi_s,maxL[s-1]);
+				mpz_clear(L_times_mi_r);
+				mpz_clear(neg_L_times_mi_s);
 			}
 			
 			}

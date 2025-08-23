@@ -78,12 +78,16 @@ double mva_multi(qnmodel* qn, mpq_t *X, mpq_t **Q, mpq_t G)
 			{
 				mpq_t term;
 				mpq_init(term);
-				mpq_set_ui(term, qn->L[m-1][r-1] * qn->mi[m-1], 1);
+				mpz_t L_times_mi;
+				mpz_init(L_times_mi);
+				mpz_mul_ui(L_times_mi, qn->L[m-1][r-1], qn->mi[m-1]);
+				mpq_set_z(term, L_times_mi);
 				mpq_add(Cr, Cr, term);
+				mpz_clear(L_times_mi);
 				
 				mpq_t L_times_q;
 				mpq_init(L_times_q);
-				mpq_set_ui(L_times_q, qn->L[m-1][r-1], 1);
+				mpq_set_z(L_times_q, qn->L[m-1][r-1]);
 				mpq_mul(L_times_q, L_times_q, q[index_1r][m-1]);
 				mpq_add(Cr, Cr, L_times_q);
 				
@@ -106,7 +110,7 @@ double mva_multi(qnmodel* qn, mpq_t *X, mpq_t **Q, mpq_t G)
 				mpq_set_ui(mi_plus_q, qn->mi[m-1], 1);
 				mpq_add(mi_plus_q, mi_plus_q, q[index_1r][m-1]);
 				
-				mpq_set_ui(update_term, qn->L[m-1][r-1], 1);
+				mpq_set_z(update_term, qn->L[m-1][r-1]);
 				mpq_mul(update_term, update_term, mi_plus_q);
 				mpq_mul(update_term, update_term, X[r-1]);
 				
@@ -179,7 +183,7 @@ double mva_multi(qnmodel* qn, mpq_t *X, mpq_t **Q, mpq_t G)
 			mpq_set_ui(mi_plus_q, qn->mi[m-1], 1);
 			mpq_add(mi_plus_q, mi_plus_q, q[index_1r][m-1]);
 			
-			mpq_set_ui(Q[m-1][r-1], qn->L[m-1][r-1], 1);
+			mpq_set_z(Q[m-1][r-1], qn->L[m-1][r-1]);
 			mpq_mul(Q[m-1][r-1], Q[m-1][r-1], mi_plus_q);
 			mpq_mul(Q[m-1][r-1], Q[m-1][r-1], X[r-1]);
 			

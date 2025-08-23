@@ -110,7 +110,7 @@ void perfindices(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, bool verbose_output, b
 		{
 			for (r=1; r<=qnm->R; r++)
 			{
-				mpq_set_si(tmp, qnm->L[k-1][r-1], 1);
+				mpq_set_z(tmp, qnm->L[k-1][r-1]);
 				mpq_mul(tmp2, Gk[(k-1)*(qnm->R+1)+r], tmp);
 				mpf_set_q(fval, tmp2);
 				mpq_div(tmp2, tmp2, G[0]);
@@ -194,7 +194,7 @@ void perfindices(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, bool verbose_output, b
 			mpq_t total_q; mpq_init(total_q); mpq_set_ui(total_q, 0, 1);
 			for (r=1; r<=qnm->R; r++)
 			{
-				mpq_set_si(tmp, qnm->L[k-1][r-1], 1);
+				mpq_set_z(tmp, qnm->L[k-1][r-1]);
 				mpq_mul(tmp2, Gk[(k-1)*(qnm->R+1)+r], tmp);
 				mpq_div(tmp2, tmp2, G[0]);
 				

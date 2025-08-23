@@ -40,7 +40,7 @@ int mdecrease(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, mpq_vec_t g, mpq_vec_t gr
 			mpq_set(G[i*(qnm->R+1)],Gk[t*(qnm->R+1)]);
 			for (s=0;s<qnm->R;s++)
 			{
-				mpq_set_si(tmp,qnm->L[0][s],1);
+				mpq_set_z(tmp,qnm->L[0][s]);
 				mpq_mul(tmp,tmp,Gk[t*(qnm->R+1)+1+s]);		
 				mpq_sub(G[i*(qnm->R+1)],G[i*(qnm->R+1)],tmp);
 			}
@@ -79,7 +79,7 @@ int mdecrease(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, mpq_vec_t g, mpq_vec_t gr
 						I.combs[i][j]++;
 						t=int_matmatchrow(Ik.combs,nck(qnm->M+l-1,l),qnm->M,I.combs[i]);
 						I.combs[i][j]--;
-						mpq_set_si(tmp,qnm->L[j][s-1],1);
+						mpq_set_z(tmp,qnm->L[j][s-1]);
 						mpq_set_si(tmp2,qnm->mi[j]+I.combs[i][j],1);
 						mpq_mul(tmp2,tmp2,tmp);
 						mpq_set_z(tmp,qnm->Z[s-1]);
