@@ -20,8 +20,11 @@ make
 ./bin/mva models/02_bottleneck_study.qn
 ./bin/mom models/02_bottleneck_study.qn
 ```
-
-If you wish to recompile, run ``make clean; make''.
+If you wish to recompile after changes, run 
+```
+make clean
+make
+```
 
 ## Usage
 
