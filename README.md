@@ -7,12 +7,13 @@ A C library for solving product-form queueing networks using the GNU Multiple Pr
   - Method of Moments (MoM) [2]
 
 ## Quick Start
-
+Run the following commands from the project root folder:
 ```bash
 # Install all dependencies automatically (requires sudo)
 sudo make install-deps
 
 # Build the project
+source ./setup-env.sh
 make
 
 # Run a solver
