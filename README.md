@@ -27,14 +27,14 @@ make
 Models are specified in `.qn` text files with the following format:
 
 ```
-R                    # Number of classes
+R                   # Number of job classes
 N1 N2 ... NR        # Population per class
 Z1 Z2 ... ZR        # Think times per class
-M                    # Number of queues
-m1 L11 L12 ... L1R  # Queue 1: multiplicity, demands per class
-m2 L21 L22 ... L2R  # Queue 2: multiplicity, demands per class
+M                   # Number of queueing stations
+m1 L11 L12 ... L1R  # Queue 1: multiplicity, demands at station 1 per class
+m2 L21 L22 ... L2R  # Queue 2: multiplicity, demands at station 2 per class
 ...
-mM LM1 LM2 ... LMR  # Queue M: multiplicity, demands per class
+mM LM1 LM2 ... LMR  # Queue M: multiplicity, demands at station M per class
 ```
 *IMPORTANT*: All values must be passed as integers. 
 
