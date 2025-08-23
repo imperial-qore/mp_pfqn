@@ -52,8 +52,11 @@ void printmodel_with_perturbation(qnmodel* qn, int perturbation_digit, mpz_t sca
 	for (r=1;r<=qn->R;r++) {
 		if (perturbation_digit > 0) {
 			gmp_printf("%12Zd",original_Z[r-1]);
-			// Phantom spacing to match L line formatting  
-			printf("            ");  // 12 spaces to match " eps=X.0e-0X" format (12 chars)
+			// Calculate and display perturbation for Z
+			long hash_val = perturbation_seed * 1103515245 + 999999 + (r-1) * 67891;
+			long perturb = (abs(hash_val) % 9) + 1;  // 1-9 range
+			double perturb_value = (double)perturb / mpz_get_d(scale_factor);
+			printf(" eps=%.1e", perturb_value);
 		} else {
 			gmp_printf("%12Zd",qn->Z[r-1]);
 		}

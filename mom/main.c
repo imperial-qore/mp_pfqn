@@ -55,7 +55,11 @@ void apply_perturbation_to_model(qnmodel* qnm, int perturbation_digit, int pertu
 	}
 	
 	for(int j = 0; j < qnm->R; j++) {
+		// Add small perturbation to Z as well
+		long hash_val = perturbation_seed * 1103515245 + 999999 + j * 67891;
+		long perturb = (abs(hash_val) % 9) + 1; // 1-9 range
 		mpz_mul(qnm->Z[j], qnm->Z[j], scale_factor);
+		mpz_add_ui(qnm->Z[j], qnm->Z[j], perturb);
 	}
 }
 
