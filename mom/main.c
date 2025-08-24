@@ -440,7 +440,7 @@ int main(int argc, char**argv)
 	}
 	
 	t1=CPUTIME;
-	if (debug_output && !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
+	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
 		printf("\nElapsed time (MOM): %.6f s\n",t1-t0);
 	}
 
