@@ -82,6 +82,16 @@ All solvers support various command-line options to control their output format 
 | `-q` | `--qlen` | Print only queue lengths, one per row |
 | `-h` | `--help` | Print help message |
 
+
+#### RECAL Solver Options
+
+```bash
+./bin/recal [options] model.qn
+```
+
+RECAL supports the same command-line options as MVA (see table above).
+
+
 #### MOM Solver Options
 
 ```bash
@@ -122,15 +132,6 @@ All solvers support various command-line options to control their output format 
 # Apply perturbation with specific random seed (MOM only)
 ./bin/mom -p 5 -s 12345 models/02_bottleneck_study.qn
 ```
-
-#### RECAL Solver Options
-
-```bash
-./bin/recal [options] model.qn
-```
-
-RECAL supports the same command-line options as MVA (see table above).
-
 **Note**: The perturbation option (`-p`) is only available in the MOM solver and is useful when the exact solution fails due to singular systems. It introduces small randomized numerical perturbations to enable approximate solutions. When perturbation is applied, model parameters are displayed as original integer values with separate perturbation annotations (e.g., `50 eps=1.0e-05`). The `-s` option allows you to specify a random seed for reproducible perturbations.
 
 ## References
