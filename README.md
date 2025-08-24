@@ -5,7 +5,7 @@ The mp_pfqn library offers fast C solvers for product-form queueing networks usi
 - Current solvers:
   - Mean Value Analysis (MVA) [1]
   - Method of Moments (MoM) [2]
-  - Recursion by Class Algorithm (RECAL) [3]
+  - Recursion by Chain Algorithm (RECAL) [3]
 
 ## Quick Start
 Run the following commands from the project root folder:
