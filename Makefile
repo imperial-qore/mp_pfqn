@@ -29,7 +29,7 @@ LDFLAGS += $(DEP_LDFLAGS)
 
 #.SILENT:
 
-DIRS	= util gmpla mva mom rndmodel  
+DIRS	= util gmpla mva mom recal rndmodel  
 #DIRS	= util gmpla mva mom recal rndmodel ca 
 EXE	= ./bin/mom 
 LIBS	= -L. -lsub -lsuba -lsubsub
@@ -75,6 +75,7 @@ $(EXE) :
 	cd gmpla; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	cd mva; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	cd mom; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
+	cd recal; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	cd util; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	cd rndmodel; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	@echo "Cleaning up .o files..."

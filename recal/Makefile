@@ -1,30 +1,29 @@
 CC = gcc
 LD = gcc
 CFLAGS = -g -O4 -I../deps/local/include -I. -I../include/ -I../gmpla/ -I../util/ -Wall 
-LDFLAGS = -L../deps/local/lib -lgmp -lm
+LDFLAGS = -L../deps/local/lib -lgmp -lmpfr -lm
 
-SRCS = main.c recal-multi.c recal-multi-exact.c
-TARGET_DIR = ../target
+SRCS = main.c recal-multi-exact.c
+OBJS = $(SRCS:.c=.o)
+DEPS = $(SRCS:.c=.d)
 
-UTILOBJS = ../target/util/population.o ../target/util/readmodel.o ../target/util/printmodel.o ../target/util/nck.o ../target/util/nckinit.o ../target/util/multichoose.o
-GMPLAOBJS = ../target/gmpla/int_vec.o ../target/gmpla/int_mat.o ../target/gmpla/int_matmatchrow.o
+UTILOBJS = ../util/population.o ../util/readmodel.o ../util/printmodel.o ../util/nck.o ../util/nckinit.o ../util/multichoose.o
+GMPLAOBJS = ../gmpla/int_vec.o ../gmpla/int_mat.o ../gmpla/int_matmatchrow.o
 
-PROG = recal 
 RM = /bin/rm -f
 
-all: $(PROG) 
+all: recal
 
-$(PROG): $(OBJS) util
-	$(LD) $(OBJS) $(UTILOBJS) $(GMPLAOBJS) $(LDFLAGS) -o ../bin/$(PROG)
+recal: ${OBJS} util
+	${LD} ${OBJS} ${GMPLAOBJS} ${UTILOBJS} -o ../bin/recal ${LDFLAGS} 
 
-util: $(UTILOBJS)
+util: ${UTILOBJS}
 
 # Include automatic dependency generation
 include ../Makefile.deps
 
 cleanbase: 
-	$(RM) $(OBJS)
+	${RM} ${OBJS}
 
 clean: 
-	-$(RM) -rf $(TARGET_DIR)
-	$(RM) $(OBJS) $(DEPS)
+	${RM} ${OBJS} ${DEPS} 

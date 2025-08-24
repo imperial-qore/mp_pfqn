@@ -41,6 +41,7 @@ mpq_msp_t mpq_msp(int rows, int cols, int numnnz);
 mpq_t* mpq_mspget(mpq_msp_t msp, int row, int col);
 void mpq_matset_si(mpq_mat_t mat, int row, int col, int coeffnum, int coeffden);
 void mpq_mspset_si(mpq_msp_t msp, int row, int col, int coeffnum, int coeffden);
+void mpq_mspset_z(mpq_msp_t msp, int row, int col, mpz_t coeffnum, int coeffden);
 void mpq_mspvecmul(mpq_vec_t rop, mpq_msp_t op1, mpq_vec_t op2);
 mpq_vec_t mpq_vec(int rows,int valuenum, int valueden);
 void mpq_vecdup(mpq_vec_t v1, mpq_vec_t v2, int n);

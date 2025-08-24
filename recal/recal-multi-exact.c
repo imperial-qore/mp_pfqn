@@ -4,6 +4,13 @@
 #include "gmpla.h"
 #include "util.h"
 
+// Function to compute marginal normalizing constant G(N-e_r) for throughput calculation
+void recal_marginal_exact(qnmodel* qn, int class_to_reduce, mpq_t G_marginal);
+
+// Function to compute G^k(N-e_r) for queue length calculation
+// Reduces population in class_to_reduce by 1 and increases multiplicity of station k by 1
+void recal_queue_marginal_exact(qnmodel* qn, int class_to_reduce, int station_k, mpq_t G_k_marginal);
+
 void recal_multi_exact(qnmodel* qn, mpq_t Gex)
 {
 	int r;
@@ -18,7 +25,7 @@ void recal_multi_exact(qnmodel* qn, mpq_t Gex)
 	// Check if any think times are non-zero
 	int hasZ = 0;
 	for (r=1; r<=R; r++) {
-		if (qn->Z[r-1] > 0) {
+		if (mpz_cmp_ui(qn->Z[r-1], 0) > 0) {
 			hasZ = 1;
 			break;
 		}
@@ -123,7 +130,7 @@ void recal_multi_exact(qnmodel* qn, mpq_t Gex)
 
 				mpq_set_ui(G[i-1], 0, 1);
 				
-				if (hasZ && qn->Z[r-1] > 0) {
+				if (hasZ && mpz_cmp_ui(qn->Z[r-1], 0) > 0) {
 					// Add think time term: Z[r] * G_1[mzIndex] / nr
 					// Extract first M elements for matching
 					for (j=0; j<M; j++)
@@ -172,12 +179,16 @@ void recal_multi_exact(qnmodel* qn, mpq_t Gex)
 					}
 					
 					int mzIndex = int_matmatchrow(I_1_subset, nck(Mz+Ntot-n,Ntot-n+1), M, mZ);
-					mpq_t term;
+					mpq_t term, nr_q;
 					mpq_init(term);
-					mpq_set_ui(term, qn->Z[r-1], nr);
+					mpq_init(nr_q);
+					mpq_set_z(term, qn->Z[r-1]);
+					mpq_set_ui(nr_q, nr, 1);
+					mpq_div(term, term, nr_q);
 					mpq_mul(term, term, G_1[mzIndex]);
 					mpq_add(G[i-1], G[i-1], term);
 					mpq_clear(term);
+					mpq_clear(nr_q);
 					
 					// Free temporary subset
 					for (int k=0; k<subset_size; k++)
@@ -196,12 +207,20 @@ void recal_multi_exact(qnmodel* qn, mpq_t Gex)
 						matchIndex = int_matmatchrow(I_1, nck(M+Ntot-n,Ntot-n+1), M, m);
 					}
 					
-					mpq_t term;
+					mpq_t term, nr_q, L_term;
 					mpq_init(term);
-					mpq_set_ui(term, (m[j-1]+qn->mi[j-1]-1)*(qn->L[j-1][r-1]), nr);
+					mpq_init(nr_q);
+					mpq_init(L_term);
+					mpq_set_z(L_term, qn->L[j-1][r-1]);
+					mpq_set_ui(term, m[j-1]+qn->mi[j-1]-1, 1);
+					mpq_mul(term, term, L_term);
+					mpq_set_ui(nr_q, nr, 1);
+					mpq_div(term, term, nr_q);
 					mpq_mul(term, term, G_1[matchIndex]);
 					mpq_add(G[i-1], G[i-1], term);
 					mpq_clear(term);
+					mpq_clear(nr_q);
+					mpq_clear(L_term);
 					
 					m[j-1]--;
 				}
@@ -226,4 +245,71 @@ void recal_multi_exact(qnmodel* qn, mpq_t Gex)
 	free(m);
 	free(mZ);
 	return;
+}
+
+void recal_marginal_exact(qnmodel* qn, int class_to_reduce, mpq_t G_marginal)
+{
+	// Create a temporary model with reduced population for the specified class
+	qnmodel temp_qn = *qn;
+	
+	// Allocate new arrays for the temporary model
+	temp_qn.N = (int*)malloc(qn->R * sizeof(int));
+	for (int i = 0; i < qn->R; i++) {
+		temp_qn.N[i] = qn->N[i];
+	}
+	
+	// Reduce population by 1 for the specified class
+	if (temp_qn.N[class_to_reduce] > 0) {
+		temp_qn.N[class_to_reduce]--;
+	} else {
+		// If population is already 0, return 0
+		mpq_set_ui(G_marginal, 0, 1);
+		free(temp_qn.N);
+		return;
+	}
+	
+	// Compute G(N-e_r) using the modified population
+	recal_multi_exact(&temp_qn, G_marginal);
+	
+	// Free temporary arrays
+	free(temp_qn.N);
+}
+
+void recal_queue_marginal_exact(qnmodel* qn, int class_to_reduce, int station_k, mpq_t G_k_marginal)
+{
+	// Create a temporary model with reduced population and increased multiplicity
+	qnmodel temp_qn = *qn;
+	
+	// Allocate new arrays for the temporary model
+	temp_qn.N = (int*)malloc(qn->R * sizeof(int));
+	temp_qn.mi = (int*)malloc(qn->M * sizeof(int));
+	
+	// Copy original arrays
+	for (int i = 0; i < qn->R; i++) {
+		temp_qn.N[i] = qn->N[i];
+	}
+	for (int i = 0; i < qn->M; i++) {
+		temp_qn.mi[i] = qn->mi[i];
+	}
+	
+	// Reduce population by 1 for the specified class
+	if (temp_qn.N[class_to_reduce] > 0) {
+		temp_qn.N[class_to_reduce]--;
+	} else {
+		// If population is already 0, return 0
+		mpq_set_ui(G_k_marginal, 0, 1);
+		free(temp_qn.N);
+		free(temp_qn.mi);
+		return;
+	}
+	
+	// Increase multiplicity by 1 for the specified station
+	temp_qn.mi[station_k]++;
+	
+	// Compute G^k(N-e_r) using the modified population and multiplicity
+	recal_multi_exact(&temp_qn, G_k_marginal);
+	
+	// Free temporary arrays
+	free(temp_qn.N);
+	free(temp_qn.mi);
 }

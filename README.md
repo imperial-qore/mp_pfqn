@@ -5,6 +5,7 @@ The mp_pfqn library offers fast C solvers for product-form queueing networks usi
 - Current solvers:
   - Mean Value Analysis (MVA) [1]
   - Method of Moments (MoM) [2]
+  - Recursion by Class Algorithm (RECAL) [3]
 
 ## Quick Start
 Run the following commands from the project root folder:
@@ -19,6 +20,7 @@ make
 # Run a solver
 ./bin/mva models/02_bottleneck_study.qn
 ./bin/mom models/02_bottleneck_study.qn
+./bin/recal models/02_bottleneck_study.qn
 ```
 If you wish to recompile after changes, run 
 ```
@@ -57,11 +59,12 @@ Examples are available under the models/ folders.
 # Run different solvers
 ./bin/mva model.qn      # Mean Value Analysis
 ./bin/mom model.qn      # Method of Moments
+./bin/recal model.qn    # Recursion by Class Algorithm
 ```
 
 ### Solver Options
 
-Both solvers support various command-line options to control their output format and behavior.
+All solvers support various command-line options to control their output format and behavior.
 
 #### MVA Solver Options
 
@@ -120,6 +123,14 @@ Both solvers support various command-line options to control their output format
 ./bin/mom -p 5 -s 12345 models/02_bottleneck_study.qn
 ```
 
+#### RECAL Solver Options
+
+```bash
+./bin/recal [options] model.qn
+```
+
+RECAL supports the same command-line options as MVA (see table above).
+
 **Note**: The perturbation option (`-p`) is only available in the MOM solver and is useful when the exact solution fails due to singular systems. It introduces small randomized numerical perturbations to enable approximate solutions. When perturbation is applied, model parameters are displayed as original integer values with separate perturbation annotations (e.g., `50 eps=1.0e-05`). The `-s` option allows you to specify a random seed for reproducible perturbations.
 
 ## References
@@ -127,6 +138,8 @@ Both solvers support various command-line options to control their output format
 [1]: Reiser & Lavenberg (1980), *Mean-Value Analysis of Closed Multichain Queuing Networks,* Journal of the ACM 27(2).
 
 [2]: Casale (2006), *An efficient algorithm for the exact analysis of multiclass queueing networks with large population sizes,* Proc. of ACM SIGMETRICS 2006.
+
+[3]: Conway, A. E. and Georganas, N. D. (1986), *RECAL—a new efficient algorithm for the exact analysis of multiple-chain closed queuing networks,* J. ACM 33, 4 (Oct. 1986), 768–791.
 
 ## License
 

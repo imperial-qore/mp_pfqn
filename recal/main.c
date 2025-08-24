@@ -11,8 +11,9 @@
 
 #define CPUTIME (getrusage(RUSAGE_SELF,&ruse), ruse.ru_utime.tv_sec + ruse.ru_stime.tv_sec + 1e-6 * (ruse.ru_utime.tv_usec + ruse.ru_stime.tv_usec))
 
-void recal_multi(qnmodel* qn, double *X);
 void recal_multi_exact(qnmodel* qn, mpq_t G);
+void recal_marginal_exact(qnmodel* qn, int class_to_reduce, mpq_t G_marginal);
+void recal_queue_marginal_exact(qnmodel* qn, int class_to_reduce, int station_k, mpq_t G_k_marginal);
 
 int main(int argc,char ** argv)
 {
@@ -116,22 +117,64 @@ int main(int argc,char ** argv)
 		// Print normalizing constant as double
 		printf("%.15e\n", G);
 	} else if (throughput_output) {
-		// RECAL doesn't compute throughputs, print zeros
-		int r;
-		for (r=0; r<qn->R; r++) {
-			printf("0.000000000000000e+00\n");
+		// Compute and print throughputs using marginal normalizing constants
+		mpq_t G_marginal, X_r;
+		mpf_t X_float;
+		mpq_init(G_marginal);
+		mpq_init(X_r);
+		mpf_init(X_float);
+		
+		for (int r = 0; r < qn->R; r++) {
+			// Compute G(N-e_r) for class r
+			recal_marginal_exact(qn, r, G_marginal);
+			
+			// Compute X[r] = G(N-e_r) / G(N)
+			mpq_div(X_r, G_marginal, G_exact);
+			
+			// Convert to double and print
+			mpf_set_q(X_float, X_r);
+			printf("%.15e\n", mpf_get_d(X_float));
 		}
+		
+		mpq_clear(G_marginal);
+		mpq_clear(X_r);
+		mpf_clear(X_float);
 	} else if (queue_output) {
-		// RECAL doesn't compute queue lengths, print zeros
-		int m;
-		for (m=0; m<qn->M; m++) {
-			int r;
-			for (r=0; r<qn->R; r++) {
-				printf("0.000000000000000e+00");
+		// Compute and print queue lengths using marginal normalizing constants
+		// Q[k,r] = m[k] * L[k,r] * G^k(N-e_r) / G(N)
+		mpq_t G_k_marginal, Q_kr, L_kr, mi_k;
+		mpf_t Q_float;
+		mpq_init(G_k_marginal);
+		mpq_init(Q_kr);
+		mpq_init(L_kr);
+		mpq_init(mi_k);
+		mpf_init(Q_float);
+		
+		for (int k = 0; k < qn->M; k++) {
+			for (int r = 0; r < qn->R; r++) {
+				// Compute G^k(N-e_r) for station k and class r
+				recal_queue_marginal_exact(qn, r, k, G_k_marginal);
+				
+				// Q[k,r] = m[k] * L[k,r] * G^k(N-e_r) / G(N)
+				mpq_set_ui(mi_k, qn->mi[k], 1);
+				mpq_set_z(L_kr, qn->L[k][r]);
+				mpq_mul(Q_kr, mi_k, L_kr);
+				mpq_mul(Q_kr, Q_kr, G_k_marginal);
+				mpq_div(Q_kr, Q_kr, G_exact);
+				
+				// Convert to double and print
+				mpf_set_q(Q_float, Q_kr);
+				printf("%.15e", mpf_get_d(Q_float));
 				if (r < qn->R - 1) printf(" ");
 			}
 			printf("\n");
 		}
+		
+		mpq_clear(G_k_marginal);
+		mpq_clear(Q_kr);
+		mpq_clear(L_kr);
+		mpq_clear(mi_k);
+		mpf_clear(Q_float);
 	} else {
 		printf("\n========== Performance Metrics ==========\n");
 		printf("G = %.15e\n", G);
