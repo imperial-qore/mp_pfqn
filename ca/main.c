@@ -46,16 +46,18 @@ int main(int argc, char**argv)
 	bool normconst_g_output = false;
 	bool throughput_output = false;
 	bool queue_output = false;
+	bool exact_output = false;
 	char* model_file = NULL;
 	
 	if(argc < 2)
 	{
-		printf("USAGE: %s [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] model.qn\n", argv[0]);
+		printf("USAGE: %s [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-d|--exact] [-h|--help] model.qn\n", argv[0]);
 		printf("  -l, --log      : Print only log of normalizing constant as double\n");
 		printf("  -e, --ex       : Print exact normalizing constant numerator and denominator\n");
 		printf("  -g, --nc         : Print normalizing constant as double\n");
 		printf("  -t, --tput       : Print only throughputs, one per row\n");
 		printf("  -q, --qlen       : Print only queue lengths, one per row\n");
+		printf("  -d, --exact    : Print all performance metrics in full exact precision (integer or rational)\n");
 		printf("  -h, --help       : Print this help message\n");
 		return -1;
 	}
@@ -71,14 +73,17 @@ int main(int argc, char**argv)
 			throughput_output = true;
 		} else if(strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--qlen") == 0) {
 			queue_output = true;
+		} else if(strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--exact") == 0) {
+			exact_output = true;
 		} else if(strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-			printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] model.qn\n", argv[0]);
+			printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-d|--exact] [-h|--help] model.qn\n", argv[0]);
 			printf("  -v, --verbose    : Print exact ratios for all performance measures\n");
 			printf("  -l, --log      : Print only log of normalizing constant as double\n");
 			printf("  -e, --ex       : Print exact normalizing constant numerator and denominator\n");
 			printf("  -g, --nc         : Print normalizing constant as double\n");
 			printf("  -t, --tput       : Print only throughputs, one per row\n");
 			printf("  -q, --qlen       : Print only queue lengths, one per row\n");
+			printf("  -d, --exact    : Print all performance metrics in full exact precision (integer or rational)\n");
 			printf("  -h, --help       : Print this help message\n");
 			return 0;
 		} else {
@@ -94,7 +99,7 @@ int main(int argc, char**argv)
 	}
 	
 	qnm=(qnmodel*)readmodel(model_file);
-	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
+	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output && !exact_output) {
 		printmodel(qnm);
 	}
 	
@@ -197,11 +202,42 @@ int main(int argc, char**argv)
 			}
 			printf("\n");
 		}
+	} else if (exact_output) {
+		// Print all performance metrics in exact rational form
+		printf("========== Performance Metrics (Exact) ==========\n");
+		gmp_printf("G = %Qd\n", G[0]);
+		printf("log(G) = %.15e\n", logG);
+		
+		printf("\nX (throughputs):\n");
+		mpq_t x_exact;
+		mpq_init(x_exact);
+		for (int r = 0; r < qnm->R; r++) {
+			mpq_set_f(x_exact, X[r]);
+			gmp_printf("X[%d] = %Qd\n", r, x_exact);
+		}
+		mpq_clear(x_exact);
+		
+		printf("\nQ (mean queue lengths):\n");
+		mpq_t q_exact, q_total;
+		mpq_init(q_exact);
+		mpq_init(q_total);
+		for (int i = 0; i < qnm->M; i++) {
+			printf("Q[%d] =", i+1);
+			mpq_set_ui(q_total, 0, 1);
+			for (int r = 0; r < qnm->R; r++) {
+				mpq_set_f(q_exact, Q[i][r]);
+				gmp_printf("\t%Qd", q_exact);
+				mpq_add(q_total, q_total, q_exact);
+			}
+			gmp_printf("\t(total: %Qd)\n", q_total);
+		}
+		mpq_clear(q_exact);
+		mpq_clear(q_total);
+		
+		printf("=========================================\n");
+		printf("Elapsed time (CA): %g s\n", t1-t0);
 	} else {
-		printf("\nElapsed time (CA): %g s\n", t1-t0);
-		
-		printf("\n========== Performance Metrics ==========\n");
-		
+		printf("========== Performance Metrics ==========\n");
 		printf("G = %.15e\n", mpf_get_d(fval));
 		printf("log(G) = %.15e\n", logG);
 		
@@ -221,6 +257,7 @@ int main(int argc, char**argv)
 		}
 		
 		printf("=========================================\n");
+		printf("Elapsed time (CA): %g s\n", t1-t0);
 	}
 	mpf_clear(fval);
 	

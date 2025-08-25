@@ -26,16 +26,18 @@ int main(int argc,char ** argv)
 	bool normconst_g_output = false;
 	bool throughput_output = false;
 	bool queue_output = false;
+	bool exact_output = false;
 	char* model_file = NULL;
 	
 	if(argc < 2)
 	{
-		printf("USAGE: %s [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] model.qn\n", argv[0]);
+		printf("USAGE: %s [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-d|--exact] [-h|--help] model.qn\n", argv[0]);
 		printf("  -l, --log        : Print only log of normalizing constant as double\n");
 		printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
 		printf("  -g, --nc         : Print normalizing constant as double\n");
 		printf("  -t, --tput       : Print only throughputs, one per row\n");
 		printf("  -q, --qlen       : Print only queue lengths, one per row\n");
+		printf("  -d, --exact      : Print all performance metrics in full exact precision (integer or rational)\n");
 		printf("  -h, --help       : Print this help message\n");
 		return -1;
 	}
@@ -51,14 +53,17 @@ int main(int argc,char ** argv)
 			throughput_output = true;
 		} else if(strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--qlen") == 0) {
 			queue_output = true;
+		} else if(strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--exact") == 0) {
+			exact_output = true;
 		} else if(strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-			printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] model.qn\n", argv[0]);
+			printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-d|--exact] [-h|--help] model.qn\n", argv[0]);
 			printf("  -v, --verbose    : Print exact ratios for all performance measures\n");
 			printf("  -l, --log        : Print only log of normalizing constant as double\n");
 			printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
 			printf("  -g, --nc         : Print normalizing constant as double\n");
 			printf("  -t, --tput       : Print only throughputs, one per row\n");
 			printf("  -q, --qlen       : Print only queue lengths, one per row\n");
+			printf("  -d, --exact      : Print all performance metrics in full exact precision (integer or rational)\n");
 			printf("  -h, --help       : Print this help message\n");
 			return 0;
 		} else if(argv[i][0] == '-') {
@@ -75,18 +80,19 @@ int main(int argc,char ** argv)
 	}
 	
 	if(model_file == NULL) {
-		printf("USAGE: %s [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] model.qn\n", argv[0]);
+		printf("USAGE: %s [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-d|--exact] [-h|--help] model.qn\n", argv[0]);
 		printf("  -l, --log        : Print only log of normalizing constant as double\n");
 		printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
 		printf("  -g, --nc         : Print normalizing constant as double\n");
 		printf("  -t, --tput       : Print only throughputs, one per row\n");
 		printf("  -q, --qlen       : Print only queue lengths, one per row\n");
+		printf("  -d, --exact      : Print all performance metrics in full exact precision (integer or rational)\n");
 		printf("  -h, --help       : Print this help message\n");
 		return -1;
 	}
 	
 	qn=(qnmodel*)readmodel(model_file);
-	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
+	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output && !exact_output) {
 		printmodel(qn);
 	}
 
@@ -186,11 +192,36 @@ int main(int argc,char ** argv)
 			}
 			printf("\n");
 		}
-	} else {
-		t1 = CPUTIME;
-		printf("\nElapsed time (MVA): %.6f s\n", t1-t0);
+	} else if (exact_output) {
+		// Print all performance metrics in exact rational form
+		printf("========== Performance Metrics (Exact) ==========\n");
+		printf("Normalizing constant:\n");
+		gmp_printf("G = %Qd\n", G);
+		printf("log(G) = %.15e\n", logG);
 		
-		printf("\n========== Performance Metrics ==========\n");
+		printf("\nX (throughputs):\n");
+		for (r=1;r<=qn->R;r++) {
+			gmp_printf("X[%d] = %Qd\n", r, X[r-1]);
+		}
+		
+		printf("\nQ (mean queue lengths):\n");
+		for (m=1;m<=qn->M;m++)
+		{
+			printf("Q[%d] =", m);
+			mpq_t total_q; mpq_init(total_q); mpq_set_ui(total_q, 0, 1);
+			for (r=1;r<=qn->R;r++)
+			{
+				gmp_printf("\t%Qd", Q[m-1][r-1]);
+				mpq_add(total_q, total_q, Q[m-1][r-1]);
+			}
+			gmp_printf("\t(total: %Qd)\n", total_q);
+			mpq_clear(total_q);
+		}
+		printf("=========================================\n");
+		t1 = CPUTIME;
+		printf("Elapsed time (MVA): %.6f s\n", t1-t0);
+	} else {
+		printf("========== Performance Metrics ==========\n");
 		printf("Normalizing constant:\n");
 		mpf_t fval;
 		mpf_init(fval);
@@ -200,7 +231,7 @@ int main(int argc,char ** argv)
 		mpf_clear(fval);
 	}
 	
-	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
+	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output && !exact_output) {
 		printf("\nX (throughputs):\n");
 		for (r=1;r<=qn->R;r++) {
 			mpf_t xval; mpf_init(xval); mpf_set_q(xval, X[r-1]);
@@ -226,6 +257,8 @@ int main(int argc,char ** argv)
 			mpq_clear(total_q);
 		}
 		printf("=========================================\n");
+		t1 = CPUTIME;
+		printf("Elapsed time (MVA): %.6f s\n", t1-t0);
 	}
 	
 	for (r=0;r<qn->R;r++)

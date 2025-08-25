@@ -1,4 +1,4 @@
-# Product-Form Queueing Networks (PFQN) Solvers
+# Multiprecision Product-Form Queueing Networks Solvers
 
 The mp_pfqn library offers fast C solvers for product-form queueing networks using the GNU Multiple Precision Arithmetic Library (GMP). Exact arithmetic in GMP allows to compute normalizing constants for the equilibrium state probabilities on large closed multiclass models. 
 
@@ -85,6 +85,7 @@ All solvers support various command-line options to control their output format 
 | `-g` | `--nc` | Print normalizing constant as double |
 | `-t` | `--tput` | Print only throughputs, one per row |
 | `-q` | `--qlen` | Print only queue lengths, one per row |
+| `-d` | `--exact` | Print all performance metrics in full exact precision (integer or rational) |
 | `-h` | `--help` | Print help message |
 
 
@@ -119,7 +120,7 @@ RECAL supports the same command-line options as MVA (see table above).
 | `-g` | `--nc` | Print normalizing constant as double |
 | `-t` | `--tput` | Print only throughputs, one per row |
 | `-q` | `--qlen` | Print only queue lengths, one per row |
-| `-d` | `--debug` | Enable debug output (progress messages, timing, etc.) |
+| `-d` | `--exact` | Print all performance metrics in full exact precision (integer or rational) |
 | `-p digit` | | Apply perturbation at the specified digit (e.g., `-p 5`) |
 | `-s seed` | `--seed` | Random seed for perturbation (default: 23000) |
 | `-h` | `--help` | Print help message |
@@ -144,8 +145,9 @@ CoMoM supports the same command-line options as MoM (see table above). The Class
 # Get exact normalizing constant (numerator and denominator)
 ./bin/mom -e models/02_bottleneck_study.qn
 
-# Run MoM solver with debug output
+# Get all performance metrics in exact rational form
 ./bin/mom -d models/02_bottleneck_study.qn
+./bin/mva -d models/02_bottleneck_study.qn
 
 # Apply perturbation for approximate solution (MoM/CoMoM)
 ./bin/mom -p 5 models/02_bottleneck_study.qn
@@ -155,7 +157,9 @@ CoMoM supports the same command-line options as MoM (see table above). The Class
 ./bin/mom -p 5 -s 12345 models/02_bottleneck_study.qn
 ./bin/comom -p 5 -s 12345 models/02_bottleneck_study.qn
 ```
-**Note**: The perturbation option (`-p`) is available in both the MoM and CoMoM solvers and is useful when the exact solution fails due to singular systems. It introduces small randomized numerical perturbations to enable approximate solutions. When perturbation is applied, model parameters are displayed as original integer values with separate perturbation annotations (e.g., `50 eps=1.0e-05`). The `-s` option allows you to specify a random seed for reproducible perturbations.
+**Notes**: 
+- The `-d`/`--exact` option is available in all solvers and prints performance metrics (throughputs, queue lengths, normalizing constants) in full exact precision as rational numbers (e.g., `1/3` instead of `0.333333`). This is useful for verification and when exact values are required.
+- The perturbation option (`-p`) is available in both the MoM and CoMoM solvers and is useful when the exact solution fails due to singular systems. It introduces small randomized numerical perturbations to enable approximate solutions. When perturbation is applied, model parameters are displayed as original integer values with separate perturbation annotations (e.g., `50 eps=1.0e-05`). The `-s` option allows you to specify a random seed for reproducible perturbations.
 
 ## References
 

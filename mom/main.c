@@ -263,13 +263,13 @@ int main(int argc, char**argv)
 	
 	if(argc < 2)
 	{
-		printf("USAGE: %s [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-d|--debug] [-b|--bounds] [-p digit] [-s seed] model.qn\n", argv[0]);
+		printf("USAGE: %s [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-d|--exact] [-b|--bounds] [-p digit] [-s seed] model.qn\n", argv[0]);
 		printf("  -l, --log        : Print only log of normalizing constant as double\n");
 		printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
 		printf("  -g, --nc         : Print normalizing constant as double\n");
 		printf("  -t, --tput       : Print only throughputs, one per row\n");
 		printf("  -q, --qlen       : Print only queue lengths, one per row\n");
-		printf("  -d, --debug      : Enable debug output (progress messages, timing, etc.)\n");
+		printf("  -d, --exact      : Print all performance metrics in full exact precision (integer or rational)\n");
 		printf("  -b, --bounds     : Compute performance bounds (requires -p, shows ranges)\n");
 		printf("  -h, --help       : Print this help message\n");
 		printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
@@ -288,19 +288,19 @@ int main(int argc, char**argv)
 			throughput_output = true;
 		} else if(strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--qlen") == 0) {
 			queue_output = true;
-		} else if(strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--debug") == 0) {
-			verbose_output = true; // Swapped: -d now does what -v used to do (but verbose_output isn't used)
+		} else if(strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--exact") == 0) {
+			debug_output = true; // -d enables exact output in perfindices
 		} else if(strcmp(argv[i], "-b") == 0 || strcmp(argv[i], "--bounds") == 0) {
 			bounds_output = true;
 		} else if(strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-			printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-d|--debug] [-b|--bounds] [-p digit] [-s seed] model.qn\n", argv[0]);
+			printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-d|--exact] [-b|--bounds] [-p digit] [-s seed] model.qn\n", argv[0]);
 			printf("  -v, --verbose    : Print exact ratios for all performance measures\n");
 			printf("  -l, --log        : Print only log of normalizing constant as double\n");
 			printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
 			printf("  -g, --nc         : Print normalizing constant as double\n");
 			printf("  -t, --tput       : Print only throughputs, one per row\n");
 			printf("  -q, --qlen       : Print only queue lengths, one per row\n");
-			printf("  -d, --debug      : Enable debug output (progress messages, timing, etc.)\n");
+			printf("  -d, --exact      : Print all performance metrics in full exact precision (integer or rational)\n");
 			printf("  -h, --help       : Print this help message\n");
 			printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
 			printf("  -s seed          : Set perturbation seed (default: 23000)\n");
@@ -331,13 +331,13 @@ int main(int argc, char**argv)
 	}
 	
 	if(model_file == NULL) {
-		printf("USAGE: %s [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-d|--debug] [-b|--bounds] [-p digit] [-s seed] model.qn\n", argv[0]);
+		printf("USAGE: %s [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-d|--exact] [-b|--bounds] [-p digit] [-s seed] model.qn\n", argv[0]);
 		printf("  -l, --log        : Print only log of normalizing constant as double\n");
 		printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
 		printf("  -g, --nc         : Print normalizing constant as double\n");
 		printf("  -t, --tput       : Print only throughputs, one per row\n");
 		printf("  -q, --qlen       : Print only queue lengths, one per row\n");
-		printf("  -d, --debug      : Enable debug output (progress messages, timing, etc.)\n");
+		printf("  -d, --exact      : Print all performance metrics in full exact precision (integer or rational)\n");
 		printf("  -b, --bounds     : Compute performance bounds (requires -p, shows ranges)\n");
 		printf("  -h, --help       : Print this help message\n");
 		printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
@@ -459,11 +459,6 @@ int main(int argc, char**argv)
 		return 1;
 	}
 	
-	t1=CPUTIME;
-	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
-		printf("\nElapsed time (MOM): %.6f s\n",t1-t0);
-	}
-
 	// Clean up original parameter storage
 	if(perturbation_digit > 0) {
 		for(int i = 0; i < qnm->M; i++) {

@@ -683,10 +683,7 @@ solve_attempt:
 		mpq_clear(tmp);
 		mpq_clear(tmp2);
 	} else {
-		t1=CPUTIME;
-		printf("\nElapsed time (CoMoM): %g s\n",t1-t0);
-		
-		printf("\n========== Performance Metrics ==========\n");
+		printf("========== Performance Metrics ==========\n");
 		
 		if (debug_output) {
 			// Print exact rational G, omit log(G) in debug mode
@@ -723,13 +720,6 @@ solve_attempt:
 				// 
 				// TODO: For classes 1 to R-1, need to extract G(N-e_r) from final basis
 				// Currently using marginal_G which was saved at wrong population for multi-class
-				if (debug_output) {
-					mpf_t debug_val;
-					mpf_init(debug_val);
-					mpf_set_q(debug_val, marginal_G[r-1]);
-					printf("DEBUG: marginal_G[%d] = %.15e\n", r-1, mpf_get_d(debug_val));
-					mpf_clear(debug_val);
-				}
 				mpq_div(X_r, marginal_G[r-1], G_total);
 			} else {
 				// For final class R: X(R) = G_1(hash(N,N,0+1))/ G(hash(N,N,0+1))
@@ -738,14 +728,6 @@ solve_attempt:
 					long int finalCardGk = nck(qnm->M + qnm->R - 1, qnm->M) * qnm->M;
 					// G(N) is at position finalCardGk in g_prev
 					
-					// Debug: Print what g_prev contains
-					if (debug_output) {
-						mpf_t debug_val;
-						mpf_init(debug_val);
-						mpf_set_q(debug_val, g_prev[finalCardGk]);
-						printf("DEBUG: g_prev[%ld] (G at N-e_R) = %.15e\n", finalCardGk, mpf_get_d(debug_val));
-						mpf_clear(debug_val);
-					}
 					
 					mpq_div(X_r, g_prev[finalCardGk], G_total);
 				} else {
@@ -845,6 +827,8 @@ solve_attempt:
 		mpq_clear(tmp2);
 		
 		printf("=========================================\n");
+		t1=CPUTIME;
+		printf("Elapsed time (CoMoM): %g s\n",t1-t0);
 		
 		mpq_clear(X_r);
 	}

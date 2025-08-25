@@ -139,11 +139,11 @@ void perfindices(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, bool verbose_output, b
 	// Default verbose output
 	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
 		if (bounds_output) {
-			printf("\n========== Performance Metrics (Bounds) ==========\n");
+			printf("========== Performance Metrics (Bounds) ==========\n");
 			printf("Note: Bounds computation using dual perturbation is in development.\n");
 			printf("Currently showing single perturbation results.\n");
 		} else {
-			printf("\n========== Performance Metrics ==========\n");
+			printf("========== Performance Metrics ==========\n");
 		}
 		if (debug_output) {
 			// Print exact rational G, omit log(G)
@@ -233,6 +233,9 @@ void perfindices(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, bool verbose_output, b
 		} else {
 			printf("=========================================\n");
 		}
+		extern double t0, t1;
+		t1 = CPUTIME;
+		printf("Elapsed time (MOM): %.6f s\n", t1-t0);
 	}
 	mpq_clear(tmp);
 	mpq_clear(tmp2);

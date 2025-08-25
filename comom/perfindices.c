@@ -111,8 +111,7 @@ void perfindices(qnmodel* qnm, mpq_vec_t g, mpq_t* G, mpq_t** Gk,
         mpq_clear(tmp2);
     } else {
         // Verbose output
-        printf("\n========== Performance Metrics ==========\n");
-        
+        printf("========== Performance Metrics ==========\n");
         
         printf("G = %.15e\n", mpf_get_d(fval));
         printf("log(G) = %.15e\n", logG);
@@ -177,6 +176,9 @@ void perfindices(qnmodel* qnm, mpq_vec_t g, mpq_t* G, mpq_t** Gk,
         mpq_clear(tmp2);
         
         printf("=========================================\n");
+        extern double t0, t1;
+        t1 = CPUTIME;
+        printf("Elapsed time (CoMoM): %g s\n", t1-t0);
         
         mpq_clear(X_r);
     }
