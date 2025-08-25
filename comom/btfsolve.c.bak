@@ -1,0 +1,162 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <gmp.h>
+#include <gmpla.h>
+#include "comom.h"
+
+/**
+ * Simple BTF solver that uses the traditional algorithm
+ * This maintains compatibility while preparing for future BTF optimization
+ */
+mpq_vec_t btf_solve(LS* ls, mpq_vec_t b)
+{
+    // For now, this just wraps the traditional solving approach
+    // using the BTF data structures
+    
+    int M = ls->m;
+    int R = ls->r;
+    long int cardG = nck(M + R - 1, M);
+    long int cardGk = cardG * M;
+    
+    // Allocate solution vectors
+    mpq_vec_t G = (mpq_vec_t)mpq_vec(cardG, 0, 1);
+    mpq_vec_t b1 = (mpq_vec_t)mpq_vec(cardGk, 0, 1);
+    mpq_vec_t b1b = (mpq_vec_t)mpq_vec(cardGk, 0, 1);
+    
+    // Compute G = B2 * g / n[R-1]
+    mpq_mspvecmul(G, ls->B2_blocks[0]->nondiag, b);
+    
+    // Note: The division by n[R-1] should be done in main.c
+    // as it depends on the current population
+    
+    // Compute b1 = B1 * g - A12 * G
+    mpq_mspvecmul(b1, ls->B1_blocks[0]->nondiag, b);
+    mpq_mspvecmul(b1b, ls->Y_blocks[0]->nondiag, G);
+    for (int i = 0; i < cardGk; i++) {
+        mpq_sub(b1[i], b1[i], b1b[i]);
+    }
+    
+    // LU decomposition of A11 (X block) if not done yet
+    if (!ls->X_blocks[0]->lu_indices) {
+        ls->X_blocks[0]->lu_indices = mpq_ludcmp(ls->X_blocks[0]->diag, cardGk);
+    }
+    
+    // Solve A11 * Gk = b1
+    if (mpq_lubksb(ls->X_blocks[0]->diag, b1, cardGk, ls->X_blocks[0]->lu_indices) < 0) {
+        // System is singular
+        for (int i = 0; i < cardG; i++) mpq_clear(G[i]);
+        for (int i = 0; i < cardGk; i++) mpq_clear(b1[i]);
+        for (int i = 0; i < cardGk; i++) mpq_clear(b1b[i]);
+        free(G);
+        free(b1);
+        free(b1b);
+        return NULL;
+    }
+    
+    // Create result vector
+    mpq_vec_t result = (mpq_vec_t)mpq_vec(cardG + cardGk, 0, 1);
+    
+    // Copy Gk and G into result
+    for (int i = 0; i < cardGk; i++) {
+        mpq_set(result[i], b1[i]);
+    }
+    for (int i = 0; i < cardG; i++) {
+        mpq_set(result[cardGk + i], G[i]);
+    }
+    
+    // Clean up temporary vectors
+    for (int i = 0; i < cardG; i++) mpq_clear(G[i]);
+    for (int i = 0; i < cardGk; i++) mpq_clear(b1[i]);
+    for (int i = 0; i < cardGk; i++) mpq_clear(b1b[i]);
+    free(G);
+    free(b1);
+    free(b1b);
+    
+    return result;
+}
+
+/**
+ * Free memory allocated for linear system
+ */
+void free_ls(LS* ls)
+{
+    if (!ls) return;
+    
+    // Free X blocks
+    if (ls->X_blocks && ls->X_blocks[0]) {
+        if (ls->X_blocks[0]->diag) {
+            long int size = nck(ls->m + ls->r - 1, ls->m) * ls->m;
+            for (int i = 0; i < size; i++) {
+                if (ls->X_blocks[0]->diag[i]) {
+                    for (int j = 0; j < size; j++) {
+                        mpq_clear(ls->X_blocks[0]->diag[i][j]);
+                    }
+                    free(ls->X_blocks[0]->diag[i]);
+                }
+            }
+            free(ls->X_blocks[0]->diag);
+        }
+        if (ls->X_blocks[0]->lu_indices) {
+            free(ls->X_blocks[0]->lu_indices);
+        }
+        free(ls->X_blocks[0]);
+    }
+    
+    // Free Y blocks (sparse)
+    if (ls->Y_blocks && ls->Y_blocks[0]) {
+        if (ls->Y_blocks[0]->nondiag) {
+            if (ls->Y_blocks[0]->nondiag->coeff) {
+                for (int i = 0; i < ls->Y_blocks[0]->nondiag->nnz; i++) {
+                    mpq_clear(ls->Y_blocks[0]->nondiag->coeff[i]);
+                }
+                free(ls->Y_blocks[0]->nondiag->coeff);
+            }
+            if (ls->Y_blocks[0]->nondiag->pos_row) free(ls->Y_blocks[0]->nondiag->pos_row);
+            if (ls->Y_blocks[0]->nondiag->pos_col) free(ls->Y_blocks[0]->nondiag->pos_col);
+            free(ls->Y_blocks[0]->nondiag);
+        }
+        free(ls->Y_blocks[0]);
+    }
+    
+    // Free B1 blocks (sparse)
+    if (ls->B1_blocks && ls->B1_blocks[0]) {
+        if (ls->B1_blocks[0]->nondiag) {
+            if (ls->B1_blocks[0]->nondiag->coeff) {
+                for (int i = 0; i < ls->B1_blocks[0]->nondiag->nnz; i++) {
+                    mpq_clear(ls->B1_blocks[0]->nondiag->coeff[i]);
+                }
+                free(ls->B1_blocks[0]->nondiag->coeff);
+            }
+            if (ls->B1_blocks[0]->nondiag->pos_row) free(ls->B1_blocks[0]->nondiag->pos_row);
+            if (ls->B1_blocks[0]->nondiag->pos_col) free(ls->B1_blocks[0]->nondiag->pos_col);
+            free(ls->B1_blocks[0]->nondiag);
+        }
+        free(ls->B1_blocks[0]);
+    }
+    
+    // Free B2 blocks (sparse)
+    if (ls->B2_blocks && ls->B2_blocks[0]) {
+        if (ls->B2_blocks[0]->nondiag) {
+            if (ls->B2_blocks[0]->nondiag->coeff) {
+                for (int i = 0; i < ls->B2_blocks[0]->nondiag->nnz; i++) {
+                    mpq_clear(ls->B2_blocks[0]->nondiag->coeff[i]);
+                }
+                free(ls->B2_blocks[0]->nondiag->coeff);
+            }
+            if (ls->B2_blocks[0]->nondiag->pos_row) free(ls->B2_blocks[0]->nondiag->pos_row);
+            if (ls->B2_blocks[0]->nondiag->pos_col) free(ls->B2_blocks[0]->nondiag->pos_col);
+            free(ls->B2_blocks[0]->nondiag);
+        }
+        free(ls->B2_blocks[0]);
+    }
+    
+    // Free block arrays
+    if (ls->X_blocks) free(ls->X_blocks);
+    if (ls->Y_blocks) free(ls->Y_blocks);
+    if (ls->B1_blocks) free(ls->B1_blocks);
+    if (ls->B2_blocks) free(ls->B2_blocks);
+    if (ls->C_blocks) free(ls->C_blocks);
+    if (ls->block_positions) free(ls->block_positions);
+    
+    free(ls);
+}

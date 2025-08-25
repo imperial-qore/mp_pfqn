@@ -11,8 +11,8 @@ LS* setupls(combsrep *Dn, qnmodel* qnm, int *N, int r)
 	int d,k,s;
 	int M=qnm->M;
 	int R=r;
-	int** L=qnm->L;
-	int* Z=qnm->Z;
+	mpz_t** L=qnm->L;
+	mpz_t* Z=qnm->Z;
 	int* mi=qnm->mi;
 
 	LS* ls= (LS*) calloc(1,sizeof(LS));
@@ -47,11 +47,11 @@ LS* setupls(combsrep *Dn, qnmodel* qnm, int *N, int r)
 				for (s=1;s<=r-1;s++)
 				{
 					comb[s-1] = comb[s-1] + 1;
-					mpq_matset_si(ls->A11,row-1,hash(Dn,comb,k+1)-1,-L[k-1][s-1],1);
+					mpq_matset_si(ls->A11,row-1,hash(Dn,comb,k+1)-1,-mpz_get_si(L[k-1][s-1]),1);
 					comb[s-1] = comb[s-1] - 1; 
 					
 				}
-				mpq_mspset_si(ls->B1,row-1,hash(Dn,comb,k+1)-1,L[k-1][r-1],1);
+				mpq_mspset_si(ls->B1,row-1,hash(Dn,comb,k+1)-1,mpz_get_si(L[k-1][r-1]),1);
 			}
 			for (s=1;s<=r-1;s++)
 			{
@@ -59,9 +59,9 @@ LS* setupls(combsrep *Dn, qnmodel* qnm, int *N, int r)
 				row = row + 1;
 				mpq_mspset_si(ls->A12,row-1,hash(Dn,comb,0+1)-(int)nck(M+R-1,M)*M-1,N[s-1]-comb[s-1],1);	
 				comb[s-1] = comb[s-1] + 1; /* oner(n,s) */
-				mpq_mspset_si(ls->A12,row-1,hash(Dn,comb,0+1)-(int)nck(M+R-1,M)*M-1,-Z[s-1],1);
+				mpq_mspset_si(ls->A12,row-1,hash(Dn,comb,0+1)-(int)nck(M+R-1,M)*M-1,-mpz_get_si(Z[s-1]),1);
 				for (k=1; k<=M; k++)
-					mpq_matset_si(ls->A11,row-1,hash(Dn,comb,k+1)-1,-mi[k-1]*L[k-1][s-1],1);
+					mpq_matset_si(ls->A11,row-1,hash(Dn,comb,k+1)-1,-mi[k-1]*mpz_get_si(L[k-1][s-1]),1);
 				comb[s-1] = comb[s-1] - 1; /* oner(n,s) */
 			}
 			
@@ -74,9 +74,9 @@ LS* setupls(combsrep *Dn, qnmodel* qnm, int *N, int r)
 			row = row + 1;
 			for(s=1;s<=r;s++)
 				comb[s-1]=Dn->combs[d-1][s-1];
-			mpq_mspset_si(ls->B2,row-1,hash(Dn,comb,0+1)-1,Z[r-1],1);	
+			mpq_mspset_si(ls->B2,row-1,hash(Dn,comb,0+1)-1,mpz_get_si(Z[r-1]),1);	
 			for (k=1;k<=M;k++)
-				mpq_mspset_si(ls->B2,row-1,hash(Dn,comb,k+1)-1,mi[k-1]*L[k-1][r-1],1);	
+				mpq_mspset_si(ls->B2,row-1,hash(Dn,comb,k+1)-1,mi[k-1]*mpz_get_si(L[k-1][r-1]),1);	
 		}
 
 	return ls;

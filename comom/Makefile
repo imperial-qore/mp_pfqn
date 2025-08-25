@@ -6,10 +6,11 @@ LDFLAGS = -L../deps/local/lib -lgmp -lmpfr -lm -L. -L../lib/
 #LDFLAGS = -static -L./gmp-4.1.4/.libs/ -lgmp -lm  -L../lib/
 
 SRCS = main.c setupls.c hash.c perfindices.c
-TARGET_DIR = ../target
+OBJS = $(SRCS:.c=.o)
+DEPS = $(SRCS:.c=.d)
 
-UTILOBJS = ../target/util/factorial.o ../target/util/nck.o ../target/util/nckinit.o ../target/util/multichoose.o ../target/util/randi.o ../target/util/sum.o ../target/util/nnz.o ../target/util/nnzposcmp.o ../target/util/sortbynnzpos.o ../target/util/readmodel.o ../target/util/printmodel.o
-GMPLAOBJS = ../target/gmpla/int_mat.o ../target/gmpla/int_matmatchrow.o ../target/gmpla/int_matprint.o ../target/gmpla/int_vec.o ../target/gmpla/int_vecprint.o ../target/gmpla/mpq_lubksb.o ../target/gmpla/mpq_ludcmp.o ../target/gmpla/mpq_matprint.o ../target/gmpla/mpq_matzeros.o ../target/gmpla/mpq_msp.o ../target/gmpla/mpq_mspget.o ../target/gmpla/mpq_mspprint.o ../target/gmpla/mpq_mspset_si.o ../target/gmpla/mpq_mspvecmul.o ../target/gmpla/mpq_vec.o ../target/gmpla/mpq_vecdup.o ../target/gmpla/mpq_vecprint.o ../target/gmpla/int_vecadd.o ../target/gmpla/int_vecdiff.o ../target/gmpla/int_vecsubsum.o ../target/gmpla/mpq_matset_si.o 
+UTILOBJS = ../util/factorial.o ../util/nck.o ../util/nckinit.o ../util/multichoose.o ../util/randi.o ../util/sum.o ../util/nnz.o ../util/nnzposcmp.o ../util/sortbynnzpos.o ../util/readmodel.o ../util/printmodel.o
+GMPLAOBJS = ../gmpla/int_mat.o ../gmpla/int_matmatchrow.o ../gmpla/int_matprint.o ../gmpla/int_vec.o ../gmpla/int_vecprint.o ../gmpla/mpq_lubksb.o ../gmpla/mpq_ludcmp.o ../gmpla/mpq_matprint.o ../gmpla/mpq_matzeros.o ../gmpla/mpq_msp.o ../gmpla/mpq_mspget.o ../gmpla/mpq_mspprint.o ../gmpla/mpq_mspset_si.o ../gmpla/mpq_mspset_z.o ../gmpla/mpq_mspvecmul.o ../gmpla/mpq_vec.o ../gmpla/mpq_vecdup.o ../gmpla/mpq_vecprint.o ../gmpla/int_vecadd.o ../gmpla/int_vecdiff.o ../gmpla/int_vecsubsum.o ../gmpla/mpq_matset_si.o 
 
 RM = /bin/rm -f
 
@@ -27,5 +28,4 @@ cleanbase:
 	${RM} ${OBJS}
 
 clean: 
-	-${RM} -rf $(TARGET_DIR)
 	${RM} ${OBJS} ${DEPS} 

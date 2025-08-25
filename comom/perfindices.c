@@ -97,7 +97,7 @@ void perfindices(qnmodel* qnm, mpq_vec_t g, mpq_t* G, mpq_t** Gk,
         mpq_init(tmp2);
         for (int k = 1; k <= qnm->M; k++) {
             for (int r = 1; r <= qnm->R; r++) {
-                mpq_set_si(tmp, qnm->L[k-1][r-1], 1);
+                mpq_set_z(tmp, qnm->L[k-1][r-1]);
                 mpq_mul(tmp2, Gk[k-1][r-1], tmp);
                 mpq_div(Q_kr, tmp2, G_total);
                 mpf_set_q(fval, Q_kr);
@@ -158,7 +158,7 @@ void perfindices(qnmodel* qnm, mpq_vec_t g, mpq_t* G, mpq_t** Gk,
             
             for (int r = 1; r <= qnm->R; r++) {
                 // Q[k,r] = L[k,r] * Gk^k(N-e_r) / G(N)
-                mpq_set_si(tmp, qnm->L[k-1][r-1], 1);
+                mpq_set_z(tmp, qnm->L[k-1][r-1]);
                 mpq_mul(tmp2, Gk[k-1][r-1], tmp);
                 mpq_div(Q_kr, tmp2, G_total);
                 mpq_add(total_q, total_q, Q_kr);

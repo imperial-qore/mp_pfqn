@@ -135,12 +135,13 @@ int main(int argc, char**argv)
 			for(int j = 0; j < qnm->R; j++) {
 				// Add small perturbation to avoid exact zeros and symmetries
 				long perturb = (i * qnm->R + j + 1) % 10; // Small perturbation 0-9
-				qnm->L[i][j] = qnm->L[i][j] * scale_factor + perturb;
+				mpz_mul_si(qnm->L[i][j], qnm->L[i][j], scale_factor);
+				mpz_add_ui(qnm->L[i][j], qnm->L[i][j], perturb);
 			}
 		}
 		
 		for(int j = 0; j < qnm->R; j++) {
-			qnm->Z[j] = qnm->Z[j] * scale_factor;
+			mpz_mul_si(qnm->Z[j], qnm->Z[j], scale_factor);
 		}
 		
 		if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
@@ -387,7 +388,7 @@ int main(int argc, char**argv)
 		mpq_init(tmp2);
 		for (int k = 1; k <= qnm->M; k++) {
 			for (int r = 1; r <= qnm->R; r++) {
-				mpq_set_si(tmp, qnm->L[k-1][r-1], 1);
+				mpq_set_z(tmp, qnm->L[k-1][r-1]);
 				mpq_mul(tmp2, marginal_Gk[r-1], tmp);
 				mpq_div(Q_kr, tmp2, G_total);
 				mpf_set_q(fval, Q_kr);
@@ -459,7 +460,7 @@ int main(int argc, char**argv)
 			
 			for (r = 1; r <= qnm->R; r++) {
 				// Q[k,r] = L[k,r] * Gk[r] / G(N) (same as MOM)
-				mpq_set_si(tmp, qnm->L[k-1][r-1], 1);
+				mpq_set_z(tmp, qnm->L[k-1][r-1]);
 				mpq_mul(tmp2, marginal_Gk[r-1], tmp);
 				mpq_div(Q_kr, tmp2, G_total);
 				mpq_add(total_q, total_q, Q_kr);
