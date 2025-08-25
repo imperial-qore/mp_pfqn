@@ -21,7 +21,7 @@ mpq_vec_t blocksolve(LS* ls, mpq_vec_t b)
 		mpq_vec_t bg=(mpq_vec_t)mpq_vec(n,0,1);
 		for (k=nck(ls->m,h)-1;k>=0;k--)
 		{
-		if(DEBUG)printf("blocksolve: processing block %d/%ld with %d non-zeros \n",k+1,nck(ls->m,h),h);
+		if(DEBUG)printf("blocksolve: processing block %d/%lld with %d non-zeros \n",k+1,nck(ls->m,h),h);
 		w+=n;
 		mpq_mspvecmul(bg,ls->C[ls->numdiagblocks-t].nondiag,g);	
 		for (i=n-1;i>=0;i--)

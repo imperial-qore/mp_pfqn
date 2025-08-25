@@ -5,7 +5,7 @@ LDFLAGS = -L../deps/local/lib -lgmp -lmpfr -lm -L. -L../lib/
 #LDFLAGS = -lgmp -lm -lmpfr -lgmpla -L.  -L../lib/
 #LDFLAGS = -static -L./gmp-4.1.4/.libs/ -lgmp -lm  -L../lib/
 
-SRCS = main.c convolution_multi_bignum.c convolution_multi_exact.c population.c
+SRCS = main.c blocksolve.c convolution_multi_exact.c population.c
 OBJS = $(SRCS:.c=.o)
 TARGET_DIR = ../target
 
