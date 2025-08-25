@@ -171,24 +171,43 @@ int main(int argc, char**argv)
 		mpz_set_ui(scale_factor, 10);
 		mpz_pow_ui(scale_factor, scale_factor, perturbation_digit);
 		
-		// Scale all parameters
-		for(int i = 0; i < qnm->M; i++) {
-			for(int j = 0; j < qnm->R; j++) {
-				// Add small perturbation using improved randomization
-				long hash_val = perturbation_seed * 1103515245 + i * 12345 + j * 67891;
-				long perturb = (abs(hash_val) % 9) + 1; // 1-9 range
-				mpz_mul(qnm->L[i][j], qnm->L[i][j], scale_factor);
-				mpz_add_ui(qnm->L[i][j], qnm->L[i][j], perturb);
-			}
-		}
+		// For each class, generate a random permutation of 1 to M+1
+		int* perm = (int*)calloc(qnm->M + 1, sizeof(int));
 		
 		for(int j = 0; j < qnm->R; j++) {
-			// Add small perturbation to Z as well
-			long hash_val = perturbation_seed * 1103515245 + 999999 + j * 67891;
-			long perturb = (abs(hash_val) % 9) + 1; // 1-9 range
+			// Generate permutation for class j using seed based on class index
+			// Initialize with 1 to M+1
+			for(int i = 0; i < qnm->M + 1; i++) {
+				perm[i] = i + 1;
+			}
+			
+			// Use a simple linear congruential generator for reproducible randomness
+			unsigned int rand_state = perturbation_seed + j * 1000;
+			
+			// Fisher-Yates shuffle
+			for(int i = qnm->M; i > 0; i--) {
+				// Generate random number using LCG
+				rand_state = rand_state * 1103515245 + 12345;
+				int k = (rand_state / 65536) % (i + 1);
+				
+				// Swap elements i and k
+				int temp = perm[i];
+				perm[i] = perm[k];
+				perm[k] = temp;
+			}
+			
+			// Apply perturbation to L[i][j] for all stations i
+			for(int i = 0; i < qnm->M; i++) {
+				mpz_mul(qnm->L[i][j], qnm->L[i][j], scale_factor);
+				mpz_add_ui(qnm->L[i][j], qnm->L[i][j], perm[i]);
+			}
+			
+			// Apply perturbation to Z[j] using the last element of permutation
 			mpz_mul(qnm->Z[j], qnm->Z[j], scale_factor);
-			mpz_add_ui(qnm->Z[j], qnm->Z[j], perturb);
+			mpz_add_ui(qnm->Z[j], qnm->Z[j], perm[qnm->M]);
 		}
+		
+		free(perm);
 		
 		if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
 			if (auto_perturbation) {

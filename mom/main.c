@@ -38,29 +38,53 @@ void printcompact(int*n,int R, double elapsed_time)
 	fflush(stdout);
 }
 
+// Generate a random permutation of integers 1 to n using Fisher-Yates shuffle
+void generate_permutation(int* perm, int n, unsigned int seed) {
+	// Initialize with 1 to n
+	for(int i = 0; i < n; i++) {
+		perm[i] = i + 1;
+	}
+	
+	// Use a simple linear congruential generator for reproducible randomness
+	unsigned int rand_state = seed;
+	
+	// Fisher-Yates shuffle
+	for(int i = n - 1; i > 0; i--) {
+		// Generate random number using LCG
+		rand_state = rand_state * 1103515245 + 12345;
+		int j = (rand_state / 65536) % (i + 1);
+		
+		// Swap elements i and j
+		int temp = perm[i];
+		perm[i] = perm[j];
+		perm[j] = temp;
+	}
+}
+
 void apply_perturbation_to_model(qnmodel* qnm, int perturbation_digit, int perturbation_seed, mpz_t scale_factor) {
 	// Calculate scale factor: 10^d where d is the perturbation digit
 	mpz_set_ui(scale_factor, 10);
 	mpz_pow_ui(scale_factor, scale_factor, perturbation_digit);
 	
-	// Scale all parameters
-	for(int i = 0; i < qnm->M; i++) {
-		for(int j = 0; j < qnm->R; j++) {
-			// Add small perturbation using improved randomization
-			long hash_val = perturbation_seed * 1103515245 + i * 12345 + j * 67891;
-			long perturb = (abs(hash_val) % 9) + 1; // 1-9 range
-			mpz_mul(qnm->L[i][j], qnm->L[i][j], scale_factor);
-			mpz_add_ui(qnm->L[i][j], qnm->L[i][j], perturb);
-		}
-	}
+	// For each class, generate a random permutation of 1 to M+1
+	int* perm = (int*)calloc(qnm->M + 1, sizeof(int));
 	
 	for(int j = 0; j < qnm->R; j++) {
-		// Add small perturbation to Z as well
-		long hash_val = perturbation_seed * 1103515245 + 999999 + j * 67891;
-		long perturb = (abs(hash_val) % 9) + 1; // 1-9 range
+		// Generate permutation for class j using seed based on class index
+		generate_permutation(perm, qnm->M + 1, perturbation_seed + j * 1000);
+		
+		// Apply perturbation to L[i][j] for all stations i
+		for(int i = 0; i < qnm->M; i++) {
+			mpz_mul(qnm->L[i][j], qnm->L[i][j], scale_factor);
+			mpz_add_ui(qnm->L[i][j], qnm->L[i][j], perm[i]);
+		}
+		
+		// Apply perturbation to Z[j] using the last element of permutation
 		mpz_mul(qnm->Z[j], qnm->Z[j], scale_factor);
-		mpz_add_ui(qnm->Z[j], qnm->Z[j], perturb);
+		mpz_add_ui(qnm->Z[j], qnm->Z[j], perm[qnm->M]);
 	}
+	
+	free(perm);
 }
 
 int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool log_output, 
