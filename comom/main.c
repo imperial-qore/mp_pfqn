@@ -691,6 +691,15 @@ solve_attempt:
 					}
 				}
 				
+				// Multiply by the multiplicity mi[k-1] for station k
+				if (qnm->mi[k-1] > 1) {
+					mpq_t mi_q;
+					mpq_init(mi_q);
+					mpq_set_ui(mi_q, qnm->mi[k-1], 1);
+					mpq_mul(Q_kr, Q_kr, mi_q);
+					mpq_clear(mi_q);
+				}
+				
 				mpf_set_q(fval, Q_kr);
 				printf("%.15e", mpf_get_d(fval));
 				if (r < qnm->R) printf(" ");
@@ -815,6 +824,15 @@ solve_attempt:
 						mpq_mul(tmp2, marginal_Gk[k-1][r-1], tmp);
 						mpq_div(Q_kr, tmp2, G_total);
 					}
+				}
+				
+				// Multiply by the multiplicity mi[k-1] for station k
+				if (qnm->mi[k-1] > 1) {
+					mpq_t mi_q;
+					mpq_init(mi_q);
+					mpq_set_ui(mi_q, qnm->mi[k-1], 1);
+					mpq_mul(Q_kr, Q_kr, mi_q);
+					mpq_clear(mi_q);
 				}
 				mpq_add(total_q, total_q, Q_kr);
 				

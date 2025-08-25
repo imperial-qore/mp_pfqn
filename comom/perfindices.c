@@ -160,6 +160,16 @@ void perfindices(qnmodel* qnm, mpq_vec_t g, mpq_t* G, mpq_t** Gk,
                 mpq_set_z(tmp, qnm->L[k-1][r-1]);
                 mpq_mul(tmp2, Gk[k-1][r-1], tmp);
                 mpq_div(Q_kr, tmp2, G_total);
+                
+                // Multiply by the multiplicity mi[k-1] for station k
+                if (qnm->mi[k-1] > 1) {
+                    mpq_t mi_q;
+                    mpq_init(mi_q);
+                    mpq_set_ui(mi_q, qnm->mi[k-1], 1);
+                    mpq_mul(Q_kr, Q_kr, mi_q);
+                    mpq_clear(mi_q);
+                }
+                
                 mpq_add(total_q, total_q, Q_kr);
                 
                 mpf_set_q(fval, Q_kr);
