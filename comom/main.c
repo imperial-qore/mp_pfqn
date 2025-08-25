@@ -437,6 +437,7 @@ int main(int argc, char**argv)
 		
 		free(temp_comb);
 	}
+
 	LS* linsys=NULL;
 		for (nr=1;nr<=qnm->N[r-1];nr++)
 		{
@@ -505,46 +506,46 @@ int main(int argc, char**argv)
 			
 			/* Save marginal normalizing constants for performance measures */
 			if (r == qnm->R && nr == qnm->N[r-1] - 1) {
-				// When we're at the second-to-last iteration of the final class,
-				// save marginals for ALL classes
-				// At this point, we have population (N[1], ..., N[R-1], N[R]-1)
-				// which gives us the marginals we need for the final class
-				mpq_set(marginal_G[r-1], g[cardGk]); // G(N-e_R) for class R
-				
+				mpq_set(marginal_G[qnm->R-1], g[cardGk]); // G(N-e_R) for class R
 				// Save G^k(N-e_R) for each station k
 				for (int k = 0; k < qnm->M; k++) {
-					// G^k values are in positions 0 to cardGk-1
-					// Each station k has its values at specific positions
-					// For now, use position k as approximation
-					mpq_set(marginal_Gk[k][r-1], g[k]);
+					mpq_set(marginal_Gk[k][qnm->R-1], g[k]);
 				}
-				
-				// For classes 1 to R-1, we need to extract G(N-e_r) from the current g
-				// This is complex, so for now we'll use approximations
-			} else if (r < qnm->R && nr == qnm->N[r-1] - 1) {
-				// For earlier classes, save as before (though these won't be used correctly in multi-class)
-				mpq_set(marginal_G[r-1], g[cardGk]); 
-				
-				// Save G^k values for this class
-				for (int k = 0; k < qnm->M; k++) {
-					mpq_set(marginal_Gk[k][r-1], g[k]);
+			} else if (r == qnm->R && nr == qnm->N[r-1]) {
+				int d = 1;
+				int * comb = calloc(sizeof(int),r);
+
+				for (int s = 1; s <= r; s++)
+					comb[s-1]=Dn->combs[d-1][s-1];
+
+				for (int s = 1; s <= qnm->R-1; s++) {
+					comb[s-1]++;
+
+					// Calculate index using hash function as in setupls.c line 71
+					int index = hash(Dn, comb, 0+1) - 1;
+//
+					mpq_set(marginal_G[s-1], g[index]);
+
+					// Save G^k values for this class
+					for (int k = 1; k <= qnm->M; k++) {
+						index = hash(Dn, comb, k+1) - 1;
+						// Print all contents of marginal_G and marginal_Gk
+						mpq_set(marginal_Gk[k-1][s-1], g[index]);
+					}
+					comb[s-1]--;
 				}
-				
+				free(comb);
+
 				// For final class R, save penultimate basis for debug output
-				if (r == qnm->R) {
-					if (g_m[1] != NULL) {
-						// Free existing allocation
-						for (int t=0; t<cardG+cardGk; t++) mpq_clear(g_m[1][t]);
-						free(g_m[1]);
-					}
-					g_m[1] = mpq_vec(cardG+cardGk,0,1);
-					if (g_m[1] != NULL) {
-						mpq_vecdup(g_m[1], g, cardG+cardGk);
-					}
-				}
+				// Free existing allocation
+				//for (int t=0; t<cardG+cardGk; t++) mpq_clear(g_m[1][t]);
+				//free(g_m[1]);
+				//g_m[1] = mpq_vec(cardG+cardGk,0,1);
+				//mpq_vecdup(g_m[1], g, cardG+cardGk);
 			}
 		}
 		class_elapsed = CPUTIME - class_start;
+
 		if (!log_output && !normconst_output && !throughput_output && !queue_output) {
 			printf(" (Class %d: %.6f s)\n", r, class_elapsed);
 		}	
@@ -552,6 +553,9 @@ int main(int argc, char**argv)
 	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
 		printf("\n");
 	}
+
+
+
 	// Print performance indices
 	mpf_t fval;
 	mpf_init(fval);
