@@ -616,17 +616,22 @@ solve_attempt:
 		mpq_t X_r;
 		mpq_init(X_r);
 		for (int r = 1; r <= qnm->R; r++) {
-			// X[r] using the correct normalizing constant from g vector
-			long int finalCardGk = nck(qnm->M + qnm->R - 1, qnm->M) * qnm->M;
-			int g_position = finalCardGk + (r - 1);
-			
-			long int finalCardG = nck(qnm->M + qnm->R - 1, qnm->M);
-			if (g_position >= finalCardGk + finalCardG) {
+			// Use the same logic as in normal output mode
+			if (r < qnm->R) {
+				// For classes s=1 to R-1: use marginal_G[r-1]
 				mpq_div(X_r, marginal_G[r-1], G_total);
 			} else {
-				mpq_div(X_r, g[g_position], G_total);
+				// For final class R: use g_prev if available
+				if (g_prev != NULL) {
+					long int finalCardGk = nck(qnm->M + qnm->R - 1, qnm->M) * qnm->M;
+					mpq_div(X_r, g_prev[finalCardGk], G_total);
+				} else {
+					// Fallback if g_prev not available
+					mpq_div(X_r, marginal_G[r-1], G_total);
+				}
 			}
 			
+			// Apply scaling correction if perturbation was used
 			mpq_t X_scaled;
 			mpq_init(X_scaled);
 			mpq_set(X_scaled, X_r);
