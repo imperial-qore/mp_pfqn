@@ -258,8 +258,8 @@ int main(int argc, char**argv)
 	}
 	
 	// Storage for marginal G^k values needed for queue length computation  
-	// Gk_r(N-e_r) for each class r (like in MOM)
-	mpq_t* marginal_Gk = (mpq_t*)calloc(qnm->R, sizeof(mpq_t));
+	// G^k(N-e_r) for each station k and class r - array [M][R]
+	mpq_t** marginal_Gk = (mpq_t**)calloc(qnm->M, sizeof(mpq_t*));
 	if (marginal_Gk == NULL) {
 		fprintf(stderr, "Error: Memory allocation failed for marginal_Gk array\n");
 		free(g_m);
@@ -269,8 +269,28 @@ int main(int argc, char**argv)
 		free(marginal_G);
 		return 1;
 	}
-	for (int r = 0; r < qnm->R; r++) {
-		mpq_init(marginal_Gk[r]);
+	for (int k = 0; k < qnm->M; k++) {
+		marginal_Gk[k] = (mpq_t*)calloc(qnm->R, sizeof(mpq_t));
+		if (marginal_Gk[k] == NULL) {
+			fprintf(stderr, "Error: Memory allocation failed for marginal_Gk[%d]\n", k);
+			// Clean up
+			for (int j = 0; j < k; j++) {
+				for (int r = 0; r < qnm->R; r++) {
+					mpq_clear(marginal_Gk[j][r]);
+				}
+				free(marginal_Gk[j]);
+			}
+			free(marginal_Gk);
+			for (int i = 0; i < qnm->R; i++) {
+				mpq_clear(marginal_G[i]);
+			}
+			free(marginal_G);
+			free(g_m);
+			return 1;
+		}
+		for (int r = 0; r < qnm->R; r++) {
+			mpq_init(marginal_Gk[k][r]);
+		}
 	}
 	
 	// Storage for G_1 (previous iteration's G vector) needed for final class performance measures
@@ -490,14 +510,25 @@ int main(int argc, char**argv)
 				// At this point, we have population (N[1], ..., N[R-1], N[R]-1)
 				// which gives us the marginals we need for the final class
 				mpq_set(marginal_G[r-1], g[cardGk]); // G(N-e_R) for class R
-				mpq_set(marginal_Gk[r-1], g[cardGk]); // Approximation for now
+				
+				// Save G^k(N-e_R) for each station k
+				for (int k = 0; k < qnm->M; k++) {
+					// G^k values are in positions 0 to cardGk-1
+					// Each station k has its values at specific positions
+					// For now, use position k as approximation
+					mpq_set(marginal_Gk[k][r-1], g[k]);
+				}
 				
 				// For classes 1 to R-1, we need to extract G(N-e_r) from the current g
 				// This is complex, so for now we'll use approximations
 			} else if (r < qnm->R && nr == qnm->N[r-1] - 1) {
-				// For earlier classes, save as before (though these won't be used)
+				// For earlier classes, save as before (though these won't be used correctly in multi-class)
 				mpq_set(marginal_G[r-1], g[cardGk]); 
-				mpq_set(marginal_Gk[r-1], g[cardGk]);
+				
+				// Save G^k values for this class
+				for (int k = 0; k < qnm->M; k++) {
+					mpq_set(marginal_Gk[k][r-1], g[k]);
+				}
 				
 				// For final class R, save penultimate basis for debug output
 				if (r == qnm->R) {
@@ -665,9 +696,15 @@ int main(int argc, char**argv)
 			if (r < qnm->R) {
 				// For classes s=1 to R-1: X(s) = G(hash(N,oner(N,s),0+1))/ G(hash(N,N,0+1))
 				// 
-				// TODO: The correct implementation requires extracting G(N-e_r) from 
-				// the final g vector using the proper hash mapping. Currently using
-				// marginal_G which was saved at wrong population for multi-class.
+				// TODO: For classes 1 to R-1, need to extract G(N-e_r) from final basis
+				// Currently using marginal_G which was saved at wrong population for multi-class
+				if (debug_output) {
+					mpf_t debug_val;
+					mpf_init(debug_val);
+					mpf_set_q(debug_val, marginal_G[r-1]);
+					printf("DEBUG: marginal_G[%d] = %.15e\n", r-1, mpf_get_d(debug_val));
+					mpf_clear(debug_val);
+				}
 				mpq_div(X_r, marginal_G[r-1], G_total);
 			} else {
 				// For final class R: X(R) = G_1(hash(N,N,0+1))/ G(hash(N,N,0+1))
@@ -675,6 +712,16 @@ int main(int argc, char**argv)
 				if (g_prev != NULL) {
 					long int finalCardGk = nck(qnm->M + qnm->R - 1, qnm->M) * qnm->M;
 					// G(N) is at position finalCardGk in g_prev
+					
+					// Debug: Print what g_prev contains
+					if (debug_output) {
+						mpf_t debug_val;
+						mpf_init(debug_val);
+						mpf_set_q(debug_val, g_prev[finalCardGk]);
+						printf("DEBUG: g_prev[%ld] (G at N-e_R) = %.15e\n", finalCardGk, mpf_get_d(debug_val));
+						mpf_clear(debug_val);
+					}
+					
 					mpq_div(X_r, g_prev[finalCardGk], G_total);
 				} else {
 					// Fallback if g_prev not available
@@ -726,8 +773,8 @@ int main(int argc, char**argv)
 				
 				if (r < qnm->R) {
 					// For classes s=1 to R-1: Q(k,s) = L(k,s)*G(hash(N,oner(N,s),k+1))/ G(hash(N,N,0+1))
-					// For now, use the saved marginal_Gk values
-					mpq_mul(tmp2, marginal_Gk[r-1], tmp);
+					// Use the saved marginal_Gk values for station k and class r
+					mpq_mul(tmp2, marginal_Gk[k-1][r-1], tmp);
 					mpq_div(Q_kr, tmp2, G_total);
 				} else {
 					// For final class R: Q(k,R) = L(k,R)*G_1(hash(N,N,k+1))/ G(hash(N,N,0+1))
@@ -740,7 +787,7 @@ int main(int argc, char**argv)
 						mpq_div(Q_kr, tmp2, G_total);
 					} else {
 						// Fallback if g_prev not available
-						mpq_mul(tmp2, marginal_Gk[r-1], tmp);
+						mpq_mul(tmp2, marginal_Gk[k-1][r-1], tmp);
 						mpq_div(Q_kr, tmp2, G_total);
 					}
 				}
@@ -851,9 +898,12 @@ int main(int argc, char**argv)
 	}
 	free(marginal_G);
 	
-	// Cleanup marginal_Gk array
-	for (int r = 0; r < qnm->R; r++) {
-		mpq_clear(marginal_Gk[r]);
+	// Cleanup marginal_Gk 2D array [M][R]
+	for (int k = 0; k < qnm->M; k++) {
+		for (int r = 0; r < qnm->R; r++) {
+			mpq_clear(marginal_Gk[k][r]);
+		}
+		free(marginal_Gk[k]);
 	}
 	free(marginal_Gk);
 	
