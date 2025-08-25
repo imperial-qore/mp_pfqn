@@ -6,7 +6,7 @@
 #include <gmpla.h>
 #include "mom.h"
 
-int mdecrease(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, mpq_vec_t g, mpq_vec_t gr, bool verbose_output, bool log_output, bool normconst_output, bool normconst_g_output, bool throughput_output, bool queue_output, bool debug_output, bool bounds_output, bool debug_full_precision, mpz_t scale_factor) /* G and Gk are passed by reference */
+int mdecrease(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, mpq_vec_t g, mpq_vec_t gr, bool verbose_output, bool log_output, bool normconst_output, bool normconst_g_output, bool throughput_output, bool queue_output, bool debug_output, bool bounds_output, mpz_t scale_factor) /* G and Gk are passed by reference */
 {
 	mpq_t tmp; mpq_init(tmp);
 	mpq_t tmp2; mpq_init(tmp2);
@@ -94,49 +94,6 @@ int mdecrease(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, mpq_vec_t g, mpq_vec_t gr
 	}
 	mpq_clear(tmp);
 	mpq_clear(tmp2);
-	
-	// Print all normalizing constants if -d option is used
-	if (debug_output && !log_output && !throughput_output && !queue_output) {
-		printf("\n========== Normalizing Constants (Debug) ==========\n");
-		
-		// Print last basis (current g vector)
-		printf("Last basis (final population):\n");
-		long int final_cardG = nck(qnm->M+qnm->R-1,qnm->R-1);
-		long int final_cardGk = final_cardG*qnm->R;
-		
-		for (int i = 0; i < final_cardGk + final_cardG; i++) {
-			if (debug_full_precision) {
-				gmp_printf("g[%d] = %Qd\n", i, g[i]);
-			} else {
-				mpf_t fval_debug;
-				mpf_init(fval_debug);
-				mpf_set_q(fval_debug, g[i]);
-				printf("g[%d] = %.15e\n", i, mpf_get_d(fval_debug));
-				mpf_clear(fval_debug);
-			}
-		}
-		
-		// Print penultimate basis (gr vector)
-		if (qnm->N[qnm->R-1] > 1) {
-			printf("\nPenultimate basis (population N[R]-1):\n");
-		} else {
-			printf("\nPenultimate basis (population N[R-1], since N[R]=1):\n");
-		}
-		for (int i = 0; i < final_cardGk + final_cardG; i++) {
-			if (debug_full_precision) {
-				gmp_printf("gr[%d] = %Qd\n", i, gr[i]);
-			} else {
-				mpf_t fval_debug;
-				mpf_init(fval_debug);
-				mpf_set_q(fval_debug, gr[i]);
-				printf("gr[%d] = %.15e\n", i, mpf_get_d(fval_debug));
-				mpf_clear(fval_debug);
-			}
-		}
-		
-		printf("===================================================\n");
-	}
-	
 	perfindices(qnm,G,Gk,verbose_output,log_output,normconst_output,normconst_g_output,throughput_output,queue_output,debug_output,bounds_output,scale_factor);
 	return 0;
 }

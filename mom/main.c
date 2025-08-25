@@ -195,13 +195,8 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 				printcompact(n,qnm->R,step_elapsed);
 			}
 			/** at this point g is equal to gr **/
-			/* Save penultimate basis for final class R */
-			if(r==qnm->R) {
-				if(qnm->N[r-1]>1 && n[r-1]==qnm->N[r-1]-1) {
-					/* For final class with N[R]>1, save basis at N[R]-1 */
-					mpq_vecdup(gr,g,cardGk+cardG);
-				}
-			}
+			/* if this is the last iteration, save gr */
+			if(n[r-1]==qnm->N[r-1]) mpq_vecdup(gr,g,cardGk+cardG);
 
 			/* compute G=B2r*gr/nr */
 
@@ -235,16 +230,11 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 			class_elapsed = CPUTIME - class_start;
 			printf(" (Class %d: %.6f s)\n", r, class_elapsed);
 		}
-		
-		/* Special case: if this is class R-1 and N[R]==1, save basis for penultimate */
-		if(r==qnm->R-1 && qnm->N[qnm->R-1]==1) {
-			mpq_vecdup(gr,g,cardGk+cardG);
-		}
 	}
 	if (debug_output && !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
 		printf("\n");
 	}
-	mdecrease(qnm,G,Gk,g,gr,verbose_output,log_output,normconst_output,normconst_g_output,throughput_output,queue_output,debug_output,bounds_output,debug_output && normconst_output,scale_factor);
+	mdecrease(qnm,G,Gk,g,gr,verbose_output,log_output,normconst_output,normconst_g_output,throughput_output,queue_output,debug_output,bounds_output,scale_factor);
 	mpq_clear(tmp);
 	mpq_clear(tmp2);
 	
@@ -302,7 +292,7 @@ int main(int argc, char**argv)
 		} else if(strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--qlen") == 0) {
 			queue_output = true;
 		} else if(strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--debug") == 0) {
-			debug_output = true; // -d now prints basis normalizing constants
+			verbose_output = true; // Swapped: -d now does what -v used to do (but verbose_output isn't used)
 		} else if(strcmp(argv[i], "-b") == 0 || strcmp(argv[i], "--bounds") == 0) {
 			bounds_output = true;
 		} else if(strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
