@@ -47,11 +47,16 @@ LS* setupls(combsrep *Dn, qnmodel* qnm, int *N, int r)
 				for (s=1;s<=r-1;s++)
 				{
 					comb[s-1] = comb[s-1] + 1;
-					mpq_matset_si(ls->A11,row-1,hash(Dn,comb,k+1)-1,-mpz_get_si(L[k-1][s-1]),1);
+					// Use mpz_t version to avoid overflow
+					mpz_t neg_L;
+					mpz_init(neg_L);
+					mpz_neg(neg_L, L[k-1][s-1]);
+					mpq_set_z(ls->A11[row-1][hash(Dn,comb,k+1)-1], neg_L);
+					mpz_clear(neg_L);
 					comb[s-1] = comb[s-1] - 1; 
 					
 				}
-				mpq_mspset_si(ls->B1,row-1,hash(Dn,comb,k+1)-1,mpz_get_si(L[k-1][r-1]),1);
+				mpq_mspset_z(ls->B1,row-1,hash(Dn,comb,k+1)-1,L[k-1][r-1],1);
 			}
 			for (s=1;s<=r-1;s++)
 			{
@@ -59,9 +64,20 @@ LS* setupls(combsrep *Dn, qnmodel* qnm, int *N, int r)
 				row = row + 1;
 				mpq_mspset_si(ls->A12,row-1,hash(Dn,comb,0+1)-(int)nck(M+R-1,M)*M-1,N[s-1]-comb[s-1],1);	
 				comb[s-1] = comb[s-1] + 1; /* oner(n,s) */
-				mpq_mspset_si(ls->A12,row-1,hash(Dn,comb,0+1)-(int)nck(M+R-1,M)*M-1,-mpz_get_si(Z[s-1]),1);
-				for (k=1; k<=M; k++)
-					mpq_matset_si(ls->A11,row-1,hash(Dn,comb,k+1)-1,-mi[k-1]*mpz_get_si(L[k-1][s-1]),1);
+				// Use mpz_t version to avoid overflow
+				mpz_t neg_Z;
+				mpz_init(neg_Z);
+				mpz_neg(neg_Z, Z[s-1]);
+				mpq_mspset_z(ls->A12,row-1,hash(Dn,comb,0+1)-(int)nck(M+R-1,M)*M-1,neg_Z,1);
+				mpz_clear(neg_Z);
+				for (k=1; k<=M; k++) {
+					// Calculate -mi[k-1]*L[k-1][s-1] using mpz_t
+					mpz_t neg_mi_L;
+					mpz_init(neg_mi_L);
+					mpz_mul_si(neg_mi_L, L[k-1][s-1], -mi[k-1]);
+					mpq_set_z(ls->A11[row-1][hash(Dn,comb,k+1)-1], neg_mi_L);
+					mpz_clear(neg_mi_L);
+				}
 				comb[s-1] = comb[s-1] - 1; /* oner(n,s) */
 			}
 			
@@ -74,9 +90,15 @@ LS* setupls(combsrep *Dn, qnmodel* qnm, int *N, int r)
 			row = row + 1;
 			for(s=1;s<=r;s++)
 				comb[s-1]=Dn->combs[d-1][s-1];
-			mpq_mspset_si(ls->B2,row-1,hash(Dn,comb,0+1)-1,mpz_get_si(Z[r-1]),1);	
-			for (k=1;k<=M;k++)
-				mpq_mspset_si(ls->B2,row-1,hash(Dn,comb,k+1)-1,mi[k-1]*mpz_get_si(L[k-1][r-1]),1);	
+			mpq_mspset_z(ls->B2,row-1,hash(Dn,comb,0+1)-1,Z[r-1],1);	
+			for (k=1;k<=M;k++) {
+				// Calculate mi[k-1]*L[k-1][r-1] using mpz_t
+				mpz_t mi_L;
+				mpz_init(mi_L);
+				mpz_mul_si(mi_L, L[k-1][r-1], mi[k-1]);
+				mpq_mspset_z(ls->B2,row-1,hash(Dn,comb,k+1)-1,mi_L,1);
+				mpz_clear(mi_L);
+			}	
 		}
 
 	return ls;
