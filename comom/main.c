@@ -52,19 +52,22 @@ int main(int argc, char**argv)
 	bool throughput_output = false;
 	bool queue_output = false;
 	int perturbation_digit = 0;
+	int perturbation_seed = 23000;
 	char* model_file = NULL;
+	bool auto_perturbation = false;
 	
 	if(argc < 2)
 	{
-		printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-p digit] model.qn\n", argv[0]);
+		printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-p digit] [-s seed] model.qn\n", argv[0]);
 		printf("  -v, --verbose    : Print exact ratios for all performance measures\n");
 		printf("  -l, --log        : Print only log of normalizing constant as double\n");
 		printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
 		printf("  -g, --nc         : Print normalizing constant as double\n");
 		printf("  -t, --tput       : Print only throughputs, one per row\n");
-		printf("  -q, --qlen  : Print only queue lengths, one per row\n");
+		printf("  -q, --qlen       : Print only queue lengths, one per row\n");
 		printf("  -h, --help       : Print this help message\n");
 		printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
+		printf("  -s seed          : Set perturbation seed (default: 23000)\n");
 		return -1;
 	}
 	
@@ -84,12 +87,19 @@ int main(int argc, char**argv)
 		} else if(strcmp(argv[i], "-p") == 0) {
 			if(i + 1 < argc) {
 				perturbation_digit = atoi(argv[++i]);
-				if(perturbation_digit < 1 || perturbation_digit > 15) {
-					printf("Error: Perturbation digit must be between 1 and 15\n");
+				if(perturbation_digit < 1) {
+					printf("Error: Perturbation digit must be at least 1\n");
 					return -1;
 				}
 			} else {
 				printf("Error: -p option requires a digit argument\n");
+				return -1;
+			}
+		} else if(strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--seed") == 0) {
+			if(i + 1 < argc) {
+				perturbation_seed = atoi(argv[++i]);
+			} else {
+				printf("Error: -s option requires a seed argument\n");
 				return -1;
 			}
 		} else if(strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
@@ -102,26 +112,30 @@ int main(int argc, char**argv)
 			printf("  -h, --help       : Print this help message\n");
 			printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
 			return 0;
+		} else if(argv[i][0] == '-') {
+			// Skip unknown options silently
 		} else {
 			model_file = argv[i];
 		}
 	}
 	
 	if(model_file == NULL) {
-		printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-p digit] model.qn\n", argv[0]);
+		printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-p digit] [-s seed] model.qn\n", argv[0]);
 		printf("  -v, --verbose    : Print exact ratios for all performance measures\n");
 		printf("  -l, --log        : Print only log of normalizing constant as double\n");
 		printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
 		printf("  -g, --nc         : Print normalizing constant as double\n");
 		printf("  -t, --tput       : Print only throughputs, one per row\n");
-		printf("  -q, --qlen  : Print only queue lengths, one per row\n");
+		printf("  -q, --qlen       : Print only queue lengths, one per row\n");
 		printf("  -h, --help       : Print this help message\n");
 		printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
+		printf("  -s seed          : Set perturbation seed (default: 23000)\n");
 		return -1;
 	}
 	
 	qnm=(qnmodel*)readmodel(model_file);
 	
+solve_attempt:
 	// Apply perturbation if requested
 	long scale_factor = 1;
 	if(perturbation_digit > 0) {
@@ -133,19 +147,28 @@ int main(int argc, char**argv)
 		// Scale all parameters
 		for(int i = 0; i < qnm->M; i++) {
 			for(int j = 0; j < qnm->R; j++) {
-				// Add small perturbation to avoid exact zeros and symmetries
-				long perturb = (i * qnm->R + j + 1) % 10; // Small perturbation 0-9
+				// Add small perturbation using improved randomization
+				long hash_val = perturbation_seed * 1103515245 + i * 12345 + j * 67891;
+				long perturb = (abs(hash_val) % 9) + 1; // 1-9 range
 				mpz_mul_si(qnm->L[i][j], qnm->L[i][j], scale_factor);
 				mpz_add_ui(qnm->L[i][j], qnm->L[i][j], perturb);
 			}
 		}
 		
 		for(int j = 0; j < qnm->R; j++) {
+			// Add small perturbation to Z as well
+			long hash_val = perturbation_seed * 1103515245 + 999999 + j * 67891;
+			long perturb = (abs(hash_val) % 9) + 1; // 1-9 range
 			mpz_mul_si(qnm->Z[j], qnm->Z[j], scale_factor);
+			mpz_add_ui(qnm->Z[j], qnm->Z[j], perturb);
 		}
 		
 		if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
-			printf("\nWarning: Perturbation applied at digit %d. An approximate solution will be computed.\n\n", perturbation_digit);
+			if (auto_perturbation) {
+				printf("\nNote: Automatic perturbation applied at digit %d due to singular matrix.\n", perturbation_digit);
+			} else {
+				printf("\nWarning: Perturbation applied at digit %d. An approximate solution will be computed.\n\n", perturbation_digit);
+			}
 		}
 	}
 	
@@ -197,7 +220,7 @@ int main(int argc, char**argv)
 
 	g = (mpq_vec_t) mpq_vec(cardG+cardGk,0,1);
 	
-	int* lu_indices=(int*) int_vec(cardGk,0);
+	int* lu_indices=NULL;
 	mpq_vec_t b1 = (mpq_vec_t) mpq_vec(cardGk,0,1);
 	mpq_vec_t b1b = (mpq_vec_t) mpq_vec(cardGk,0,1);
 	mpq_vec_t G = (mpq_vec_t) mpq_vec(cardG,0,1);
@@ -248,11 +271,13 @@ int main(int argc, char**argv)
 			for(i=1;i<=cardGk;i++) mpq_sub(b1[i-1],b1[i-1],b1b[i-1]);
 
 			/* compute Gk */
+			if (lu_indices == NULL) {
+				// This should not happen if the algorithm is correct
+				fprintf(stderr, "\nInternal error: LU decomposition indices not computed.\n");
+				goto singular_matrix_detected;
+			}
 			if (mpq_lubksb(linsys->A11, b1, cardGk, lu_indices) < 0) {
-				fprintf(stderr, "\nError: Model cannot be solved exactly by CoMoM solver.\n");
-				fprintf(stderr, "The system of equations is singular. Consider introducing small perturbations\n");
-				fprintf(stderr, "to the service demands to allow exact solution.\n\n");
-				return 1;
+				goto singular_matrix_detected;
 			}
 			copy_Gk_in_g(b1,g);
 			copy_G_in_g(G,g);
@@ -505,5 +530,31 @@ int main(int argc, char**argv)
 	}
 
 	return 0;
+
+singular_matrix_detected:
+	// If singular and no perturbation yet, apply automatic perturbation
+	if (!auto_perturbation && perturbation_digit == 0) {
+		fprintf(stderr, "\nWarning: Model cannot be solved exactly by the CoMoM solver.\n");
+		fprintf(stderr, "The system of equations is singular. Automatically applying perturbation at digit 20.\n\n");
+		perturbation_digit = 20;
+		auto_perturbation = true;
+		
+		// Reload the original model  
+		qnm=(qnmodel*)readmodel(model_file);
+		
+		// Reset timing
+		t0=CPUTIME;
+		
+		// Go back to solve attempt
+		goto solve_attempt;
+	} else {
+		fprintf(stderr, "\nError: Model is still singular even with perturbation.\n");
+		fprintf(stderr, "Please try running manually with a different perturbation digit.\n");
+		fprintf(stderr, "\nExample invocations:\n");
+		fprintf(stderr, "  %s %s -p 25     # Apply perturbation at 25th digit\n", argv[0], model_file);
+		fprintf(stderr, "  %s %s -p 30     # Apply perturbation at 30th digit\n", argv[0], model_file);
+		fprintf(stderr, "  %s %s -p 15 -s 12345  # Different perturbation at 15th digit with custom seed\n\n", argv[0], model_file);
+		return 1;
+	}
 }
 
