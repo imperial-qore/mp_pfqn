@@ -60,8 +60,7 @@ int main(int argc, char**argv)
 	
 	if(argc < 2)
 	{
-		printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-d|--debug] [-h|--help] [-p digit] [-s seed] model.qn\n", argv[0]);
-		printf("  -v, --verbose    : Print exact ratios for all performance measures\n");
+		printf("USAGE: %s [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-d|--debug] [-p digit] [-s seed] model.qn\n", argv[0]);
 		printf("  -l, --log        : Print only log of normalizing constant as double\n");
 		printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
 		printf("  -g, --nc         : Print normalizing constant as double\n");
@@ -75,9 +74,7 @@ int main(int argc, char**argv)
 	}
 	
 	for(int i = 1; i < argc; i++) {
-		if(strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
-			debug_output = true; // Swapped: -v now does what -d used to do
-		} else if(strcmp(argv[i], "-l") == 0 || strcmp(argv[i], "--log") == 0) {
+		if(strcmp(argv[i], "-l") == 0 || strcmp(argv[i], "--log") == 0) {
 			log_output = true;
 		} else if(strcmp(argv[i], "-e") == 0 || strcmp(argv[i], "--ex") == 0) {
 			normconst_output = true;
@@ -108,7 +105,7 @@ int main(int argc, char**argv)
 				return -1;
 			}
 		} else if(strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-			printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-p digit] model.qn\n", argv[0]);
+			printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-d|--debug] [-p digit] [-s seed] model.qn\n", argv[0]);
 			printf("  -v, --verbose    : Print exact ratios for all performance measures\n");
 			printf("  -l, --log        : Print only log of normalizing constant as double\n");
 			printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
@@ -117,6 +114,7 @@ int main(int argc, char**argv)
 			printf("  -d, --debug      : Print performance metrics as exact rational numbers\n");
 			printf("  -h, --help       : Print this help message\n");
 			printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
+			printf("  -s seed          : Set perturbation seed (default: 23000)\n");
 			return 0;
 		} else if(argv[i][0] == '-') {
 			// Skip unknown options silently
@@ -126,8 +124,7 @@ int main(int argc, char**argv)
 	}
 	
 	if(model_file == NULL) {
-		printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-d|--debug] [-h|--help] [-p digit] [-s seed] model.qn\n", argv[0]);
-		printf("  -v, --verbose    : Print exact ratios for all performance measures\n");
+		printf("USAGE: %s [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-d|--debug] [-p digit] [-s seed] model.qn\n", argv[0]);
 		printf("  -l, --log        : Print only log of normalizing constant as double\n");
 		printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
 		printf("  -g, --nc         : Print normalizing constant as double\n");
@@ -444,7 +441,7 @@ solve_attempt:
 			n[r-1] = nr;	
 			step_start = CPUTIME;
 			step_elapsed = step_start - t0;
-			if (!log_output && !normconst_output && !throughput_output && !queue_output) {
+			if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
 				printcompact(n,qnm->R,step_elapsed);
 			}
 	
@@ -546,7 +543,7 @@ solve_attempt:
 		}
 		class_elapsed = CPUTIME - class_start;
 
-		if (!log_output && !normconst_output && !throughput_output && !queue_output) {
+		if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
 			printf(" (Class %d: %.6f s)\n", r, class_elapsed);
 		}	
 	}
@@ -657,9 +654,25 @@ solve_attempt:
 			for (int r = 1; r <= qnm->R; r++) {
 				// Q[k,r] = L[k,r] * G^k(N-e_r) / G(N)
 				mpq_set_z(tmp, qnm->L[k-1][r-1]);
-				// Use marginal G values as approximation for G^k values
-				mpq_mul(tmp2, marginal_G[r-1], tmp);
-				mpq_div(Q_kr, tmp2, G_total);
+				
+				if (r < qnm->R) {
+					// For classes s=1 to R-1: use the saved marginal_Gk values
+					mpq_mul(tmp2, marginal_Gk[k-1][r-1], tmp);
+					mpq_div(Q_kr, tmp2, G_total);
+				} else {
+					// For final class R: use g_prev if available
+					if (g_prev != NULL) {
+						// G^k(N) for station k is at position (k-1) in g_prev
+						int gk_position = (k-1);
+						mpq_mul(tmp2, g_prev[gk_position], tmp);
+						mpq_div(Q_kr, tmp2, G_total);
+					} else {
+						// Fallback if g_prev not available
+						mpq_mul(tmp2, marginal_Gk[k-1][r-1], tmp);
+						mpq_div(Q_kr, tmp2, G_total);
+					}
+				}
+				
 				mpf_set_q(fval, Q_kr);
 				printf("%.15e", mpf_get_d(fval));
 				if (r < qnm->R) printf(" ");
@@ -837,69 +850,6 @@ solve_attempt:
 	mpq_clear(G_scaled);
 	mpf_clear(fval);
 	
-	// Print all normalizing constants if -d option is used
-	if (debug_output && !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
-		printf("\n========== Normalizing Constants (Debug) ==========\n");
-		
-		// Print last basis (current g vector)
-		printf("Last basis (population N):\n");
-		long int final_cardG = nck(qnm->M+qnm->R-1,qnm->M);
-		long int final_cardGk = final_cardG*qnm->M;
-		
-		for (int i = 0; i < final_cardG + final_cardGk; i++) {
-			if (normconst_output) {  // Use full precision if -d -e
-				gmp_printf("g[%d] = %Qd\n", i, g[i]);
-			} else {
-				mpf_t fval_debug;
-				mpf_init(fval_debug);
-				mpf_set_q(fval_debug, g[i]);
-				printf("g[%d] = %.15e\n", i, mpf_get_d(fval_debug));
-				mpf_clear(fval_debug);
-			}
-		}
-		
-		// Print penultimate basis if available
-		if (qnm->R > 1) {
-			mpq_vec_t penultimate_basis = NULL;
-			const char* basis_description = NULL;
-			
-			if (qnm->N[qnm->R-1] > 1 && g_m[1] != NULL) {
-				/* N[R] > 1: use basis at N[R]-1 (stored in g_m[1]) */
-				penultimate_basis = g_m[1];
-				basis_description = "population N[R]-1";
-			} else if (qnm->N[qnm->R-1] == 1 && g_m[0] != NULL) {
-				/* N[R] == 1: use basis from previous class (stored in g_m[0]) */
-				penultimate_basis = g_m[0];
-				basis_description = "population N[R-1] (since N[R]=1)";
-			}
-			
-			if (penultimate_basis != NULL) {
-				printf("\nPenultimate basis (%s):\n", basis_description);
-				// Print only first few elements to avoid segfault - need to debug further
-				long int safe_limit = 10;
-				
-				for (int i = 0; i < safe_limit; i++) {
-					if (normconst_output) {  // Use full precision if -d -e
-						gmp_printf("g_prev[%d] = %Qd\n", i, penultimate_basis[i]);
-					} else {
-						mpf_t fval_debug;
-						mpf_init(fval_debug);
-						mpf_set_q(fval_debug, penultimate_basis[i]);
-						printf("g_prev[%d] = %.15e\n", i, mpf_get_d(fval_debug));
-						mpf_clear(fval_debug);
-					}
-				}
-			} else {
-				printf("\nNote: Penultimate basis not available.\n");
-			}
-		} else if (qnm->R == 1) {
-			printf("\nNote: Single class model - no penultimate basis available.\n");
-		} else {
-			printf("\nNote: Penultimate basis not saved.\n");
-		}
-		
-		printf("==================================================\n");
-	}
 	
 	// Cleanup marginal_G array
 	for (int i = 0; i < qnm->R; i++) {

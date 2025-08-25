@@ -31,10 +31,9 @@ int main(int argc,char ** argv)
 	
 	if(argc < 2)
 	{
-		printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] model.qn\n", argv[0]);
-		printf("  -v, --verbose    : Print exact ratios for all performance measures\n");
-		printf("  -l, --log      : Print only log of normalizing constant as double\n");
-		printf("  -e, --ex       : Print exact normalizing constant numerator and denominator\n");
+		printf("USAGE: %s [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] model.qn\n", argv[0]);
+		printf("  -l, --log        : Print only log of normalizing constant as double\n");
+		printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
 		printf("  -g, --nc         : Print normalizing constant as double\n");
 		printf("  -t, --tput       : Print only throughputs, one per row\n");
 		printf("  -q, --qlen       : Print only queue lengths, one per row\n");
@@ -43,9 +42,7 @@ int main(int argc,char ** argv)
 	}
 	
 	for(int i = 1; i < argc; i++) {
-		if(strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
-			// verbose option not used in RECAL
-		} else if(strcmp(argv[i], "-l") == 0 || strcmp(argv[i], "--log") == 0) {
+		if(strcmp(argv[i], "-l") == 0 || strcmp(argv[i], "--log") == 0) {
 			log_output = true;
 		} else if(strcmp(argv[i], "-e") == 0 || strcmp(argv[i], "--ex") == 0) {
 			normconst_output = true;
@@ -58,8 +55,8 @@ int main(int argc,char ** argv)
 		} else if(strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
 			printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] model.qn\n", argv[0]);
 			printf("  -v, --verbose    : Print exact ratios for all performance measures\n");
-			printf("  -l, --log      : Print only log of normalizing constant as double\n");
-			printf("  -e, --ex       : Print exact normalizing constant numerator and denominator\n");
+			printf("  -l, --log        : Print only log of normalizing constant as double\n");
+			printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
 			printf("  -g, --nc         : Print normalizing constant as double\n");
 			printf("  -t, --tput       : Print only throughputs, one per row\n");
 			printf("  -q, --qlen       : Print only queue lengths, one per row\n");
@@ -71,10 +68,9 @@ int main(int argc,char ** argv)
 	}
 	
 	if(model_file == NULL) {
-		printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] model.qn\n", argv[0]);
-		printf("  -v, --verbose    : Print exact ratios for all performance measures\n");
-		printf("  -l, --log      : Print only log of normalizing constant as double\n");
-		printf("  -e, --ex       : Print exact normalizing constant numerator and denominator\n");
+		printf("USAGE: %s [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] model.qn\n", argv[0]);
+		printf("  -l, --log        : Print only log of normalizing constant as double\n");
+		printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
 		printf("  -g, --nc         : Print normalizing constant as double\n");
 		printf("  -t, --tput       : Print only throughputs, one per row\n");
 		printf("  -q, --qlen       : Print only queue lengths, one per row\n");

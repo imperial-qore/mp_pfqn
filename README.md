@@ -77,7 +77,6 @@ All solvers support various command-line options to control their output format 
 
 | Option | Long Form | Description |
 |--------|-----------|-------------|
-| `-v` | `--verbose` | Print exact ratios for all performance measures |
 | `-l` | `--log` | Print only log of normalizing constant as double |
 | `-e` | `--ex` | Print exact normalizing constant numerator and denominator |
 | `-g` | `--nc` | Print normalizing constant as double |
@@ -103,7 +102,6 @@ RECAL supports the same command-line options as MVA (see table above).
 
 | Option | Long Form | Description |
 |--------|-----------|-------------|
-| `-v` | `--verbose` | Print exact ratios for all performance measures |
 | `-l` | `--log` | Print only log of normalizing constant as double |
 | `-e` | `--ex` | Print exact normalizing constant numerator and denominator |
 | `-g` | `--nc` | Print normalizing constant as double |
