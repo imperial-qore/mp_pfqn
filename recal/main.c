@@ -172,6 +172,9 @@ int main(int argc,char ** argv)
 		mpq_clear(mi_k);
 		mpf_clear(Q_float);
 	} else {
+		t1 = CPUTIME;
+		printf("\nElapsed time (RECAL): %g s\n", t1-t0);
+		
 		printf("\n========== Performance Metrics ==========\n");
 		printf("Normalizing constant:\n");
 		printf("G = %.15e\n", G);
@@ -251,11 +254,6 @@ int main(int argc,char ** argv)
 	}
 	
 	mpq_clear(G_exact);
-	
-	t1 = CPUTIME;
-	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
-		printf("\nElapsed time (RECAL): %g s\n", t1-t0);
-	}
 	
 	return 0;
 }

@@ -187,6 +187,9 @@ int main(int argc,char ** argv)
 			printf("\n");
 		}
 	} else {
+		t1 = CPUTIME;
+		printf("\nElapsed time (MVA): %.6f s\n", t1-t0);
+		
 		printf("\n========== Performance Metrics ==========\n");
 		printf("Normalizing constant:\n");
 		mpf_t fval;
@@ -223,9 +226,6 @@ int main(int argc,char ** argv)
 			mpq_clear(total_q);
 		}
 		printf("=========================================\n");
-		
-		t1 = CPUTIME;
-		printf("\nElapsed time (MVA): %.6f s\n", t1-t0);
 	}
 	
 	for (r=0;r<qn->R;r++)

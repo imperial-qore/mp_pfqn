@@ -683,6 +683,9 @@ solve_attempt:
 		mpq_clear(tmp);
 		mpq_clear(tmp2);
 	} else {
+		t1=CPUTIME;
+		printf("\nElapsed time (CoMoM): %g s\n",t1-t0);
+		
 		printf("\n========== Performance Metrics ==========\n");
 		
 		if (debug_output) {
@@ -866,11 +869,6 @@ solve_attempt:
 	}
 	free(marginal_Gk);
 	
-	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
-		t1=CPUTIME;
-		printf("\nElapsed time (CoMoM): %g s\n",t1-t0);
-	}
-
 	mpz_clear(scale_factor);
 	return 0;
 

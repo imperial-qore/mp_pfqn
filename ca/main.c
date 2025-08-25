@@ -198,6 +198,8 @@ int main(int argc, char**argv)
 			printf("\n");
 		}
 	} else {
+		printf("\nElapsed time (CA): %g s\n", t1-t0);
+		
 		printf("\n========== Performance Metrics ==========\n");
 		
 		printf("G = %.15e\n", mpf_get_d(fval));
@@ -231,10 +233,6 @@ int main(int argc, char**argv)
 	free(G);
 	free(X);
 	free(Q);
-	
-	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
-		printf("\nElapsed time (CA): %g s\n", t1-t0);
-	}
 	
 	return 0;
 }
