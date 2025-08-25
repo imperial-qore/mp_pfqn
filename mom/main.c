@@ -280,7 +280,7 @@ int main(int argc, char**argv)
 	
 	for(int i = 1; i < argc; i++) {
 		if(strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
-			verbose_output = true;
+			debug_output = true; // Swapped: -v now does what -d used to do
 		} else if(strcmp(argv[i], "-l") == 0 || strcmp(argv[i], "--log") == 0) {
 			log_output = true;
 		} else if(strcmp(argv[i], "-e") == 0 || strcmp(argv[i], "--ex") == 0) {
@@ -292,7 +292,7 @@ int main(int argc, char**argv)
 		} else if(strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--qlen") == 0) {
 			queue_output = true;
 		} else if(strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--debug") == 0) {
-			debug_output = true;
+			verbose_output = true; // Swapped: -d now does what -v used to do (but verbose_output isn't used)
 		} else if(strcmp(argv[i], "-b") == 0 || strcmp(argv[i], "--bounds") == 0) {
 			bounds_output = true;
 		} else if(strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {

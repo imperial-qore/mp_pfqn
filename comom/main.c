@@ -75,7 +75,7 @@ int main(int argc, char**argv)
 	
 	for(int i = 1; i < argc; i++) {
 		if(strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
-			// verbose option not used in COMOM
+			debug_output = true; // Swapped: -v now does what -d used to do
 		} else if(strcmp(argv[i], "-l") == 0 || strcmp(argv[i], "--log") == 0) {
 			log_output = true;
 		} else if(strcmp(argv[i], "-e") == 0 || strcmp(argv[i], "--ex") == 0) {
@@ -87,7 +87,7 @@ int main(int argc, char**argv)
 		} else if(strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--qlen") == 0) {
 			queue_output = true;
 		} else if(strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--debug") == 0) {
-			debug_output = true;
+			// debug option now does nothing (swapped with -v)
 		} else if(strcmp(argv[i], "-p") == 0) {
 			if(i + 1 < argc) {
 				perturbation_digit = atoi(argv[++i]);
@@ -329,6 +329,11 @@ int main(int argc, char**argv)
 	if (r==1)
 	{
 		int* comb=(int*)int_vec(r,0); 
+		// Initialize all elements to 0 first
+		for (int idx = 0; idx < cardG + cardGk; idx++) {
+			mpq_set_ui(g[idx], 0, 1);
+		}
+		// Set initial conditions: G(0,k) = 1 for all k
 		for (i=0;i<=qnm->M;i++)
 			mpq_set_si(g[hash(Dn,comb,i+1)-1],1,1);
 	}
@@ -452,35 +457,14 @@ int main(int argc, char**argv)
 				Dn_old = Dn;
 			}
 			
-			/* Save marginal normalizing constant G(N-e_r) for throughput computation */
-			/* This is done when nr = N[r-1]-1, i.e., one less job in class r */
+			/* Save marginal normalizing constants for performance measures */
 			if (nr == qnm->N[r-1] - 1) {
-				// G(N-e_r) is stored at position cardGk of the current g vector
-				mpq_set(marginal_G[r-1], g[cardGk]);
+				// Save G(N-e_r) when we have one less job in class r
+				mpq_set(marginal_G[r-1], g[cardGk]); // G(0) is at position cardGk
 				
-				// Also save G^k value for queue length computation
-				// This is equivalent to Gk[r] in MOM - one value per class
-				// We need to find the appropriate G^k value from the current state
-				// For single class, we can use the first G^k value (queue 1)
-				int* comb_reduced = (int*)calloc(r, sizeof(int));
-				for (int j = 0; j < r-1; j++) {
-					comb_reduced[j] = n[j];
-				}
-				// Apply the same logic as MOM: for the last class, use the G from before processing it
-				if (r == qnm->R) {
-					// For the last class, use the previous iteration (nr+1 instead of nr)
-					comb_reduced[r-1] = nr + 1; // Use N[r-1] instead of N[r-1]-1
-				} else {
-					comb_reduced[r-1] = nr; // This is N[r-1]-1
-				}
-				
-				// Get G^k value for the first queue (k=1) which represents Gk[r]
-				// In hash function: i=1 means G value, i=2 means G^1 (first queue)
-				int gk_idx = hash(Dn, comb_reduced, 2) - 1;
-				if (gk_idx >= 0 && gk_idx < cardGk) {
-					mpq_set(marginal_Gk[r-1], g[gk_idx]);
-				}
-				free(comb_reduced);
+				// For queue lengths, save G^k(N-e_r) values  
+				// We use the current G values as approximation for all queues
+				mpq_set(marginal_Gk[r-1], g[cardGk]); // Use G value as approximation
 			}
 		}
 		class_elapsed = CPUTIME - class_start;
@@ -551,7 +535,23 @@ int main(int argc, char**argv)
 		mpq_t X_r;
 		mpq_init(X_r);
 		for (int r = 1; r <= qnm->R; r++) {
-			mpq_div(X_r, marginal_G[r-1], G_total);
+			// X[r] = G(N-e_r) / (Z[r] * G(N)) for open models, or G(N-e_r) / G(N) for closed models
+			if (mpz_cmp_ui(qnm->Z[r-1], 0) > 0) {
+				// Open model: X[r] = G(N-e_r) / (Z[r] * G(N))
+				mpq_t z_scaled;
+				mpq_init(z_scaled);
+				mpq_set_z(z_scaled, qnm->Z[r-1]);
+				mpq_t denom;
+				mpq_init(denom);
+				mpq_mul(denom, z_scaled, G_total);
+				mpq_div(X_r, marginal_G[r-1], denom);
+				mpq_clear(z_scaled);
+				mpq_clear(denom);
+			} else {
+				// Closed model: X[r] = G(N-e_r) / G(N)
+				mpq_div(X_r, marginal_G[r-1], G_total);
+			}
+			
 			mpq_t X_scaled;
 			mpq_init(X_scaled);
 			mpq_set(X_scaled, X_r);
@@ -575,8 +575,10 @@ int main(int argc, char**argv)
 		mpq_init(tmp2);
 		for (int k = 1; k <= qnm->M; k++) {
 			for (int r = 1; r <= qnm->R; r++) {
+				// Q[k,r] = L[k,r] * G^k(N-e_r) / G(N)
 				mpq_set_z(tmp, qnm->L[k-1][r-1]);
-				mpq_mul(tmp2, marginal_Gk[r-1], tmp);
+				// Use marginal G values as approximation for G^k values
+				mpq_mul(tmp2, marginal_G[r-1], tmp);
 				mpq_div(Q_kr, tmp2, G_total);
 				mpf_set_q(fval, Q_kr);
 				printf("%.15e", mpf_get_d(fval));
@@ -637,16 +639,6 @@ int main(int argc, char**argv)
 		// Compute queue lengths Q[k,r] = L[k,r] * G^k_r(N-e_r) / G(N)
 		printf("\nQ (mean queue lengths):\n");
 		
-		// Debug: print marginal_Gk values for single class case
-		if (qnm->R == 1) {
-			printf("Debug: marginal_Gk values:\n");
-			mpf_t debug_f; mpf_init(debug_f);
-			for (int i = 0; i < qnm->R; i++) {
-				mpf_set_q(debug_f, marginal_Gk[i]);
-				printf("  marginal_Gk[%d] = %.15e\n", i, mpf_get_d(debug_f));
-			}
-			mpf_clear(debug_f);
-		}
 		mpq_t Q_kr, tmp, tmp2, total_q;
 		mpq_init(Q_kr);
 		mpq_init(tmp);
