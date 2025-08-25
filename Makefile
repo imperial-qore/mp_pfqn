@@ -30,7 +30,7 @@ LDFLAGS += $(DEP_LDFLAGS)
 #.SILENT:
 
 DIRS	= util gmpla mva mom recal rndmodel ca comom 
-EXE	= ./bin/mom 
+EXE	= ./bin/mom ./bin/comom
 LIBS	= -L. -lsub -lsuba -lsubsub
 
 all : check-deps $(EXE) 
