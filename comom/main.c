@@ -243,6 +243,28 @@ solve_attempt:
 		return 1;
 	}
 	
+	// Initialize all g_m arrays to prevent accessing uninitialized memory
+	// Use the maximum possible size based on the largest class dimensions
+	long int max_cardG = nck(qnm->M+qnm->R-1,qnm->M);
+	long int max_cardGk = max_cardG * qnm->M;
+	long int max_size = max_cardG + max_cardGk;
+	
+	for (int i = 0; i <= qnm->M; i++) {
+		g_m[i] = mpq_vec(max_size, 0, 1);
+		if (g_m[i] == NULL) {
+			fprintf(stderr, "Error: Memory allocation failed for g_m[%d]\n", i);
+			// Clean up previously allocated
+			for (int j = 0; j < i; j++) {
+				for (int k = 0; k < max_size; k++) {
+					mpq_clear(g_m[j][k]);
+				}
+				free(g_m[j]);
+			}
+			free(g_m);
+			return 1;
+		}
+	}
+	
 	// Storage for marginal normalizing constants G(N-e_r) needed for throughput computation
 	mpq_t* marginal_G = (mpq_t*)calloc(qnm->R, sizeof(mpq_t));
 	if (marginal_G == NULL) {
@@ -316,7 +338,7 @@ solve_attempt:
 		Dn->combs[i-1][r-1]=0;
 	Dn->combs=(int**)sortbynnzpos(Dn->combs,Dn->card,Dn->n);
 
-	n=(int*)int_vec(r,0); /* current population vector */
+	n=(int*)int_vec(qnm->R,0); /* current population vector */
 	for (s=1;s<=r-1;s++) 
 		n[s-1]=qnm->N[s-1];
 
@@ -492,11 +514,7 @@ solve_attempt:
 					fprintf(stderr, "Error: Invalid g_m index %d at class %d, nr=%d\n", idx, r, nr);
 					return 1;
 				}
-				g_m[idx]=mpq_vec(cardG+cardGk,0,1);
-				if (g_m[idx] == NULL) {
-					fprintf(stderr, "Error: Memory allocation failed for g_m[%d]\n", idx);
-					return 1;
-				}
+				// Copy g to g_m[idx] - no need to allocate since already initialized
 				mpq_vecdup(g_m[idx],g,cardG+cardGk);
 				Dn_old = Dn;
 			}
@@ -853,6 +871,17 @@ solve_attempt:
 	}
 	free(marginal_Gk);
 	
+	// Cleanup g_m arrays
+	for (int i = 0; i <= qnm->M; i++) {
+		if (g_m[i]) {
+			for (int k = 0; k < max_size; k++) {
+				mpq_clear(g_m[i][k]);
+			}
+			free(g_m[i]);
+		}
+	}
+	free(g_m);
+	
 	mpz_clear(scale_factor);
 	return 0;
 
@@ -899,7 +928,10 @@ singular_matrix_detected:
 		if (g_m) {
 			for(int i = 0; i <= qnm->M; i++) {
 				if(g_m[i]) {
-					// Free the g_m[i] vector - we don't know exact size so just free the pointer
+					// Clear all mpq_t values in g_m[i] before freeing
+					for (int k = 0; k < max_size; k++) {
+						mpq_clear(g_m[i][k]);
+					}
 					free(g_m[i]);
 				}
 			}
