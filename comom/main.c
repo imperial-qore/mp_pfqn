@@ -231,9 +231,18 @@ int main(int argc, char**argv)
 
 	mpq_vec_t g=NULL;
 	mpq_vec_t* g_m=calloc(sizeof(mpq_vec_t),qnm->M+1);
+	if (g_m == NULL) {
+		fprintf(stderr, "Error: Memory allocation failed for g_m array\n");
+		return 1;
+	}
 	
 	// Storage for marginal normalizing constants G(N-e_r) needed for throughput computation
 	mpq_t* marginal_G = (mpq_t*)calloc(qnm->R, sizeof(mpq_t));
+	if (marginal_G == NULL) {
+		fprintf(stderr, "Error: Memory allocation failed for marginal_G array\n");
+		free(g_m);
+		return 1;
+	}
 	for (int i = 0; i < qnm->R; i++) {
 		mpq_init(marginal_G[i]);
 	}
@@ -241,6 +250,15 @@ int main(int argc, char**argv)
 	// Storage for marginal G^k values needed for queue length computation  
 	// Gk_r(N-e_r) for each class r (like in MOM)
 	mpq_t* marginal_Gk = (mpq_t*)calloc(qnm->R, sizeof(mpq_t));
+	if (marginal_Gk == NULL) {
+		fprintf(stderr, "Error: Memory allocation failed for marginal_Gk array\n");
+		free(g_m);
+		for (int i = 0; i < qnm->R; i++) {
+			mpq_clear(marginal_G[i]);
+		}
+		free(marginal_G);
+		return 1;
+	}
 	for (int r = 0; r < qnm->R; r++) {
 		mpq_init(marginal_Gk[r]);
 	}
@@ -252,10 +270,18 @@ int main(int argc, char**argv)
 
 	/* compute Dn */
 	Dn=calloc(sizeof(combsrep),1);
+	if (Dn == NULL) {
+		fprintf(stderr, "Error: Memory allocation failed for Dn at class %d\n", r);
+		return 1;
+	}
 	Dn->n=r;
 	Dn->k=qnm->M;
 	Dn->card=nck(qnm->M+r-1,qnm->M);
 	Dn->combs=(int**)multichoose(Dn->n,Dn->k);
+	if (Dn->combs == NULL) {
+		fprintf(stderr, "Error: Memory allocation failed for Dn->combs at class %d\n", r);
+		return 1;
+	}
 	for (i=1; i<=Dn->card; i++)
 		Dn->combs[i-1][r-1]=0;
 	Dn->combs=(int**)sortbynnzpos(Dn->combs,Dn->card,Dn->n);
@@ -265,15 +291,39 @@ int main(int argc, char**argv)
 		n[s-1]=qnm->N[s-1];
 
 	long int cardG = nck(qnm->M+r-1,qnm->M);
-	long int cardGk = cardG*qnm->M; 
+	if (cardG <= 0) {
+		fprintf(stderr, "Error: Invalid cardG value %ld at class %d (overflow or calculation error)\n", cardG, r);
+		return 1;
+	}
+	long int cardGk = cardG*qnm->M;
+	if (cardGk <= 0 || cardGk < cardG) {
+		fprintf(stderr, "Error: Invalid cardGk value %ld at class %d (overflow or calculation error)\n", cardGk, r);
+		return 1;
+	} 
 
 
 	g = (mpq_vec_t) mpq_vec(cardG+cardGk,0,1);
+	if (g == NULL) {
+		fprintf(stderr, "Error: Memory allocation failed for g vector (size %ld) at class %d\n", cardG+cardGk, r);
+		return 1;
+	}
 	
 	int* lu_indices=NULL;
 	mpq_vec_t b1 = (mpq_vec_t) mpq_vec(cardGk,0,1);
+	if (b1 == NULL) {
+		fprintf(stderr, "Error: Memory allocation failed for b1 vector (size %ld) at class %d\n", cardGk, r);
+		return 1;
+	}
 	mpq_vec_t b1b = (mpq_vec_t) mpq_vec(cardGk,0,1);
+	if (b1b == NULL) {
+		fprintf(stderr, "Error: Memory allocation failed for b1b vector (size %ld) at class %d\n", cardGk, r);
+		return 1;
+	}
 	mpq_vec_t G = (mpq_vec_t) mpq_vec(cardG,0,1);
+	if (G == NULL) {
+		fprintf(stderr, "Error: Memory allocation failed for G vector (size %ld) at class %d\n", cardG, r);
+		return 1;
+	}
 
 	/* initialize g */
 	if (r==1)
@@ -284,16 +334,70 @@ int main(int argc, char**argv)
 	}
 	else
 	{
+		// Create temporary array for hash function with correct size
+		int* temp_comb = (int*)calloc(r-1, sizeof(int));
+		if (temp_comb == NULL) {
+			fprintf(stderr, "Error: Memory allocation failed for temp_comb at class %d\n", r);
+			return 1;
+		}
+		
 		for (d=1;d<=Dn->card;d++)
 			for (i=0;i<=qnm->M;i++)
 			{
 				int col=hash(Dn,Dn->combs[d-1],i+1)-1;
 				s=Dn->combs[d-1][r-2];
-				Dn->combs[d-1][r-2]=0;
-				int col_old=hash(Dn_old,Dn->combs[d-1],i+1)-1;
-				Dn->combs[d-1][r-2]=s;
+				
+				if (s < 0 || s > qnm->M) {
+					fprintf(stderr, "\nError at class %d, d=%d, i=%d:\n", r, d, i);
+					fprintf(stderr, "  s = Dn->combs[%d][%d] = %d is out of bounds (should be 0-%d)\n", d-1, r-2, s, qnm->M);
+					fprintf(stderr, "  Dn->combs[%d] = [", d-1);
+					for (int j = 0; j < r; j++) {
+						fprintf(stderr, "%d%s", Dn->combs[d-1][j], j < r-1 ? ", " : "");
+					}
+					fprintf(stderr, "]\n");
+					free(temp_comb);
+					return 1;
+				}
+				
+				if (g_m[s] == NULL) {
+					fprintf(stderr, "\nError at class %d, d=%d, i=%d:\n", r, d, i);
+					fprintf(stderr, "  g_m[%d] is NULL (was never initialized)\n", s);
+					fprintf(stderr, "  g_m array status:\n");
+					for (int j = 0; j <= qnm->M; j++) {
+						fprintf(stderr, "    g_m[%d] = %s\n", j, g_m[j] ? "initialized" : "NULL");
+					}
+					free(temp_comb);
+					return 1;
+				}
+				
+				// Copy first r-1 elements to temp array for hash with Dn_old
+				for (int j = 0; j < r-1; j++) {
+					temp_comb[j] = Dn->combs[d-1][j];
+				}
+				temp_comb[r-2] = 0;  // Set the element we're varying to 0
+				
+				int col_old=hash(Dn_old,temp_comb,i+1)-1;
+				
+				// Calculate the old cardG and cardGk for bounds checking
+				long int old_cardG = nck(qnm->M+(r-1)-1,qnm->M);
+				long int old_cardGk = old_cardG*qnm->M;
+				
+				if (col_old < 0 || col_old >= old_cardG + old_cardGk) {
+					fprintf(stderr, "\nError at class %d, d=%d, i=%d:\n", r, d, i);
+					fprintf(stderr, "  col_old = %d is out of bounds (should be 0-%ld)\n", col_old, old_cardG + old_cardGk - 1);
+					fprintf(stderr, "  temp_comb = [");
+					for (int j = 0; j < r-1; j++) {
+						fprintf(stderr, "%d%s", temp_comb[j], j < r-2 ? ", " : "");
+					}
+					fprintf(stderr, "]\n");
+					free(temp_comb);
+					return 1;
+				}
+				
 				mpq_set(g[col],g_m[s][col_old]);
 			}
+		
+		free(temp_comb);
 	}
 	LS* linsys=NULL;
 		for (nr=1;nr<=qnm->N[r-1];nr++)
@@ -334,8 +438,17 @@ int main(int argc, char**argv)
 			/* save last M g vectors for initialization of next class */	
 			if(r<qnm->R && qnm->N[r-1]-nr<=qnm->M)
 			{
-				g_m[qnm->N[r-1]-nr]=mpq_vec(cardG+cardGk,0,1);
-				mpq_vecdup(g_m[qnm->N[r-1]-nr],g,cardG+cardGk);
+				int idx = qnm->N[r-1]-nr;
+				if (idx < 0 || idx > qnm->M) {
+					fprintf(stderr, "Error: Invalid g_m index %d at class %d, nr=%d\n", idx, r, nr);
+					return 1;
+				}
+				g_m[idx]=mpq_vec(cardG+cardGk,0,1);
+				if (g_m[idx] == NULL) {
+					fprintf(stderr, "Error: Memory allocation failed for g_m[%d]\n", idx);
+					return 1;
+				}
+				mpq_vecdup(g_m[idx],g,cardG+cardGk);
 				Dn_old = Dn;
 			}
 			
