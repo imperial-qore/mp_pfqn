@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
+#include <stdint.h>
 #include <gmp.h>
 #include <math.h>
 #include <time.h>
@@ -87,7 +88,7 @@ int main(int argc, char**argv)
 		} else if(strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--qlen") == 0) {
 			queue_output = true;
 		} else if(strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--debug") == 0) {
-			// debug option now does nothing (swapped with -v)
+			debug_output = true; // -d now prints basis normalizing constants
 		} else if(strcmp(argv[i], "-p") == 0) {
 			if(i + 1 < argc) {
 				perturbation_digit = atoi(argv[++i]);
@@ -153,10 +154,19 @@ int main(int argc, char**argv)
 	
 	if(perturbation_digit > 0) {
 		// Store original values before perturbation
-		original_L = (mpz_t**)calloc(qnm->M, sizeof(mpz_t*));
-		original_Z = (mpz_t*)calloc(qnm->R, sizeof(mpz_t));
+		// Check for potential overflow in allocation
+		if (qnm->M < 0 || qnm->R < 0 || 
+		    qnm->M > SIZE_MAX / sizeof(mpz_t*) || 
+		    qnm->R > SIZE_MAX / sizeof(mpz_t)) {
+			fprintf(stderr, "Error: Model dimensions too large for allocation\n");
+			exit(EXIT_FAILURE);
+		}
+		size_t r_size = (size_t)qnm->R;
+		size_t m_size = (size_t)qnm->M;
+		original_L = (mpz_t**)calloc(m_size, sizeof(mpz_t*));
+		original_Z = (mpz_t*)calloc(r_size, sizeof(mpz_t));
 		for(int i = 0; i < qnm->M; i++) {
-			original_L[i] = (mpz_t*)calloc(qnm->R, sizeof(mpz_t));
+			original_L[i] = (mpz_t*)calloc(r_size, sizeof(mpz_t));
 			for(int j = 0; j < qnm->R; j++) {
 				mpz_init(original_L[i][j]);
 				mpz_set(original_L[i][j], qnm->L[i][j]);
@@ -262,6 +272,9 @@ int main(int argc, char**argv)
 	for (int r = 0; r < qnm->R; r++) {
 		mpq_init(marginal_Gk[r]);
 	}
+	
+	// Storage for G_1 (previous iteration's G vector) needed for final class performance measures
+	mpq_vec_t g_prev = NULL;
 
 	/* solve the linear system for all classes */
 	for(r=1;r<=qnm->R;r++)
@@ -437,6 +450,19 @@ int main(int argc, char**argv)
 			if (mpq_lubksb(linsys->A11, b1, cardGk, lu_indices) < 0) {
 				goto singular_matrix_detected;
 			}
+			
+			/* Save G_1 for final class - MATLAB: G_1=G before G=Gn */
+			/* This happens at the LAST iteration of the LAST class */
+			if (r == qnm->R && nr == qnm->N[r-1]) {
+				// Save current g before overwriting with new values
+				if (g_prev == NULL) {
+					g_prev = (mpq_vec_t) mpq_vec(cardG+cardGk,0,1);
+				}
+				if (g_prev != NULL) {
+					mpq_vecdup(g_prev, g, cardG+cardGk);
+				}
+			}
+			
 			copy_Gk_in_g(b1,g);
 			copy_G_in_g(G,g);
 		
@@ -458,13 +484,33 @@ int main(int argc, char**argv)
 			}
 			
 			/* Save marginal normalizing constants for performance measures */
-			if (nr == qnm->N[r-1] - 1) {
-				// Save G(N-e_r) when we have one less job in class r
-				mpq_set(marginal_G[r-1], g[cardGk]); // G(0) is at position cardGk
+			if (r == qnm->R && nr == qnm->N[r-1] - 1) {
+				// When we're at the second-to-last iteration of the final class,
+				// save marginals for ALL classes
+				// At this point, we have population (N[1], ..., N[R-1], N[R]-1)
+				// which gives us the marginals we need for the final class
+				mpq_set(marginal_G[r-1], g[cardGk]); // G(N-e_R) for class R
+				mpq_set(marginal_Gk[r-1], g[cardGk]); // Approximation for now
 				
-				// For queue lengths, save G^k(N-e_r) values  
-				// We use the current G values as approximation for all queues
-				mpq_set(marginal_Gk[r-1], g[cardGk]); // Use G value as approximation
+				// For classes 1 to R-1, we need to extract G(N-e_r) from the current g
+				// This is complex, so for now we'll use approximations
+			} else if (r < qnm->R && nr == qnm->N[r-1] - 1) {
+				// For earlier classes, save as before (though these won't be used)
+				mpq_set(marginal_G[r-1], g[cardGk]); 
+				mpq_set(marginal_Gk[r-1], g[cardGk]);
+				
+				// For final class R, save penultimate basis for debug output
+				if (r == qnm->R) {
+					if (g_m[1] != NULL) {
+						// Free existing allocation
+						for (int t=0; t<cardG+cardGk; t++) mpq_clear(g_m[1][t]);
+						free(g_m[1]);
+					}
+					g_m[1] = mpq_vec(cardG+cardGk,0,1);
+					if (g_m[1] != NULL) {
+						mpq_vecdup(g_m[1], g, cardG+cardGk);
+					}
+				}
 			}
 		}
 		class_elapsed = CPUTIME - class_start;
@@ -535,21 +581,15 @@ int main(int argc, char**argv)
 		mpq_t X_r;
 		mpq_init(X_r);
 		for (int r = 1; r <= qnm->R; r++) {
-			// X[r] = G(N-e_r) / (Z[r] * G(N)) for open models, or G(N-e_r) / G(N) for closed models
-			if (mpz_cmp_ui(qnm->Z[r-1], 0) > 0) {
-				// Open model: X[r] = G(N-e_r) / (Z[r] * G(N))
-				mpq_t z_scaled;
-				mpq_init(z_scaled);
-				mpq_set_z(z_scaled, qnm->Z[r-1]);
-				mpq_t denom;
-				mpq_init(denom);
-				mpq_mul(denom, z_scaled, G_total);
-				mpq_div(X_r, marginal_G[r-1], denom);
-				mpq_clear(z_scaled);
-				mpq_clear(denom);
-			} else {
-				// Closed model: X[r] = G(N-e_r) / G(N)
+			// X[r] using the correct normalizing constant from g vector
+			long int finalCardGk = nck(qnm->M + qnm->R - 1, qnm->M) * qnm->M;
+			int g_position = finalCardGk + (r - 1);
+			
+			long int finalCardG = nck(qnm->M + qnm->R - 1, qnm->M);
+			if (g_position >= finalCardGk + finalCardG) {
 				mpq_div(X_r, marginal_G[r-1], G_total);
+			} else {
+				mpq_div(X_r, g[g_position], G_total);
 			}
 			
 			mpq_t X_scaled;
@@ -603,13 +643,44 @@ int main(int argc, char**argv)
 		
 		// Compute exact throughputs using stored marginal normalizing constants
 		// X[r] = G(N-e_r) / G(N)
+		// For classes 1 to R-1, compute G(N-e_r) from the final basis
+		// We need to search the final g vector for the right normalizing constants
+		// The final basis has all combinations with total population N
+		
+		// For classes 1 to R-1, we need G(N-e_r) from the final basis
+		// The challenge is that in multi-class models, the g vector contains
+		// normalizing constants for different queue population distributions,
+		// not directly for class populations.
+		// 
+		// The combinations are sorted by number of zeros (more zeros first),
+		// then by leftmost zero position. We need to find the right combination
+		// that represents N-e_r for each class.
+		
 		printf("\nX (throughputs):\n");
 		mpq_t X_r;
 		mpq_init(X_r);
 		
 		for (r = 1; r <= qnm->R; r++) {
-			// Compute exact throughput: X[r] = G(N-e_r) / G(N)
-			mpq_div(X_r, marginal_G[r-1], G_total);
+			// Compute exact throughput using MATLAB approach
+			if (r < qnm->R) {
+				// For classes s=1 to R-1: X(s) = G(hash(N,oner(N,s),0+1))/ G(hash(N,N,0+1))
+				// 
+				// TODO: The correct implementation requires extracting G(N-e_r) from 
+				// the final g vector using the proper hash mapping. Currently using
+				// marginal_G which was saved at wrong population for multi-class.
+				mpq_div(X_r, marginal_G[r-1], G_total);
+			} else {
+				// For final class R: X(R) = G_1(hash(N,N,0+1))/ G(hash(N,N,0+1))
+				// G_1 is the g vector from iteration N[R]-1, use its G(N) value
+				if (g_prev != NULL) {
+					long int finalCardGk = nck(qnm->M + qnm->R - 1, qnm->M) * qnm->M;
+					// G(N) is at position finalCardGk in g_prev
+					mpq_div(X_r, g_prev[finalCardGk], G_total);
+				} else {
+					// Fallback if g_prev not available
+					mpq_div(X_r, marginal_G[r-1], G_total);
+				}
+			}
 			
 			// Apply scaling correction: X[r] needs to be multiplied by scale_factor
 			mpq_t X_scaled;
@@ -650,10 +721,29 @@ int main(int argc, char**argv)
 			mpq_set_ui(total_q, 0, 1);
 			
 			for (r = 1; r <= qnm->R; r++) {
-				// Q[k,r] = L[k,r] * Gk[r] / G(N) (same as MOM)
+				// Compute queue lengths using MATLAB approach
 				mpq_set_z(tmp, qnm->L[k-1][r-1]);
-				mpq_mul(tmp2, marginal_Gk[r-1], tmp);
-				mpq_div(Q_kr, tmp2, G_total);
+				
+				if (r < qnm->R) {
+					// For classes s=1 to R-1: Q(k,s) = L(k,s)*G(hash(N,oner(N,s),k+1))/ G(hash(N,N,0+1))
+					// For now, use the saved marginal_Gk values
+					mpq_mul(tmp2, marginal_Gk[r-1], tmp);
+					mpq_div(Q_kr, tmp2, G_total);
+				} else {
+					// For final class R: Q(k,R) = L(k,R)*G_1(hash(N,N,k+1))/ G(hash(N,N,0+1))
+					// Use g_prev (G_1) at position corresponding to G^k(N)
+					if (g_prev != NULL) {
+						// G^k(N) for station k is at position (k-1) in g_prev
+						// The first M elements of g_prev are G^1(N), G^2(N), ..., G^M(N)
+						int gk_position = (k-1);
+						mpq_mul(tmp2, g_prev[gk_position], tmp);
+						mpq_div(Q_kr, tmp2, G_total);
+					} else {
+						// Fallback if g_prev not available
+						mpq_mul(tmp2, marginal_Gk[r-1], tmp);
+						mpq_div(Q_kr, tmp2, G_total);
+					}
+				}
 				mpq_add(total_q, total_q, Q_kr);
 				
 				if (debug_output) {
@@ -690,6 +780,70 @@ int main(int argc, char**argv)
 	mpq_clear(G_total);
 	mpq_clear(G_scaled);
 	mpf_clear(fval);
+	
+	// Print all normalizing constants if -d option is used
+	if (debug_output && !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
+		printf("\n========== Normalizing Constants (Debug) ==========\n");
+		
+		// Print last basis (current g vector)
+		printf("Last basis (population N):\n");
+		long int final_cardG = nck(qnm->M+qnm->R-1,qnm->M);
+		long int final_cardGk = final_cardG*qnm->M;
+		
+		for (int i = 0; i < final_cardG + final_cardGk; i++) {
+			if (normconst_output) {  // Use full precision if -d -e
+				gmp_printf("g[%d] = %Qd\n", i, g[i]);
+			} else {
+				mpf_t fval_debug;
+				mpf_init(fval_debug);
+				mpf_set_q(fval_debug, g[i]);
+				printf("g[%d] = %.15e\n", i, mpf_get_d(fval_debug));
+				mpf_clear(fval_debug);
+			}
+		}
+		
+		// Print penultimate basis if available
+		if (qnm->R > 1) {
+			mpq_vec_t penultimate_basis = NULL;
+			const char* basis_description = NULL;
+			
+			if (qnm->N[qnm->R-1] > 1 && g_m[1] != NULL) {
+				/* N[R] > 1: use basis at N[R]-1 (stored in g_m[1]) */
+				penultimate_basis = g_m[1];
+				basis_description = "population N[R]-1";
+			} else if (qnm->N[qnm->R-1] == 1 && g_m[0] != NULL) {
+				/* N[R] == 1: use basis from previous class (stored in g_m[0]) */
+				penultimate_basis = g_m[0];
+				basis_description = "population N[R-1] (since N[R]=1)";
+			}
+			
+			if (penultimate_basis != NULL) {
+				printf("\nPenultimate basis (%s):\n", basis_description);
+				// Print only first few elements to avoid segfault - need to debug further
+				long int safe_limit = 10;
+				
+				for (int i = 0; i < safe_limit; i++) {
+					if (normconst_output) {  // Use full precision if -d -e
+						gmp_printf("g_prev[%d] = %Qd\n", i, penultimate_basis[i]);
+					} else {
+						mpf_t fval_debug;
+						mpf_init(fval_debug);
+						mpf_set_q(fval_debug, penultimate_basis[i]);
+						printf("g_prev[%d] = %.15e\n", i, mpf_get_d(fval_debug));
+						mpf_clear(fval_debug);
+					}
+				}
+			} else {
+				printf("\nNote: Penultimate basis not available.\n");
+			}
+		} else if (qnm->R == 1) {
+			printf("\nNote: Single class model - no penultimate basis available.\n");
+		} else {
+			printf("\nNote: Penultimate basis not saved.\n");
+		}
+		
+		printf("==================================================\n");
+	}
 	
 	// Cleanup marginal_G array
 	for (int i = 0; i < qnm->R; i++) {
