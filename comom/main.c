@@ -142,7 +142,7 @@ int main(int argc, char**argv)
 	
 	qnm=(qnmodel*)readmodel(model_file);
 	
-// solve_attempt: // No longer needed since automatic perturbation is disabled
+solve_attempt:
 	// Apply perturbation if requested
 	mpz_t scale_factor;
 	mpz_init(scale_factor);
@@ -920,19 +920,88 @@ int main(int argc, char**argv)
 	return 0;
 
 singular_matrix_detected:
-	// Report singularity and exit without automatic perturbation
+	// If singular and no perturbation yet, apply automatic perturbation at digit 20
 	if (!auto_perturbation && perturbation_digit == 0) {
-		fprintf(stderr, "\nError: Model cannot be solved exactly by the CoMoM solver.\n");
-		fprintf(stderr, "The system of equations is singular and perturbation is required.\n");
-		fprintf(stderr, "Please run manually with perturbation to obtain an approximate solution.\n");
+		fprintf(stderr, "\nWarning: Model cannot be solved exactly by the CoMoM solver.\n");
+		fprintf(stderr, "The system of equations is singular. Automatically applying perturbation at digit 20.\n\n");
+		perturbation_digit = 20;
+		auto_perturbation = true;
+		
+		// Store original parameters if not already stored
+		if (original_L == NULL) {
+			// Check for potential overflow in allocation
+			if (qnm->M < 0 || qnm->R < 0 || 
+			    qnm->M > SIZE_MAX / sizeof(mpz_t*) || 
+			    qnm->R > SIZE_MAX / sizeof(mpz_t)) {
+				fprintf(stderr, "Error: Model dimensions too large for allocation\n");
+				exit(EXIT_FAILURE);
+			}
+			size_t r_size = (size_t)qnm->R;
+			size_t m_size = (size_t)qnm->M;
+			original_L = (mpz_t**)calloc(m_size, sizeof(mpz_t*));
+			original_Z = (mpz_t*)calloc(r_size, sizeof(mpz_t));
+			for(int i = 0; i < qnm->M; i++) {
+				original_L[i] = (mpz_t*)calloc(r_size, sizeof(mpz_t));
+				for(int j = 0; j < qnm->R; j++) {
+					mpz_init(original_L[i][j]);
+					mpz_set(original_L[i][j], qnm->L[i][j]);
+				}
+			}
+			for(int j = 0; j < qnm->R; j++) {
+				mpz_init(original_Z[j]);
+				mpz_set(original_Z[j], qnm->Z[j]);
+			}
+		}
+		
+		// Re-read the model to reset to original values
+		qnm=(qnmodel*)readmodel(model_file);
+		
+		// Clear and reset variables for retry
+		mpz_clear(scale_factor);
+		// Free allocated memory for g_m and marginal arrays before retry
+		if (g_m) {
+			for(int i = 0; i <= qnm->M; i++) {
+				if(g_m[i]) {
+					// Free the g_m[i] vector - we don't know exact size so just free the pointer
+					free(g_m[i]);
+				}
+			}
+			free(g_m);
+		}
+		if (marginal_G) {
+			for (int i = 0; i < qnm->R; i++) {
+				mpq_clear(marginal_G[i]);
+			}
+			free(marginal_G);
+		}
+		if (marginal_Gk) {
+			for (int k = 0; k < qnm->M; k++) {
+				if (marginal_Gk[k]) {
+					for (int r = 0; r < qnm->R; r++) {
+						mpq_clear(marginal_Gk[k][r]);
+					}
+					free(marginal_Gk[k]);
+				}
+			}
+			free(marginal_Gk);
+		}
+		
+		// Jump back to retry with perturbation
+		goto solve_attempt;
+		
+	} else if (auto_perturbation) {
+		// Automatic perturbation already tried and still singular
+		fprintf(stderr, "\nError: Model is still singular even with automatic perturbation at digit 20.\n");
+		fprintf(stderr, "Please try running manually with a different perturbation digit.\n");
 		fprintf(stderr, "\nExample invocations:\n");
-		fprintf(stderr, "  %s %s -p 20     # Apply perturbation at 20th digit\n", argv[0], model_file);
 		fprintf(stderr, "  %s %s -p 25     # Apply perturbation at 25th digit\n", argv[0], model_file);
+		fprintf(stderr, "  %s %s -p 30     # Apply perturbation at 30th digit\n", argv[0], model_file);
 		fprintf(stderr, "  %s %s -p 15 -s 12345  # Different perturbation at 15th digit with custom seed\n\n", argv[0], model_file);
 		mpz_clear(scale_factor);
 		return 1;
 	} else {
-		fprintf(stderr, "\nError: Model is still singular even with perturbation.\n");
+		// Manual perturbation was used but still singular
+		fprintf(stderr, "\nError: Model is still singular even with perturbation at digit %d.\n", perturbation_digit);
 		fprintf(stderr, "Please try running manually with a different perturbation digit.\n");
 		fprintf(stderr, "\nExample invocations:\n");
 		fprintf(stderr, "  %s %s -p 25     # Apply perturbation at 25th digit\n", argv[0], model_file);
