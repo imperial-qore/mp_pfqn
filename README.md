@@ -59,7 +59,7 @@ Examples are available under the models/ folders.
 # Run different solvers
 ./bin/mva model.qn      # Mean Value Analysis
 ./bin/mom model.qn      # Method of Moments
-./bin/recal model.qn    # Recursion by Class Algorithm
+./bin/recal model.qn    # Recursion by Chain Algorithm
 ```
 
 ### Solver Options
@@ -69,7 +69,7 @@ All solvers support various command-line options to control their output format 
 #### MVA Solver Options
 
 ```bash
-./bin/mva [options] model.qn
+./bin/mva [options] models/02_bottleneck_study.qn
 ```
 
 | Option | Long Form | Description |
@@ -86,7 +86,7 @@ All solvers support various command-line options to control their output format 
 #### RECAL Solver Options
 
 ```bash
-./bin/recal [options] model.qn
+./bin/recal [options] models/02_bottleneck_study.qn
 ```
 
 RECAL supports the same command-line options as MVA (see table above).
@@ -95,7 +95,7 @@ RECAL supports the same command-line options as MVA (see table above).
 #### MOM Solver Options
 
 ```bash
-./bin/mom [options] model.qn
+./bin/mom [options] models/02_bottleneck_study.qn
 ```
 
 | Option | Long Form | Description |
@@ -115,13 +115,13 @@ RECAL supports the same command-line options as MVA (see table above).
 
 ```bash
 # Get only throughputs
-./bin/mva -t models/02_bottleneck_study.qn
+./bin/mom -t models/02_bottleneck_study.qn
 
 # Get only queue lengths  
 ./bin/mom -q models/02_bottleneck_study.qn
 
 # Get exact normalizing constant (numerator and denominator)
-./bin/mva -e models/02_bottleneck_study.qn
+./bin/mom -e models/02_bottleneck_study.qn
 
 # Run MOM solver with debug output
 ./bin/mom -d models/02_bottleneck_study.qn

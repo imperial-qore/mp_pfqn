@@ -97,7 +97,7 @@ void convolution_multi_exact(mpq_t *g, mpf_t *X, mpf_t **Q)
 				mpq_get_den(den, zr_pow);
 				
 				for (int i = 1; i <= n[r-1]; i++) {
-					mpz_mul_ui(num, num, qnm->Z[r-1]);
+					mpz_mul(num, num, qnm->Z[r-1]);
 					mpz_mul_ui(den, den, i);
 				}
 				
@@ -136,7 +136,7 @@ void convolution_multi_exact(mpq_t *g, mpf_t *X, mpf_t **Q)
 			n[r-1]++; // we have now the index of population N-1r
 
 			mpq_t s; mpq_init(s);
-			mpq_set_ui(s, qnm->L[m-1][r-1], 1);
+			mpq_set_z(s, qnm->L[m-1][r-1]);
 			mpq_mul(s,s,G[index_1r][m_idx]);
 			mpq_add(G[curindex][m_idx],G[curindex][m_idx],s);
 			mpq_clear(s);
@@ -183,150 +183,179 @@ void convolution_multi_exact(mpq_t *g, mpf_t *X, mpf_t **Q)
 		}
 	}
 	
-	// Compute Q[i][r] = L[i][r] * G^+i_r / G
-	// where G^+i_r is G at population N with queue i multiplicity increased by 1
+	// Compute Q[k][r] using checkpointed state and additional convolutions
+	// After terminating the computation, save state of G variables
+	// For each station k, resume from checkpoint and perform additional convolution
+	// with extra queue type M+1 having identical demand as station k
 	if (Q != NULL) {
+		// Create checkpoint of current G state - deep copy entire G array
+		mpq_t** G_checkpoint = (mpq_t**) calloc(planesize0, sizeof(mpq_t*));
+		if (G_checkpoint == NULL) {
+			fprintf(stderr, "Error: Failed to allocate memory for G checkpoint\n");
+			return;
+		}
 		
-		for (int i = 0; i < M; i++) {
-			// Compute G^+i at population N with queue i multiplicity increased by 1
-			// Start from G at station i-1 and redo convolution for station i with mi+1
-			
-			mpq_t G_plus_i;
-			mpq_init(G_plus_i);
-			
-			// Start with G from previous station (or delay server if hasZ)
-			if (i == 0) {
-				// First station: start from delay server or initial condition
-				if (hasZ) {
-					mpq_set(G_plus_i, G[curindex][0]); // From delay server
-				} else {
-					mpq_set_ui(G_plus_i, 1, 1); // Initial condition
+		// Deep copy G array for checkpoint  
+		for (t=1;t<=planesize0;t++) {
+			G_checkpoint[t-1] = (mpq_t*) calloc(Mz+1, sizeof(mpq_t)); // +1 for extra station
+			if (G_checkpoint[t-1] == NULL) {
+				// Clean up partial checkpoint
+				for (int j=0;j<t-1;j++) {
+					for (m=0;m<Mz+1;m++) {
+						mpq_clear(G_checkpoint[j][m]);
+					}
+					free(G_checkpoint[j]);
 				}
-			} else {
-				// Copy from previous station
-				mpq_set(G_plus_i, G[curindex][hasZ ? i : i-1]);
+				free(G_checkpoint);
+				return;
 			}
-			
-			// Now apply convolution for station i with multiplicity increased by 1
-			// This means we apply the convolution step twice (original + 1 additional)
-			for (r = 1; r <= R; r++) {
-				if (N[r-1] != 0) {
-					N[r-1]--; 
-					int index_1r = popindex(N, R, planesizes); 
-					N[r-1]++; // restore N
+			for (m=0;m<Mz+1;m++) {
+				mpq_init(G_checkpoint[t-1][m]);
+				if (m < Mz) {
+					mpq_set(G_checkpoint[t-1][m], G[t-1][m]);
+				} else {
+					mpq_set_ui(G_checkpoint[t-1][m], 0, 1); // Initialize extra station
+				}
+			}
+		}
+		
+		// For each station k, compute Q[k][r] = mi[k] * G^k(N-er) / G(N)
+		for (int k = 0; k < M; k++) {
+			for (int r = 0; r < R; r++) {
+				if (N[r] > 0) {
+					// Create population N-er
+					N[r]--;
 					
-					if (index_1r >= 0) {
-						mpq_t s; 
-						mpq_init(s);
-						mpq_set_ui(s, qnm->L[i][r-1], 1);
+					// Restore from checkpoint and extend G array temporarily  
+					for (t=1;t<=planesize0;t++) {
+						// Reallocate G[t-1] to have space for extra station
+						mpq_t* temp_row = (mpq_t*) realloc(G[t-1], (Mz+1) * sizeof(mpq_t));
+						if (temp_row == NULL) {
+							N[r]++; // restore population
+							continue;
+						}
+						G[t-1] = temp_row;
 						
-						// Get G^+i at the reduced population from previous station
-						mpq_t G_prev;
-						mpq_init(G_prev);
-						if (i == 0) {
-							if (hasZ) {
-								mpq_set(G_prev, G[index_1r][0]); // From delay server
-							} else {
-								mpq_set_ui(G_prev, 1, 1); // Initial condition
+						// Initialize the new extra station slot
+						mpq_init(G[t-1][Mz]);
+						
+						// Copy from checkpointed values
+						for (m=0;m<Mz;m++) {
+							mpq_set(G[t-1][m], G_checkpoint[t-1][m]);
+						}
+					}
+					
+					// Reset population iterator to beginning for the reduced population N-er
+					int* n_iter = (int*)initpop(R);  
+					if (n_iter == NULL) {
+						N[r]++; // restore
+						continue;
+					}
+					
+					// Perform additional convolution for extra station with station k's demands
+					int iter_index = -1;
+					do {
+						iter_index++;
+						
+						// Check if current population state n_iter is valid for N-er
+						bool valid_state = true;
+						for (int class_idx = 0; class_idx < R; class_idx++) {
+							if (n_iter[class_idx] > N[class_idx]) {
+								valid_state = false;
+								break;
 							}
-						} else {
-							mpq_set(G_prev, G[index_1r][hasZ ? i : i-1]);
+						}
+						if (!valid_state) continue;
+						
+						int current_pop_index = popindex(n_iter, R, planesizes);
+						if (current_pop_index < 0 || current_pop_index >= planesize0) continue;
+						
+						// Initialize G for extra station from final original station
+						mpq_set(G[current_pop_index][Mz], G[current_pop_index][Mz-1]);
+						
+						// Apply convolution step for extra station using station k's demands
+						for (int class_idx = 1; class_idx <= R; class_idx++) {
+							if (n_iter[class_idx-1] != 0) {
+								n_iter[class_idx-1]--;
+								int reduced_pop_index = popindex(n_iter, R, planesizes);
+								n_iter[class_idx-1]++; // restore
+								
+								if (reduced_pop_index >= 0 && reduced_pop_index < planesize0) {
+									mpq_t contribution;
+									mpq_init(contribution);
+									// Use station k's demand L[k][class_idx-1]
+									mpq_set_z(contribution, qnm->L[k][class_idx-1]);
+									mpq_mul(contribution, contribution, G[reduced_pop_index][Mz]);
+									mpq_add(G[current_pop_index][Mz], G[current_pop_index][Mz], contribution);
+									mpq_clear(contribution);
+								}
+							}
 						}
 						
-						mpq_mul(s, s, G_prev);
-						mpq_add(G_plus_i, G_plus_i, s);
-						
-						mpq_clear(s);
-						mpq_clear(G_prev);
+					} while (!nextpop(n_iter, N, R));
+					
+					free(n_iter);
+					
+					// Get G^k(N-er) from the extra station at population N-er
+					int final_pop_index = popindex(N, R, planesizes);  // N is still N-er here
+					mpq_t G_k_N_minus_er;
+					mpq_init(G_k_N_minus_er);
+					
+					if (final_pop_index >= 0 && final_pop_index < planesize0) {
+						mpq_set(G_k_N_minus_er, G[final_pop_index][Mz]);
+					} else {
+						mpq_set_ui(G_k_N_minus_er, 0, 1);
 					}
-				}
-			}
-			
-			
-			// Now compute Q[i][r] for each class r using this G^+i
-			for (r = 0; r < R; r++) {
-				if (g != NULL && g[0] != NULL) {
+					
+					// Restore population N
+					N[r]++;
+					
+					// Compute Q[k][r] = L[k][r] * G^k(N-er) / G(N)  
 					mpq_t q_exact;
 					mpq_init(q_exact);
 					
-					// The issue is that we're using G^+i at population N
-					// But we need G^+i at population N-1r
-					// Let's compute the correct value
+					// L[k][r] * G^k(N-er)  
+					mpq_set_z(q_exact, qnm->L[k][r]);
+					mpq_mul(q_exact, q_exact, G_k_N_minus_er);
 					
-					if (N[r] > 0) {
-						// We need to compute G^+i(N-1r)
-						mpq_t G_plus_i_N_minus_1;
-						mpq_init(G_plus_i_N_minus_1);
-						
-						// Get index for population N-1r
-						N[r]--;
-						int index_1r = popindex(N, R, planesizes);
-						
-						if (index_1r >= 0) {
-							// Start from G(N-1r, stations 0..i-1)
-							if (i == 0) {
-								if (hasZ) {
-									mpq_set(G_plus_i_N_minus_1, G[index_1r][0]);
-								} else {
-									mpq_set_ui(G_plus_i_N_minus_1, 1, 1);
-								}
-							} else {
-								int prev_idx = hasZ ? i : i-1;
-								mpq_set(G_plus_i_N_minus_1, G[index_1r][prev_idx]);
-							}
-							
-							// Apply convolution for station i with the extra application
-							for (int s = 0; s < R; s++) {
-								if (N[s] > 0) { // N is already reduced by 1 for class r
-									N[s]--;
-									int index_2 = popindex(N, R, planesizes);
-									N[s]++;
-									
-									if (index_2 >= 0) {
-										mpq_t contrib;
-										mpq_init(contrib);
-										mpq_set_ui(contrib, qnm->L[i][s], 1);
-										
-										if (i == 0) {
-											// No previous station
-										} else {
-											int prev_idx = hasZ ? i : i-1;
-											mpq_mul(contrib, contrib, G[index_2][prev_idx]);
-										}
-										
-										mpq_add(G_plus_i_N_minus_1, G_plus_i_N_minus_1, contrib);
-										mpq_clear(contrib);
-									}
-								}
-							}
-							
-						}
-						
-						N[r]++; // Restore N
-						
-						// Q[i][r] = L[i][r] * G^+i(N-1r) / G(N)
-						// But based on ground truth, for station 2 in single class, we need a factor of (N-1)
-						mpq_set_ui(q_exact, qnm->L[i][r], 1);
-						
-						mpq_mul(q_exact, q_exact, G_plus_i_N_minus_1);
-						
+					// Divide by G(N)
+					if (g != NULL && g[0] != NULL && mpq_cmp_ui(g[0], 0, 1) != 0) {
 						mpq_div(q_exact, q_exact, g[0]);
-						
-						mpq_clear(G_plus_i_N_minus_1);
 					} else {
-						// If N[r] = 0, Q[i][r] = 0
 						mpq_set_ui(q_exact, 0, 1);
 					}
 					
 					// Convert to mpf_t
-					mpf_set_q(Q[i][r], q_exact);
+					mpf_set_q(Q[k][r], q_exact);
 					
 					mpq_clear(q_exact);
+					mpq_clear(G_k_N_minus_er);
+					
+					// Clean up the extra station from G array
+					for (t=1;t<=planesize0;t++) {
+						mpq_clear(G[t-1][Mz]);
+						// Resize back to original size
+						mpq_t* temp_row = (mpq_t*) realloc(G[t-1], Mz * sizeof(mpq_t));
+						if (temp_row != NULL) {
+							G[t-1] = temp_row;
+						}
+					}
+					
+				} else {
+					// If N[r] = 0, Q[k][r] = 0
+					mpf_set_ui(Q[k][r], 0);
 				}
 			}
-			
-			mpq_clear(G_plus_i);
 		}
+		
+		// Clean up checkpoint
+		for (t=1;t<=planesize0;t++) {
+			for (m=0;m<Mz+1;m++) {
+				mpq_clear(G_checkpoint[t-1][m]);
+			}
+			free(G_checkpoint[t-1]);
+		}
+		free(G_checkpoint);
 	}
 	
 	// Free memory

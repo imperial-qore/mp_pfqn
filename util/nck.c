@@ -8,6 +8,12 @@ long long int ncktable[MAXNCKTABLE][MAXNCKTABLE]; /* nchoosek table */
 
 long long int nck(int N, int K)
 {
+	// Use symmetry: nck(n,k) = nck(n,n-k)
+	// This avoids overflow for large k values
+	if (K > N - K) {
+		K = N - K;
+	}
+	
 	if (N>nckmaxn || K>nckmaxk || ncktable[N][K]==0 ) 
 	{
 	long int n=N;
