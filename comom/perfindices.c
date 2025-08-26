@@ -97,9 +97,22 @@ void perfindices(qnmodel* qnm, mpq_vec_t g, mpq_t* G, mpq_t** Gk,
         mpq_init(tmp2);
         for (int k = 1; k <= qnm->M; k++) {
             for (int r = 1; r <= qnm->R; r++) {
-                mpq_set_z(tmp, qnm->L[k-1][r-1]);
-                mpq_mul(tmp2, Gk[k-1][r-1], tmp);
-                mpq_div(Q_kr, tmp2, G_total);
+                // Check if the original demand was 0.0
+                mpz_t original_L_value;
+                mpz_init(original_L_value);
+                mpz_tdiv_q_ui(original_L_value, qnm->L[k-1][r-1], scale_factor);
+                
+                if (mpz_cmp_ui(original_L_value, 0) == 0) {
+                    // Original demand was 0, so Q should be 0
+                    mpq_set_ui(Q_kr, 0, 1);
+                } else {
+                    mpq_set_z(tmp, qnm->L[k-1][r-1]);
+                    mpq_mul(tmp2, Gk[k-1][r-1], tmp);
+                    mpq_div(Q_kr, tmp2, G_total);
+                }
+                
+                mpz_clear(original_L_value);
+                
                 mpf_set_q(fval, Q_kr);
                 printf("%.15e", mpf_get_d(fval));
                 if (r < qnm->R) printf(" ");
@@ -156,19 +169,31 @@ void perfindices(qnmodel* qnm, mpq_vec_t g, mpq_t* G, mpq_t** Gk,
             mpq_set_ui(total_q, 0, 1);
             
             for (int r = 1; r <= qnm->R; r++) {
-                // Q[k,r] = L[k,r] * Gk^k(N-e_r) / G(N)
-                mpq_set_z(tmp, qnm->L[k-1][r-1]);
-                mpq_mul(tmp2, Gk[k-1][r-1], tmp);
-                mpq_div(Q_kr, tmp2, G_total);
+                // Check if the original demand was 0.0
+                mpz_t original_L_value;
+                mpz_init(original_L_value);
+                mpz_tdiv_q_ui(original_L_value, qnm->L[k-1][r-1], scale_factor);
                 
-                // Multiply by the multiplicity mi[k-1] for station k
-                if (qnm->mi[k-1] > 1) {
-                    mpq_t mi_q;
-                    mpq_init(mi_q);
-                    mpq_set_ui(mi_q, qnm->mi[k-1], 1);
-                    mpq_mul(Q_kr, Q_kr, mi_q);
-                    mpq_clear(mi_q);
+                if (mpz_cmp_ui(original_L_value, 0) == 0) {
+                    // Original demand was 0, so Q should be 0
+                    mpq_set_ui(Q_kr, 0, 1);
+                } else {
+                    // Q[k,r] = L[k,r] * Gk^k(N-e_r) / G(N)
+                    mpq_set_z(tmp, qnm->L[k-1][r-1]);
+                    mpq_mul(tmp2, Gk[k-1][r-1], tmp);
+                    mpq_div(Q_kr, tmp2, G_total);
+                    
+                    // Multiply by the multiplicity mi[k-1] for station k
+                    if (qnm->mi[k-1] > 1) {
+                        mpq_t mi_q;
+                        mpq_init(mi_q);
+                        mpq_set_ui(mi_q, qnm->mi[k-1], 1);
+                        mpq_mul(Q_kr, Q_kr, mi_q);
+                        mpq_clear(mi_q);
+                    }
                 }
+                
+                mpz_clear(original_L_value);
                 
                 mpq_add(total_q, total_q, Q_kr);
                 
