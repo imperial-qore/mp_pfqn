@@ -931,7 +931,7 @@ singular_matrix_detected:
 	// If singular and no perturbation yet, apply automatic perturbation at digit 20
 	if (!auto_perturbation && perturbation_digit == 0) {
 		fprintf(stderr, "\nWarning: Model cannot be solved exactly by the CoMoM solver.\n");
-		fprintf(stderr, "The system of equations is singular. Automatically applying perturbation at digit 20.\n\n");
+		fprintf(stderr, "The system of equations is singular. Automatically applying perturbation at digit 20.\n");
 		perturbation_digit = 20;
 		auto_perturbation = true;
 		
