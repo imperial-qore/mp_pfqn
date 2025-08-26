@@ -9,7 +9,7 @@
 void perfindices(qnmodel* qnm, mpq_vec_t g, mpq_t* G, mpq_t** Gk,
                  bool verbose_output, bool log_output, bool normconst_output, 
                  bool normconst_g_output, bool throughput_output, bool queue_output, 
-                 long scale_factor) {
+                 mpz_t scale_factor) {
     
     mpf_t fval;
     mpf_init(fval);
@@ -26,10 +26,10 @@ void perfindices(qnmodel* qnm, mpq_vec_t g, mpq_t* G, mpq_t** Gk,
     mpq_init(G_scaled);
     mpq_set(G_scaled, G_total);
     
-    if (scale_factor > 1) {
+    if (mpz_cmp_ui(scale_factor, 1) > 0) {
         mpz_t divisor;
         mpz_init(divisor);
-        mpz_ui_pow_ui(divisor, scale_factor, qnm->R);
+        mpz_pow_ui(divisor, scale_factor, qnm->R);
         mpz_t num, den;
         mpz_init(num);
         mpz_init(den);
@@ -76,10 +76,10 @@ void perfindices(qnmodel* qnm, mpq_vec_t g, mpq_t* G, mpq_t** Gk,
             mpq_init(X_scaled);
             mpq_set(X_scaled, X_r);
             
-            if (scale_factor > 1) {
+            if (mpz_cmp_ui(scale_factor, 1) > 0) {
                 mpq_t multiplier;
                 mpq_init(multiplier);
-                mpq_set_ui(multiplier, scale_factor, 1);
+                mpq_set_z(multiplier, scale_factor);
                 mpq_mul(X_scaled, X_scaled, multiplier);
                 mpq_clear(multiplier);
             }
@@ -100,7 +100,7 @@ void perfindices(qnmodel* qnm, mpq_vec_t g, mpq_t* G, mpq_t** Gk,
                 // Check if the original demand was 0.0
                 mpz_t original_L_value;
                 mpz_init(original_L_value);
-                mpz_tdiv_q_ui(original_L_value, qnm->L[k-1][r-1], scale_factor);
+                mpz_tdiv_q(original_L_value, qnm->L[k-1][r-1], scale_factor);
                 
                 if (mpz_cmp_ui(original_L_value, 0) == 0) {
                     // Original demand was 0, so Q should be 0
@@ -142,10 +142,10 @@ void perfindices(qnmodel* qnm, mpq_vec_t g, mpq_t* G, mpq_t** Gk,
             mpq_init(X_scaled);
             mpq_set(X_scaled, X_r);
             
-            if (scale_factor > 1) {
+            if (mpz_cmp_ui(scale_factor, 1) > 0) {
                 mpq_t multiplier;
                 mpq_init(multiplier);
-                mpq_set_ui(multiplier, scale_factor, 1);
+                mpq_set_z(multiplier, scale_factor);
                 mpq_mul(X_scaled, X_scaled, multiplier);
                 mpq_clear(multiplier);
             }
@@ -172,7 +172,7 @@ void perfindices(qnmodel* qnm, mpq_vec_t g, mpq_t* G, mpq_t** Gk,
                 // Check if the original demand was 0.0
                 mpz_t original_L_value;
                 mpz_init(original_L_value);
-                mpz_tdiv_q_ui(original_L_value, qnm->L[k-1][r-1], scale_factor);
+                mpz_tdiv_q(original_L_value, qnm->L[k-1][r-1], scale_factor);
                 
                 if (mpz_cmp_ui(original_L_value, 0) == 0) {
                     // Original demand was 0, so Q should be 0
