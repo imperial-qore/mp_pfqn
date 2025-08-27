@@ -380,14 +380,24 @@ solve_attempt:
 	/* initialize g */
 	if (r==1)
 	{
-		int* comb=(int*)int_vec(r,0); 
+		int* comb=(int*)int_vec(r,0);  // Zero population vector
 		// Initialize all elements to 0 first
 		for (int idx = 0; idx < cardG + cardGk; idx++) {
 			mpq_set_ui(g[idx], 0, 1);
 		}
-		// Set initial conditions: G(0,k) = 1 for all k
-		for (i=0;i<=qnm->M;i++)
-			mpq_set_si(g[hash(Dn,comb,i+1)-1],1,1);
+		// Set initial conditions: G(0,m) = 1 for all m
+		// m=0 means no queue added (G value)
+		// m=1..M means queue m added (G^k values)
+		for (i=0;i<=qnm->M;i++) {
+			int hash_idx = hash(Dn,comb,i);
+			if (hash_idx < 0 || hash_idx > cardG + cardGk) {
+				fprintf(stderr, "Error: Invalid hash index %d for i=%d in basis initialization\n", hash_idx, i);
+				free(comb);
+				return 1;
+			}
+			mpq_set_si(g[hash_idx-1],1,1);
+		}
+		free(comb);
 	}
 	else
 	{
@@ -401,7 +411,7 @@ solve_attempt:
 		for (d=1;d<=Dn->card;d++)
 			for (i=0;i<=qnm->M;i++)
 			{
-				int col=hash(Dn,Dn->combs[d-1],i+1)-1;
+				int col=hash(Dn,Dn->combs[d-1],i)-1;
 				s=Dn->combs[d-1][r-2];
 				
 				if (s < 0 || s > qnm->M) {
@@ -433,7 +443,7 @@ solve_attempt:
 				}
 				temp_comb[r-2] = 0;  // Set the element we're varying to 0
 				
-				int col_old=hash(Dn_old,temp_comb,i+1)-1;
+				int col_old=hash(Dn_old,temp_comb,i)-1;
 				
 				// Calculate the old cardG and cardGk for bounds checking
 				long int old_cardG = nck(qnm->M+(r-1)-1,qnm->M);
@@ -458,6 +468,7 @@ solve_attempt:
 	}
 
 	LS* linsys=NULL;
+	double setup_start, setup_elapsed;
 		for (nr=1;nr<=qnm->N[r-1];nr++)
 		{
 			n[r-1] = nr;	
@@ -469,8 +480,20 @@ solve_attempt:
 	
 			if (n[r-1]==1)
 			{
-				linsys=setupls(Dn, qnm, n, r);
-				lu_indices = mpq_ludcmp(linsys->A11,cardGk);
+				setup_start = CPUTIME;
+				int show_progress = !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output;
+				linsys=setupls(Dn, qnm, n, r, setup_start, show_progress);
+				
+				// Use progress-enabled LU decomposition
+				lu_indices = mpq_ludcmp_progress(linsys->A11, cardGk, setup_start, n, qnm->R, show_progress);
+				setup_elapsed = CPUTIME - setup_start;
+				
+				if (show_progress) {
+					printf("\r\033[K");
+					printcompact(n,qnm->R,step_elapsed);
+					printf(" [Basis setup: %.6f s]", setup_elapsed);
+					fflush(stdout);
+				}
 			}
 			/* compute G=B2*g/n */
 			mpq_mspvecmul(G, linsys->B2, g);
@@ -536,14 +559,14 @@ solve_attempt:
 				for (int s = 1; s <= qnm->R-1; s++) {
 					comb[s-1]++;
 
-					// Calculate index using hash function as in setupls.c line 71
-					int index = hash(Dn, comb, 0+1) - 1;
-//
+					// Calculate index using hash function - 0 for G values
+					int index = hash(Dn, comb, 0) - 1;
+
 					mpq_set(marginal_G[s-1], g[index]);
 
 					// Save G^k values for this class
 					for (int k = 1; k <= qnm->M; k++) {
-						index = hash(Dn, comb, k+1) - 1;
+						index = hash(Dn, comb, k) - 1;
 						// Print all contents of marginal_G and marginal_Gk
 						mpq_set(marginal_Gk[k-1][s-1], g[index]);
 					}

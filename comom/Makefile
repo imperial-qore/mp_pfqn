@@ -5,7 +5,7 @@ CFLAGS = -g -O4 -I../deps/local/include -I. -I../include/ -I../gmpla/ -I../util/
 LDFLAGS = -L../deps/local/lib -lgmp -lmpfr -lm -L. -L../lib/
 #LDFLAGS = -static -L./gmp-4.1.4/.libs/ -lgmp -lm  -L../lib/
 
-SRCS = main.c setupls.c hash.c perfindices.c
+SRCS = main.c setupls.c hash.c perfindices.c mpq_ludcmp_progress.c
 OBJS = $(SRCS:.c=.o)
 DEPS = $(SRCS:.c=.d)
 

@@ -16,7 +16,7 @@ void recal_marginal_exact(qnmodel* qn, int class_to_reduce, mpq_t G_marginal);
 // Reduces population in class_to_reduce by 1 and increases multiplicity of station k by 1
 void recal_queue_marginal_exact(qnmodel* qn, int class_to_reduce, int station_k, mpq_t G_k_marginal);
 
-void recal_multi_exact(qnmodel* qn, mpq_t Gex)
+void recal_multi_exact_internal(qnmodel* qn, mpq_t Gex, bool show_progress)
 {
 	struct rusage ruse;
 	double t_start = CPUTIME;
@@ -117,7 +117,7 @@ void recal_multi_exact(qnmodel* qn, mpq_t Gex)
 				}
 			}
 			
-			if (!is_final) {
+			if (!is_final && show_progress) {
 				// Calculate width needed for each population value
 				int* widths = (int*) calloc(R, sizeof(int));
 				for (int pr=0;pr<R;pr++) {
@@ -282,7 +282,9 @@ void recal_multi_exact(qnmodel* qn, mpq_t Gex)
 	}
 	
 	// Clear the progress line before performance metrics display
-	fprintf(stderr, "\r%*s\r", 80, "");
+	if (show_progress) {
+		fprintf(stderr, "\r%*s\r", 80, "");
+	}
 	
 	mpq_set(Gex, G[0]);
 	
@@ -298,6 +300,11 @@ void recal_multi_exact(qnmodel* qn, mpq_t Gex)
 	free(pop_vector);
 	
 	return;
+}
+
+void recal_multi_exact(qnmodel* qn, mpq_t Gex)
+{
+	recal_multi_exact_internal(qn, Gex, true);
 }
 
 void recal_marginal_exact(qnmodel* qn, int class_to_reduce, mpq_t G_marginal)
@@ -322,7 +329,7 @@ void recal_marginal_exact(qnmodel* qn, int class_to_reduce, mpq_t G_marginal)
 	}
 	
 	// Compute G(N-e_r) using the modified population
-	recal_multi_exact(&temp_qn, G_marginal);
+	recal_multi_exact_internal(&temp_qn, G_marginal, false);
 	
 	// Free temporary arrays
 	free(temp_qn.N);
@@ -360,7 +367,7 @@ void recal_queue_marginal_exact(qnmodel* qn, int class_to_reduce, int station_k,
 	temp_qn.mi[station_k]++;
 	
 	// Compute G^k(N-e_r) using the modified population and multiplicity
-	recal_multi_exact(&temp_qn, G_k_marginal);
+	recal_multi_exact_internal(&temp_qn, G_k_marginal, false);
 	
 	// Free temporary arrays
 	free(temp_qn.N);

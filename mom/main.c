@@ -376,6 +376,7 @@ int main(int argc, char**argv)
 	// Apply perturbation if requested
 	mpz_t scale_factor;
 	mpz_init(scale_factor);
+	mpz_set_ui(scale_factor, 1);  // Default to 1 when no scaling
 	if(perturbation_digit > 0) {
 		apply_perturbation_to_model(qnm, perturbation_digit, perturbation_seed, scale_factor);
 		
@@ -432,6 +433,7 @@ int main(int argc, char**argv)
 		// Apply perturbation
 		mpz_clear(scale_factor);
 		mpz_init(scale_factor);
+		mpz_set_ui(scale_factor, 1);  // Reset to 1 before applying perturbation
 		apply_perturbation_to_model(qnm, perturbation_digit, perturbation_seed, scale_factor);
 		
 		// Print model with perturbation info

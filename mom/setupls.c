@@ -8,6 +8,11 @@
 /* setuls - setup the linear system for the current class */
 LS* setupls(mpz_t** L, int* n, mpz_t *Z, int* mi, int m, int r)
 {
+	return setupls_progress(L, n, Z, mi, m, r, 0.0, 0);
+}
+
+LS* setupls_progress(mpz_t** L, int* n, mpz_t *Z, int* mi, int m, int r, double setup_start, int show_progress)
+{
 	int i,j,k,s,h,t,w;
 	combsrep Ik;
 	combsrep I;
@@ -209,7 +214,11 @@ LS* setupls(mpz_t** L, int* n, mpz_t *Z, int* mi, int m, int r)
 //		if(DEBUG) mpq_matprint(ls->C[t+k].diag,nck(r-1,r-h)*r,nck(r-1,r-h)*r);
 //		if(DEBUG) mpq_mspprint(ls->C[t+k].nondiag);
 		t0=CPUTIME;
-		ls->C[t+k].lu_indices=(int*)mpq_ludcmp(ls->C[t+k].diag,nck(r-1,r-h)*r);
+		if (show_progress) {
+			ls->C[t+k].lu_indices=(int*)mpq_ludcmp_progress(ls->C[t+k].diag,nck(r-1,r-h)*r, setup_start, n, r, show_progress);
+		} else {
+			ls->C[t+k].lu_indices=(int*)mpq_ludcmp(ls->C[t+k].diag,nck(r-1,r-h)*r);
+		}
 		if (ls->C[t+k].lu_indices == NULL) {
 			// Singular matrix encountered during LU decomposition
 			// Free allocated memory before returning
