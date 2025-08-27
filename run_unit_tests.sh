@@ -14,7 +14,7 @@ NC='\033[0m' # No Color
 
 # Configuration
 MODELS_DIR="models"
-SOLVERS=("./bin/mom" "./bin/comom" "./bin/recal")
+SOLVERS=("./bin/mom" "./bin/mva" "./bin/ca" "./bin/comom" "./bin/recal")
 OPTIONS=("-e" "-l" "-t" "-q")
 TIMEOUT=10  # Timeout in seconds for each test
 
