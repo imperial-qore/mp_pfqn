@@ -37,6 +37,7 @@ extern qnmodel* qnm;
 #define free_Gk() for (t=0;t<cardGk;t++) mpq_clear(Gk[t]); free(Gk);
 #define free_G() for (t=0;t<cardG;t++) mpq_clear(G[t]); free(G);
 
-LS* setupls(combsrep *Dn, qnmodel* qnm, int* N, int r);
+LS* setupls(combsrep *Dn, qnmodel* qnm, int* N, int r, double setup_start, int show_progress);
 int hash(combsrep* Dn, int *comb, int i);
+int* mpq_ludcmp_progress(mpq_mat_t A, int N, double setup_start, int* n_vec, int R, int show_progress);
 #endif

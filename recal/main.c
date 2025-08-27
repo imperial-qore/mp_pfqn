@@ -88,6 +88,16 @@ int main(int argc,char ** argv)
 	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output && !exact_output) {
 		printmodel(qn);
 	}
+	
+	// Check total population and warn if too large
+	int total_population = 0;
+	for (int r = 0; r < qn->R; r++) {
+		total_population += qn->N[r];
+	}
+	if (total_population > 30) {
+		fprintf(stderr, "\nWarning: Total population is %d (> 30). RECAL is likely to fail due to memory constraints.\n", total_population);
+		fprintf(stderr, "Consider using a different solver for models with large populations.\n\n");
+	}
 
 	mpq_t G_exact;
 	mpq_init(G_exact);
@@ -246,19 +256,17 @@ int main(int argc,char ** argv)
 		mpq_clear(mi_k);
 		mpf_clear(Q_float);
 	} else {
-		printf("========== Performance Metrics ==========\n");
-		printf("Normalizing constant:\n");
-		printf("G = %.15e\n", G);
-		printf("log(G) = %.15e\n", logG);
+		// First compute all metrics
 		
-		// Compute and print throughputs using marginal normalizing constants
-		printf("\nX (throughputs):\n");
+		// Allocate arrays to store computed throughputs
+		double* X_values = malloc(qn->R * sizeof(double));
 		mpq_t G_marginal, X_r;
 		mpf_t X_float;
 		mpq_init(G_marginal);
 		mpq_init(X_r);
 		mpf_init(X_float);
 		
+		// Compute throughputs
 		for (int r = 0; r < qn->R; r++) {
 			// Compute G(N-e_r) for class r
 			recal_marginal_exact(qn, r, G_marginal);
@@ -266,17 +274,23 @@ int main(int argc,char ** argv)
 			// Compute X[r] = G(N-e_r) / G(N)
 			mpq_div(X_r, G_marginal, G_exact);
 			
-			// Convert to double and print
+			// Convert to double and store
 			mpf_set_q(X_float, X_r);
-			printf("X[%d] = %.15e\n", r+1, mpf_get_d(X_float));
+			X_values[r] = mpf_get_d(X_float);
 		}
 		
 		mpq_clear(G_marginal);
 		mpq_clear(X_r);
 		mpf_clear(X_float);
 		
-		// Compute and print queue lengths using marginal normalizing constants
-		printf("\nQ (mean queue lengths):\n");
+		// Allocate arrays to store computed queue lengths
+		double** Q_values = malloc(qn->M * sizeof(double*));
+		double* Q_totals = malloc(qn->M * sizeof(double));
+		for (int k = 0; k < qn->M; k++) {
+			Q_values[k] = malloc(qn->R * sizeof(double));
+		}
+		
+		// Compute queue lengths
 		mpq_t G_k_marginal, Q_kr, L_kr, mi_k;
 		mpf_t Q_float;
 		mpq_init(G_k_marginal);
@@ -286,7 +300,6 @@ int main(int argc,char ** argv)
 		mpf_init(Q_float);
 		
 		for (int k = 0; k < qn->M; k++) {
-			printf("Q[%d] =", k+1);
 			mpq_t total_q; 
 			mpq_init(total_q); 
 			mpq_set_ui(total_q, 0, 1);
@@ -302,15 +315,15 @@ int main(int argc,char ** argv)
 				mpq_mul(Q_kr, Q_kr, G_k_marginal);
 				mpq_div(Q_kr, Q_kr, G_exact);
 				
-				// Convert to double and print
+				// Convert to double and store
 				mpf_set_q(Q_float, Q_kr);
-				printf("\t%.15e", mpf_get_d(Q_float));
+				Q_values[k][r] = mpf_get_d(Q_float);
 				mpq_add(total_q, total_q, Q_kr);
 			}
 			mpf_t tval; 
 			mpf_init(tval); 
 			mpf_set_q(tval, total_q);
-			printf("\t(total: %.15e)\n", mpf_get_d(tval));
+			Q_totals[k] = mpf_get_d(tval);
 			mpf_clear(tval);
 			mpq_clear(total_q);
 		}
@@ -321,9 +334,41 @@ int main(int argc,char ** argv)
 		mpq_clear(mi_k);
 		mpf_clear(Q_float);
 		
+		// Clear progress line before printing results
+		fprintf(stderr, "\r                                                                                  \r");
+		// Now print all results
+		printf("========== Performance Metrics ==========\n");
+		printf("Normalizing constant:\n");
+		printf("G = %.15e\n", G);
+		printf("log(G) = %.15e\n", logG);
+		
+		// Print throughputs
+		printf("\nX (throughputs):\n");
+		for (int r = 0; r < qn->R; r++) {
+			printf("X[%d] = %.15e\n", r+1, X_values[r]);
+		}
+		
+		// Print queue lengths
+		printf("\nQ (mean queue lengths):\n");
+		for (int k = 0; k < qn->M; k++) {
+			printf("Q[%d] =", k+1);
+			for (int r = 0; r < qn->R; r++) {
+				printf("\t%.15e", Q_values[k][r]);
+			}
+			printf("\t(total: %.15e)\n", Q_totals[k]);
+		}
+		
 		printf("=========================================\n");
 		t1 = CPUTIME;
 		printf("Elapsed time (RECAL): %g s\n", t1-t0);
+		
+		// Free allocated memory
+		free(X_values);
+		for (int k = 0; k < qn->M; k++) {
+			free(Q_values[k]);
+		}
+		free(Q_values);
+		free(Q_totals);
 	}
 	
 	mpq_clear(G_exact);

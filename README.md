@@ -5,8 +5,8 @@ The mp_pfqn library offers fast C solvers for product-form queueing networks usi
 - Current solvers:
   - Mean Value Analysis (MVA) [1]
   - Convolution Algorithm (CA) [2]
-  - Method of Moments (MoM) [3]
-  - Recursion by Chain Algorithm (RECAL) [4]
+  - Recursion by Chain Algorithm (RECAL) [3]
+  - Method of Moments (MoM) [4]
   - Class-Oriented Method of Moments (CoMoM) [5]
 
 ## Quick Start
@@ -22,8 +22,8 @@ make
 # Run a solver
 ./bin/mva models/02_bottleneck_study.qn
 ./bin/ca models/02_bottleneck_study.qn
-./bin/mom models/02_bottleneck_study.qn
 ./bin/recal models/02_bottleneck_study.qn
+./bin/mom models/02_bottleneck_study.qn
 ./bin/comom models/02_bottleneck_study.qn
 ```
 If you wish to recompile after changes, run 
@@ -48,6 +48,8 @@ m2 L21 L22 ... L2R  # Queue 2: multiplicity, demands at station 2 per class
 ...
 mM LM1 LM2 ... LMR  # Queue M: multiplicity, demands at station M per class
 ```
+The demand Lir=Sir*Vir is the product of the mean service time Sir and mean number of visits Vir, both for class-r jobs at station i. See the routing2visits utility to convert a routing probability matrix into the corresponding Vir values.
+
 *IMPORTANT*: All values must be passed as integers. 
 
 Examples are available under the models/ folders.
@@ -63,8 +65,8 @@ Examples are available under the models/ folders.
 # Run different solvers
 ./bin/mva model.qn      # Mean Value Analysis
 ./bin/ca model.qn       # Convolution Algorithm
-./bin/mom model.qn      # Method of Moments
 ./bin/recal model.qn    # Recursion by Chain Algorithm
+./bin/mom model.qn      # Method of Moments
 ./bin/comom model.qn    # Class-Oriented Method of Moments
 ```
 
@@ -167,9 +169,9 @@ CoMoM supports the same command-line options as MoM (see table above). The Class
 
 [2]: Reiser, M. and Kobayashi, H. (1974), *Queuing Networks with Multiple Closed Chains: Theory and Computational Algorithms,* IBM Research Report RC-4919, July, 1974.
 
-[3]: Casale (2006), *An efficient algorithm for the exact analysis of multiclass queueing networks with large population sizes,* Proc. of ACM SIGMETRICS 2006.
+[3]: Conway, A. E. and Georganas, N. D. (1986), *RECAL—a new efficient algorithm for the exact analysis of multiple-chain closed queuing networks,* J. ACM 33, 4 (Oct. 1986), 768–791.
 
-[4]: Conway, A. E. and Georganas, N. D. (1986), *RECAL—a new efficient algorithm for the exact analysis of multiple-chain closed queuing networks,* J. ACM 33, 4 (Oct. 1986), 768–791.
+[4]: Casale (2006), *An efficient algorithm for the exact analysis of multiclass queueing networks with large population sizes,* Proc. of ACM SIGMETRICS 2006.
 
 [5]: Casale, G. (2009), *CoMoM: Efficient Class-Oriented Evaluation of Multiclass Performance Models,* IEEE Trans. Softw. Eng. 35, 2 (March 2009), 162–177.
 

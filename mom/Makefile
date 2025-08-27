@@ -5,7 +5,7 @@ LDFLAGS = -L../deps/local/lib -lgmp -lm -L. -L../lib/
 #LDFLAGS = -lgmp -lm -lmpfr -lgmpla -L.  -L../lib/
 #LDFLAGS = -static -L./gmp-4.1.4/.libs/ -lgmp -lm  -L../lib/
 
-SRCS = blocksolve.c main.c mdecrease.c perfindices.c setupls.c
+SRCS = blocksolve.c main.c mdecrease.c perfindices.c setupls.c mpq_ludcmp_progress.c
 OBJS = $(SRCS:.c=.o)
 DEPS = $(SRCS:.c=.d)
 
