@@ -110,16 +110,28 @@ void perfindices(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, bool verbose_output, b
 		{
 			for (r=1; r<=qnm->R; r++)
 			{
-				mpq_set_z(tmp, qnm->L[k-1][r-1]);
-				mpq_mul(tmp2, Gk[(k-1)*(qnm->R+1)+r], tmp);
-				mpf_set_q(fval, tmp2);
-				mpq_div(tmp2, tmp2, G[0]);
+				// Check if the original demand was 0.0
+				mpz_t original_L_value;
+				mpz_init(original_L_value);
+				mpz_tdiv_q(original_L_value, qnm->L[k-1][r-1], scale_factor);
 				
-				// Multiply by station multiplicity
-				mpq_t mult; mpq_init(mult);
-				mpq_set_si(mult, qnm->mi[k-1], 1);
-				mpq_mul(tmp2, tmp2, mult);
-				mpq_clear(mult);
+				if (mpz_cmp_ui(original_L_value, 0) == 0) {
+					// Original demand was 0, so Q should be 0
+					mpq_set_ui(tmp2, 0, 1);
+				} else {
+					mpq_set_z(tmp, qnm->L[k-1][r-1]);
+					mpq_mul(tmp2, Gk[(k-1)*(qnm->R+1)+r], tmp);
+					mpf_set_q(fval, tmp2);
+					mpq_div(tmp2, tmp2, G[0]);
+					
+					// Multiply by station multiplicity
+					mpq_t mult; mpq_init(mult);
+					mpq_set_si(mult, qnm->mi[k-1], 1);
+					mpq_mul(tmp2, tmp2, mult);
+					mpq_clear(mult);
+				}
+				
+				mpz_clear(original_L_value);
 				
 				mpf_set_q(fval, tmp2);
 				printf("%.15e", mpf_get_d(fval));
@@ -194,15 +206,27 @@ void perfindices(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, bool verbose_output, b
 			mpq_t total_q; mpq_init(total_q); mpq_set_ui(total_q, 0, 1);
 			for (r=1; r<=qnm->R; r++)
 			{
-				mpq_set_z(tmp, qnm->L[k-1][r-1]);
-				mpq_mul(tmp2, Gk[(k-1)*(qnm->R+1)+r], tmp);
-				mpq_div(tmp2, tmp2, G[0]);
+				// Check if the original demand was 0.0
+				mpz_t original_L_value;
+				mpz_init(original_L_value);
+				mpz_tdiv_q(original_L_value, qnm->L[k-1][r-1], scale_factor);
 				
-				// Multiply by station multiplicity
-				mpq_t mult; mpq_init(mult);
-				mpq_set_si(mult, qnm->mi[k-1], 1);
-				mpq_mul(tmp2, tmp2, mult);
-				mpq_clear(mult);
+				if (mpz_cmp_ui(original_L_value, 0) == 0) {
+					// Original demand was 0, so Q should be 0
+					mpq_set_ui(tmp2, 0, 1);
+				} else {
+					mpq_set_z(tmp, qnm->L[k-1][r-1]);
+					mpq_mul(tmp2, Gk[(k-1)*(qnm->R+1)+r], tmp);
+					mpq_div(tmp2, tmp2, G[0]);
+					
+					// Multiply by station multiplicity
+					mpq_t mult; mpq_init(mult);
+					mpq_set_si(mult, qnm->mi[k-1], 1);
+					mpq_mul(tmp2, tmp2, mult);
+					mpq_clear(mult);
+				}
+				
+				mpz_clear(original_L_value);
 				
 				mpq_add(total_q, total_q, tmp2);
 				
@@ -235,7 +259,7 @@ void perfindices(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, bool verbose_output, b
 		}
 		extern double t0, t1;
 		t1 = CPUTIME;
-		printf("Elapsed time (MOM): %.6f s\n", t1-t0);
+		printf("Elapsed time (MoM): %.6f s\n", t1-t0);
 	}
 	mpq_clear(tmp);
 	mpq_clear(tmp2);

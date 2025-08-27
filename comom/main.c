@@ -243,6 +243,28 @@ solve_attempt:
 		return 1;
 	}
 	
+	// Initialize all g_m arrays to prevent accessing uninitialized memory
+	// Use the maximum possible size based on the largest class dimensions
+	long int max_cardG = nck(qnm->M+qnm->R-1,qnm->M);
+	long int max_cardGk = max_cardG * qnm->M;
+	long int max_size = max_cardG + max_cardGk;
+	
+	for (int i = 0; i <= qnm->M; i++) {
+		g_m[i] = mpq_vec(max_size, 0, 1);
+		if (g_m[i] == NULL) {
+			fprintf(stderr, "Error: Memory allocation failed for g_m[%d]\n", i);
+			// Clean up previously allocated
+			for (int j = 0; j < i; j++) {
+				for (int k = 0; k < max_size; k++) {
+					mpq_clear(g_m[j][k]);
+				}
+				free(g_m[j]);
+			}
+			free(g_m);
+			return 1;
+		}
+	}
+	
 	// Storage for marginal normalizing constants G(N-e_r) needed for throughput computation
 	mpq_t* marginal_G = (mpq_t*)calloc(qnm->R, sizeof(mpq_t));
 	if (marginal_G == NULL) {
@@ -316,7 +338,7 @@ solve_attempt:
 		Dn->combs[i-1][r-1]=0;
 	Dn->combs=(int**)sortbynnzpos(Dn->combs,Dn->card,Dn->n);
 
-	n=(int*)int_vec(r,0); /* current population vector */
+	n=(int*)int_vec(qnm->R,0); /* current population vector */
 	for (s=1;s<=r-1;s++) 
 		n[s-1]=qnm->N[s-1];
 
@@ -492,11 +514,7 @@ solve_attempt:
 					fprintf(stderr, "Error: Invalid g_m index %d at class %d, nr=%d\n", idx, r, nr);
 					return 1;
 				}
-				g_m[idx]=mpq_vec(cardG+cardGk,0,1);
-				if (g_m[idx] == NULL) {
-					fprintf(stderr, "Error: Memory allocation failed for g_m[%d]\n", idx);
-					return 1;
-				}
+				// Copy g to g_m[idx] - no need to allocate since already initialized
 				mpq_vecdup(g_m[idx],g,cardG+cardGk);
 				Dn_old = Dn;
 			}
@@ -652,25 +670,46 @@ solve_attempt:
 		mpq_init(tmp2);
 		for (int k = 1; k <= qnm->M; k++) {
 			for (int r = 1; r <= qnm->R; r++) {
-				// Q[k,r] = L[k,r] * G^k(N-e_r) / G(N)
-				mpq_set_z(tmp, qnm->L[k-1][r-1]);
+				// Check if the original demand was 0.0
+				mpz_t original_L_value;
+				mpz_init(original_L_value);
+				mpz_tdiv_q(original_L_value, qnm->L[k-1][r-1], scale_factor);
 				
-				if (r < qnm->R) {
-					// For classes s=1 to R-1: use the saved marginal_Gk values
-					mpq_mul(tmp2, marginal_Gk[k-1][r-1], tmp);
-					mpq_div(Q_kr, tmp2, G_total);
+				if (mpz_cmp_ui(original_L_value, 0) == 0) {
+					// Original demand was 0, so Q should be 0
+					mpq_set_ui(Q_kr, 0, 1);
 				} else {
-					// For final class R: use g_prev if available
-					if (g_prev != NULL) {
-						// G^k(N) for station k is at position (k-1) in g_prev
-						int gk_position = (k-1);
-						mpq_mul(tmp2, g_prev[gk_position], tmp);
-						mpq_div(Q_kr, tmp2, G_total);
-					} else {
-						// Fallback if g_prev not available
+					// Q[k,r] = L[k,r] * G^k(N-e_r) / G(N)
+					mpq_set_z(tmp, qnm->L[k-1][r-1]);
+					
+					if (r < qnm->R) {
+						// For classes s=1 to R-1: use the saved marginal_Gk values
 						mpq_mul(tmp2, marginal_Gk[k-1][r-1], tmp);
 						mpq_div(Q_kr, tmp2, G_total);
+					} else {
+						// For final class R: use g_prev if available
+						if (g_prev != NULL) {
+							// G^k(N) for station k is at position (k-1) in g_prev
+							int gk_position = (k-1);
+							mpq_mul(tmp2, g_prev[gk_position], tmp);
+							mpq_div(Q_kr, tmp2, G_total);
+						} else {
+							// Fallback if g_prev not available
+							mpq_mul(tmp2, marginal_Gk[k-1][r-1], tmp);
+							mpq_div(Q_kr, tmp2, G_total);
+						}
 					}
+				}
+				
+				mpz_clear(original_L_value);
+				
+				// Multiply by the multiplicity mi[k-1] for station k
+				if (qnm->mi[k-1] > 1) {
+					mpq_t mi_q;
+					mpq_init(mi_q);
+					mpq_set_ui(mi_q, qnm->mi[k-1], 1);
+					mpq_mul(Q_kr, Q_kr, mi_q);
+					mpq_clear(mi_q);
 				}
 				
 				mpf_set_q(fval, Q_kr);
@@ -775,28 +814,49 @@ solve_attempt:
 			mpq_set_ui(total_q, 0, 1);
 			
 			for (r = 1; r <= qnm->R; r++) {
-				// Compute queue lengths using MATLAB approach
-				mpq_set_z(tmp, qnm->L[k-1][r-1]);
+				// Check if the original demand was 0.0
+				mpz_t original_L_value;
+				mpz_init(original_L_value);
+				mpz_tdiv_q(original_L_value, qnm->L[k-1][r-1], scale_factor);
 				
-				if (r < qnm->R) {
-					// For classes s=1 to R-1: Q(k,s) = L(k,s)*G(hash(N,oner(N,s),k+1))/ G(hash(N,N,0+1))
-					// Use the saved marginal_Gk values for station k and class r
-					mpq_mul(tmp2, marginal_Gk[k-1][r-1], tmp);
-					mpq_div(Q_kr, tmp2, G_total);
+				if (mpz_cmp_ui(original_L_value, 0) == 0) {
+					// Original demand was 0, so Q should be 0
+					mpq_set_ui(Q_kr, 0, 1);
 				} else {
-					// For final class R: Q(k,R) = L(k,R)*G_1(hash(N,N,k+1))/ G(hash(N,N,0+1))
-					// Use g_prev (G_1) at position corresponding to G^k(N)
-					if (g_prev != NULL) {
-						// G^k(N) for station k is at position (k-1) in g_prev
-						// The first M elements of g_prev are G^1(N), G^2(N), ..., G^M(N)
-						int gk_position = (k-1);
-						mpq_mul(tmp2, g_prev[gk_position], tmp);
-						mpq_div(Q_kr, tmp2, G_total);
-					} else {
-						// Fallback if g_prev not available
+					// Compute queue lengths using MATLAB approach
+					mpq_set_z(tmp, qnm->L[k-1][r-1]);
+					
+					if (r < qnm->R) {
+						// For classes s=1 to R-1: Q(k,s) = L(k,s)*G(hash(N,oner(N,s),k+1))/ G(hash(N,N,0+1))
+						// Use the saved marginal_Gk values for station k and class r
 						mpq_mul(tmp2, marginal_Gk[k-1][r-1], tmp);
 						mpq_div(Q_kr, tmp2, G_total);
+					} else {
+						// For final class R: Q(k,R) = L(k,R)*G_1(hash(N,N,k+1))/ G(hash(N,N,0+1))
+						// Use g_prev (G_1) at position corresponding to G^k(N)
+						if (g_prev != NULL) {
+							// G^k(N) for station k is at position (k-1) in g_prev
+							// The first M elements of g_prev are G^1(N), G^2(N), ..., G^M(N)
+							int gk_position = (k-1);
+							mpq_mul(tmp2, g_prev[gk_position], tmp);
+							mpq_div(Q_kr, tmp2, G_total);
+						} else {
+							// Fallback if g_prev not available
+							mpq_mul(tmp2, marginal_Gk[k-1][r-1], tmp);
+							mpq_div(Q_kr, tmp2, G_total);
+						}
 					}
+				}
+				
+				mpz_clear(original_L_value);
+				
+				// Multiply by the multiplicity mi[k-1] for station k
+				if (qnm->mi[k-1] > 1) {
+					mpq_t mi_q;
+					mpq_init(mi_q);
+					mpq_set_ui(mi_q, qnm->mi[k-1], 1);
+					mpq_mul(Q_kr, Q_kr, mi_q);
+					mpq_clear(mi_q);
 				}
 				mpq_add(total_q, total_q, Q_kr);
 				
@@ -853,6 +913,17 @@ solve_attempt:
 	}
 	free(marginal_Gk);
 	
+	// Cleanup g_m arrays
+	for (int i = 0; i <= qnm->M; i++) {
+		if (g_m[i]) {
+			for (int k = 0; k < max_size; k++) {
+				mpq_clear(g_m[i][k]);
+			}
+			free(g_m[i]);
+		}
+	}
+	free(g_m);
+	
 	mpz_clear(scale_factor);
 	return 0;
 
@@ -860,7 +931,7 @@ singular_matrix_detected:
 	// If singular and no perturbation yet, apply automatic perturbation at digit 20
 	if (!auto_perturbation && perturbation_digit == 0) {
 		fprintf(stderr, "\nWarning: Model cannot be solved exactly by the CoMoM solver.\n");
-		fprintf(stderr, "The system of equations is singular. Automatically applying perturbation at digit 20.\n\n");
+		fprintf(stderr, "The system of equations is singular. Automatically applying perturbation at digit 20.\n");
 		perturbation_digit = 20;
 		auto_perturbation = true;
 		
@@ -899,7 +970,10 @@ singular_matrix_detected:
 		if (g_m) {
 			for(int i = 0; i <= qnm->M; i++) {
 				if(g_m[i]) {
-					// Free the g_m[i] vector - we don't know exact size so just free the pointer
+					// Clear all mpq_t values in g_m[i] before freeing
+					for (int k = 0; k < max_size; k++) {
+						mpq_clear(g_m[i][k]);
+					}
 					free(g_m[i]);
 				}
 			}
