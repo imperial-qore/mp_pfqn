@@ -22,8 +22,8 @@ make
 # Run a solver
 ./bin/mva models/02_bottleneck_study.qn
 ./bin/ca models/02_bottleneck_study.qn
-./bin/mom models/02_bottleneck_study.qn
 ./bin/recal models/02_bottleneck_study.qn
+./bin/mom models/02_bottleneck_study.qn
 ./bin/comom models/02_bottleneck_study.qn
 ```
 If you wish to recompile after changes, run 
@@ -65,8 +65,8 @@ Examples are available under the models/ folders.
 # Run different solvers
 ./bin/mva model.qn      # Mean Value Analysis
 ./bin/ca model.qn       # Convolution Algorithm
-./bin/mom model.qn      # Method of Moments
 ./bin/recal model.qn    # Recursion by Chain Algorithm
+./bin/mom model.qn      # Method of Moments
 ./bin/comom model.qn    # Class-Oriented Method of Moments
 ```
 
