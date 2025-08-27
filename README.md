@@ -5,8 +5,8 @@ The mp_pfqn library offers fast C solvers for product-form queueing networks usi
 - Current solvers:
   - Mean Value Analysis (MVA) [1]
   - Convolution Algorithm (CA) [2]
-  - Method of Moments (MoM) [3]
-  - Recursion by Chain Algorithm (RECAL) [4]
+  - Recursion by Chain Algorithm (RECAL) [3]
+  - Method of Moments (MoM) [4]
   - Class-Oriented Method of Moments (CoMoM) [5]
 
 ## Quick Start
@@ -167,9 +167,9 @@ CoMoM supports the same command-line options as MoM (see table above). The Class
 
 [2]: Reiser, M. and Kobayashi, H. (1974), *Queuing Networks with Multiple Closed Chains: Theory and Computational Algorithms,* IBM Research Report RC-4919, July, 1974.
 
-[3]: Casale (2006), *An efficient algorithm for the exact analysis of multiclass queueing networks with large population sizes,* Proc. of ACM SIGMETRICS 2006.
+[3]: Conway, A. E. and Georganas, N. D. (1986), *RECAL—a new efficient algorithm for the exact analysis of multiple-chain closed queuing networks,* J. ACM 33, 4 (Oct. 1986), 768–791.
 
-[4]: Conway, A. E. and Georganas, N. D. (1986), *RECAL—a new efficient algorithm for the exact analysis of multiple-chain closed queuing networks,* J. ACM 33, 4 (Oct. 1986), 768–791.
+[4]: Casale (2006), *An efficient algorithm for the exact analysis of multiclass queueing networks with large population sizes,* Proc. of ACM SIGMETRICS 2006.
 
 [5]: Casale, G. (2009), *CoMoM: Efficient Class-Oriented Evaluation of Multiclass Performance Models,* IEEE Trans. Softw. Eng. 35, 2 (March 2009), 162–177.
 
