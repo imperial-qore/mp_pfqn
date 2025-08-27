@@ -88,6 +88,16 @@ int main(int argc,char ** argv)
 	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output && !exact_output) {
 		printmodel(qn);
 	}
+	
+	// Check total population and warn if too large
+	int total_population = 0;
+	for (int r = 0; r < qn->R; r++) {
+		total_population += qn->N[r];
+	}
+	if (total_population > 30) {
+		fprintf(stderr, "\nWarning: Total population is %d (> 30). RECAL is likely to fail due to memory constraints.\n", total_population);
+		fprintf(stderr, "Consider using a different solver for models with large populations.\n\n");
+	}
 
 	mpq_t G_exact;
 	mpq_init(G_exact);
@@ -324,6 +334,8 @@ int main(int argc,char ** argv)
 		mpq_clear(mi_k);
 		mpf_clear(Q_float);
 		
+		// Clear progress line before printing results
+		fprintf(stderr, "\r                                                                                  \r");
 		// Now print all results
 		printf("========== Performance Metrics ==========\n");
 		printf("Normalizing constant:\n");
