@@ -1,2 +1,0 @@
-mpq_ludcmp_progress.o: mpq_ludcmp_progress.c ../deps/local/include/gmp.h \
- ../gmpla/gmpla.h profiling.h
