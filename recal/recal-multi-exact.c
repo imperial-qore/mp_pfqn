@@ -108,16 +108,7 @@ void recal_multi_exact_internal(qnmodel* qn, mpq_t Gex, bool show_progress)
 			pop_vector[r-1] = nr; // Update current population
 			
 			// Print progress: population vector and elapsed time
-			// Only print if not at the final iteration
-			bool is_final = true;
-			for (int pr = 0; pr < R; pr++) {
-				if (pop_vector[pr] < qn->N[pr]) {
-					is_final = false;
-					break;
-				}
-			}
-			
-			if (!is_final && show_progress) {
+			if (show_progress) {
 				// Calculate width needed for each population value
 				int* widths = (int*) calloc(R, sizeof(int));
 				for (int pr=0;pr<R;pr++) {
@@ -329,6 +320,9 @@ void recal_marginal_exact(qnmodel* qn, int class_to_reduce, mpq_t G_marginal)
 	}
 	
 	// Compute G(N-e_r) using the modified population
+	// Show progress for marginal computation
+	fprintf(stderr, "\rComputing X[%d] marginal...                    ", class_to_reduce + 1);
+	fflush(stderr);
 	recal_multi_exact_internal(&temp_qn, G_marginal, false);
 	
 	// Free temporary arrays
@@ -367,6 +361,9 @@ void recal_queue_marginal_exact(qnmodel* qn, int class_to_reduce, int station_k,
 	temp_qn.mi[station_k]++;
 	
 	// Compute G^k(N-e_r) using the modified population and multiplicity
+	// Show progress for queue marginal computation
+	fprintf(stderr, "\rComputing Q[%d,%d] marginal...                    ", station_k + 1, class_to_reduce + 1);
+	fflush(stderr);
 	recal_multi_exact_internal(&temp_qn, G_k_marginal, false);
 	
 	// Free temporary arrays

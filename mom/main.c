@@ -38,6 +38,17 @@ void printcompact(int*n,int R, double elapsed_time)
 	fflush(stdout);
 }
 
+void printcompact_with_setup(int*n,int R, double elapsed_time, double setup_time)
+{
+	int s;
+	fprintf(stdout,"\r\033[K");
+	fprintf(stdout,"n=(");
+	for (s=0;s<R-1;s++)
+	    fprintf(stdout,"%d,",n[s]);
+	fprintf(stdout,"%d) - %.6f s [Basis setup: %.6f s]",n[R-1], elapsed_time, setup_time);
+	fflush(stdout);
+}
+
 // Generate a random permutation of integers 1 to n using Fisher-Yates shuffle
 void generate_permutation(int* perm, int n, unsigned int seed) {
 	// Initialize with 1 to n
@@ -101,6 +112,7 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 	LS* A=NULL;
 	double step_start, step_elapsed;
 	double class_start, class_elapsed;
+	double setup_start, setup_elapsed;
 	
 	mpq_init(tmp);
 	mpq_init(tmp2);
@@ -121,11 +133,14 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 		
 		if(r==1) /* if this is the first processed population */
 		{
-			/* initialize linear system */	
-			A =(LS*) setupls(qnm->L,n,qnm->Z,qnm->mi,m,r);
+			/* initialize linear system */
+			setup_start = CPUTIME;
+			int show_progress = !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output && !bounds_output;
+			A =(LS*) setupls_progress(qnm->L,n,qnm->Z,qnm->mi,m,r,setup_start,show_progress);
 			if (A == NULL) {
 				return -1; // Signal singular matrix
 			}
+			setup_elapsed = CPUTIME - setup_start;
 			b=(mpq_vec_t)mpq_vec(m,0,1);
 			b2=(mpq_vec_t)mpq_vec(m,0,1);
 			/* the norm.consts for n=(0,0,...,0) are equal to 1 */
@@ -144,10 +159,13 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 				free(A->C[t++].nondiag->coeff);
 			}
 			free(A->A12); free(A->B1r); free(A->B2r); free(A);
-			A =(LS*) setupls(qnm->L,n,qnm->Z,qnm->mi,m,r);
+			setup_start = CPUTIME;
+			int show_progress = !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output && !bounds_output;
+			A =(LS*) setupls_progress(qnm->L,n,qnm->Z,qnm->mi,m,r,setup_start,show_progress);
 			if (A == NULL) {
 				return -1; // Signal singular matrix
 			}
+			setup_elapsed = CPUTIME - setup_start;
 			for (t=0;t<nck(m+r-2,r-1)*(r-1);t++)
 			{
 				mpq_clear(b[t]);
@@ -191,8 +209,8 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 		{
 			step_start = CPUTIME;
 			step_elapsed = step_start - t0;
-			if (debug_output && !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
-				printcompact(n,qnm->R,step_elapsed);
+			if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output && !bounds_output) {
+				printcompact_with_setup(n,qnm->R,step_elapsed,setup_elapsed);
 			}
 			/** at this point g is equal to gr **/
 			/* if this is the last iteration, save gr */
@@ -225,13 +243,13 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 		}
 		n[r-1]=qnm->N[r-1];
 		step_elapsed = CPUTIME - t0;
-		if (debug_output && !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
-			printcompact(n,qnm->R,step_elapsed);
+		if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output && !bounds_output) {
+			printcompact_with_setup(n,qnm->R,step_elapsed,setup_elapsed);
 			class_elapsed = CPUTIME - class_start;
 			printf(" (Class %d: %.6f s)\n", r, class_elapsed);
 		}
 	}
-	if (debug_output && !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
+	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output && !bounds_output) {
 		printf("\n");
 	}
 	mdecrease(qnm,G,Gk,g,gr,verbose_output,log_output,normconst_output,normconst_g_output,throughput_output,queue_output,debug_output,bounds_output,scale_factor);
