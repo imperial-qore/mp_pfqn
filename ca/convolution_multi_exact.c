@@ -1,12 +1,19 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <math.h>		
 #include <gmp.h>
+#include <sys/time.h>
+#include <sys/resource.h>
 #include "mom.h"
 #include "popcycle.h"
 
+#define CPUTIME (getrusage(RUSAGE_SELF,&ruse), ruse.ru_utime.tv_sec + ruse.ru_stime.tv_sec + 1e-6 * (ruse.ru_utime.tv_usec + ruse.ru_stime.tv_usec))
+
 void convolution_multi_exact(mpq_t *g, mpf_t *X, mpf_t **Q)
 {
+	struct rusage ruse;
+	double t_start = CPUTIME;
 	int M=qnm->M;
 	int R=qnm->R;
 	int r,t,m;
@@ -78,6 +85,39 @@ void convolution_multi_exact(mpq_t *g, mpf_t *X, mpf_t **Q)
 	{
 	curindex++; // current population index
 	
+	// Print progress: population vector and elapsed time
+	// Only print if not at the final iteration
+	bool is_final = true;
+	for (r = 0; r < R; r++) {
+		if (n[r] < N[r]) {
+			is_final = false;
+			break;
+		}
+	}
+	
+	if (!is_final) {
+		// Calculate width needed for each population value
+		int* widths = (int*) calloc(R, sizeof(int));
+		for (r=0;r<R;r++) {
+			int val = N[r];
+			widths[r] = 1;
+			while (val >= 10) {
+				widths[r]++;
+				val /= 10;
+			}
+		}
+		
+		fprintf(stderr, "\rn=(");
+		for (r=0;r<R;r++) {
+			fprintf(stderr, "%*d", widths[r], n[r]);
+			if (r<R-1) fprintf(stderr, ",");
+		}
+		double t_current = CPUTIME;
+		fprintf(stderr, ") - Time: %.2f s  ", t_current - t_start);
+		fflush(stderr);
+		free(widths);
+	}
+	
 	// If think times present, first compute G[0,n] based on Z (delay server)
 	if (hasZ) {
 		mpq_set_ui(G[curindex][0], 1, 1);
@@ -145,6 +185,9 @@ void convolution_multi_exact(mpq_t *g, mpf_t *X, mpf_t **Q)
 	}
 	}
 	while(!nextpop(n,N,R));
+	
+	// Clear the progress line before performance metrics display
+	fprintf(stderr, "\r%*s\r", 80, "");
 	
 	// Return the normalizing constant G(N)
 	if (g != NULL && g[0] != NULL) {
@@ -222,6 +265,9 @@ void convolution_multi_exact(mpq_t *g, mpf_t *X, mpf_t **Q)
 		// For each station k, compute Q[k][r] = mi[k] * G^k(N-er) / G(N)
 		for (int k = 0; k < M; k++) {
 			for (int r = 0; r < R; r++) {
+				// Print progress for Q computations
+				fprintf(stderr, "\rComputing Q[%d][%d] - Time: %.2f s  ", k+1, r+1, CPUTIME - t_start);
+				fflush(stderr);
 				if (N[r] > 0) {
 					// Create population N-er
 					N[r]--;
@@ -347,6 +393,9 @@ void convolution_multi_exact(mpq_t *g, mpf_t *X, mpf_t **Q)
 				}
 			}
 		}
+		
+		// Clear the Q computation progress line
+		fprintf(stderr, "\r%*s\r", 80, "");
 		
 		// Clean up checkpoint
 		for (t=1;t<=planesize0;t++) {

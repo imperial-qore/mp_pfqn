@@ -1,8 +1,13 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <gmp.h>
+#include <sys/time.h>
+#include <sys/resource.h>
 #include "gmpla.h"
 #include "util.h"
+
+#define CPUTIME (getrusage(RUSAGE_SELF,&ruse), ruse.ru_utime.tv_sec + ruse.ru_stime.tv_sec + 1e-6 * (ruse.ru_utime.tv_usec + ruse.ru_stime.tv_usec))
 
 // Function to compute marginal normalizing constant G(N-e_r) for throughput calculation
 void recal_marginal_exact(qnmodel* qn, int class_to_reduce, mpq_t G_marginal);
@@ -13,6 +18,8 @@ void recal_queue_marginal_exact(qnmodel* qn, int class_to_reduce, int station_k,
 
 void recal_multi_exact(qnmodel* qn, mpq_t Gex)
 {
+	struct rusage ruse;
+	double t_start = CPUTIME;
 	int r;
 	int M=qn->M;
 	int R=qn->R;
@@ -67,6 +74,7 @@ void recal_multi_exact(qnmodel* qn, mpq_t Gex)
 	}
 
 	int nr, n=0;
+	int *pop_vector=calloc(R,sizeof(int)); // To track current population
 	int *m=calloc(Mz,sizeof(int));
 	if (m == NULL) {
 		fprintf(stderr, "Error: Failed to allocate memory for m array (%d elements)\n", Mz);
@@ -82,6 +90,7 @@ void recal_multi_exact(qnmodel* qn, mpq_t Gex)
 	if (mZ == NULL) {
 		fprintf(stderr, "Error: Failed to allocate memory for mZ array (%d elements)\n", M);
 		free(m);
+		free(pop_vector);
 		for (i=1;i<=G_1_size;i++)
 			mpq_clear(G_1[i-1]);
 		free(G_1);
@@ -96,6 +105,40 @@ void recal_multi_exact(qnmodel* qn, mpq_t Gex)
 		for (nr=1;nr<=qn->N[r-1];nr++)
 		{
 			n++;
+			pop_vector[r-1] = nr; // Update current population
+			
+			// Print progress: population vector and elapsed time
+			// Only print if not at the final iteration
+			bool is_final = true;
+			for (int pr = 0; pr < R; pr++) {
+				if (pop_vector[pr] < qn->N[pr]) {
+					is_final = false;
+					break;
+				}
+			}
+			
+			if (!is_final) {
+				// Calculate width needed for each population value
+				int* widths = (int*) calloc(R, sizeof(int));
+				for (int pr=0;pr<R;pr++) {
+					int val = qn->N[pr];
+					widths[pr] = 1;
+					while (val >= 10) {
+						widths[pr]++;
+						val /= 10;
+					}
+				}
+				
+				fprintf(stderr, "\rn=(");
+				for (int pr=0;pr<R;pr++) {
+					fprintf(stderr, "%*d", widths[pr], pop_vector[pr]);
+					if (pr<R-1) fprintf(stderr, ",");
+				}
+				double t_current = CPUTIME;
+				fprintf(stderr, ") - Time: %.2f s  ", t_current - t_start);
+				fflush(stderr);
+				free(widths);
+			}
 			int** I_1=multichoose(Mz,(Ntot+1)-n);
 			if (I_1 == NULL) {
 				fprintf(stderr, "Error: Failed to allocate memory in multichoose. Model may be too large.\n");
@@ -107,6 +150,7 @@ void recal_multi_exact(qnmodel* qn, mpq_t Gex)
 				free(G);
 				free(m);
 				free(mZ);
+				free(pop_vector);
 				return;
 			}
 			int** I=multichoose(Mz,(Ntot+1)-(n+1));
@@ -121,6 +165,7 @@ void recal_multi_exact(qnmodel* qn, mpq_t Gex)
 				free(G);
 				free(m);
 				free(mZ);
+				free(pop_vector);
 				return;
 			}
 			for (i=1;i<=nck(Mz+(Ntot+1)-(n+1)-1,(Ntot+1)-(n+1));i++)
@@ -150,6 +195,7 @@ void recal_multi_exact(qnmodel* qn, mpq_t Gex)
 						free(G);
 						free(m);
 						free(mZ);
+						free(pop_vector);
 						free(I_1);
 						free(I);
 						return;
@@ -170,6 +216,7 @@ void recal_multi_exact(qnmodel* qn, mpq_t Gex)
 							free(G);
 							free(m);
 							free(mZ);
+							free(pop_vector);
 							free(I_1);
 							free(I);
 							return;
@@ -233,6 +280,10 @@ void recal_multi_exact(qnmodel* qn, mpq_t Gex)
 			I_1=I;
 		}
 	}
+	
+	// Clear the progress line before performance metrics display
+	fprintf(stderr, "\r%*s\r", 80, "");
+	
 	mpq_set(Gex, G[0]);
 	
 	// Free memory
@@ -244,6 +295,8 @@ void recal_multi_exact(qnmodel* qn, mpq_t Gex)
 	free(G);
 	free(m);
 	free(mZ);
+	free(pop_vector);
+	
 	return;
 }
 

@@ -2,10 +2,16 @@
 #include <stdlib.h>
 #include <gmp.h>
 #include <math.h>
+#include <sys/time.h>
+#include <sys/resource.h>
 #include "util.h"
+
+#define CPUTIME (getrusage(RUSAGE_SELF,&ruse), ruse.ru_utime.tv_sec + ruse.ru_stime.tv_sec + 1e-6 * (ruse.ru_utime.tv_usec + ruse.ru_stime.tv_usec))
 
 double mva_multi(qnmodel* qn, mpq_t *X, mpq_t **Q, mpq_t G)
 {
+	struct rusage ruse;
+	double t_start = CPUTIME;
 	int R=qn->R;
 	int r,t,m;
 	int M=qn->M;
@@ -60,6 +66,28 @@ double mva_multi(qnmodel* qn, mpq_t *X, mpq_t **Q, mpq_t G)
 	do	
 	{
 		curindex++; // current population index
+		
+		// Print progress: population vector and elapsed time
+		// Calculate width needed for each population value
+		int* widths = (int*) calloc(R, sizeof(int));
+		for (r=0;r<R;r++) {
+			int val = qn->N[r];
+			widths[r] = 1;
+			while (val >= 10) {
+				widths[r]++;
+				val /= 10;
+			}
+		}
+		
+		fprintf(stderr, "\rn=(");
+		for (r=0;r<R;r++) {
+			fprintf(stderr, "%*d", widths[r], n[r]);
+			if (r<R-1) fprintf(stderr, ",");
+		}
+		double t_current = CPUTIME;
+		fprintf(stderr, ") - Time: %.2f s  ", t_current - t_start);
+		fflush(stderr);
+		free(widths);
 		
 		for (r=1;r<=R;r++)
 		{
@@ -160,6 +188,9 @@ double mva_multi(qnmodel* qn, mpq_t *X, mpq_t **Q, mpq_t G)
 		}
 	}
 	while(!nextpop(n,qn->N,R));
+	
+	// Clear the progress line
+	fprintf(stderr, "\n");
 	
 	// Set final G using exact arithmetic
 	mpq_set(G, G_accumulator);
