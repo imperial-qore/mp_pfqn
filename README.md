@@ -48,6 +48,8 @@ m2 L21 L22 ... L2R  # Queue 2: multiplicity, demands at station 2 per class
 ...
 mM LM1 LM2 ... LMR  # Queue M: multiplicity, demands at station M per class
 ```
+The demand Lir=Sir*Vir is the product of the mean service time Sir and mean number of visits Vir, both for class-r jobs at station i. See the routing2visits utility to convert a routing probability matrix into the corresponding Vir values.
+
 *IMPORTANT*: All values must be passed as integers. 
 
 Examples are available under the models/ folders.
