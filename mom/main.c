@@ -418,20 +418,20 @@ int main(int argc, char**argv)
 	}
 	
 	// Try to solve the model
-	int result = solve_model(qnm, argc, argv, verbose_output, log_output, 
-	                        normconst_output, normconst_g_output, throughput_output, 
-	                        queue_output, debug_output, bounds_output, 
+	int result = solve_model(qnm, argc, argv, verbose_output, log_output,
+	                        normconst_output, normconst_g_output, throughput_output,
+	                        queue_output, debug_output, bounds_output,
 	                        perturbation_digit, perturbation_seed, auto_perturbation,
 	                        scale_factor, original_L, original_Z);
-	
+
 	// If singular and no perturbation yet, apply automatic perturbation
 	if (result == -1 && !auto_perturbation && perturbation_digit == 0) {
 		fprintf(stderr, "\nWarning: Model cannot be solved exactly by the MoM solver.\n");
 		fprintf(stderr, "The system of equations is singular. Automatically applying perturbation at digit 20.\n\n");
 		perturbation_digit = 20;
 		auto_perturbation = true;
-		
-		// Store original parameters
+
+		// Store original parameters if not already stored
 		if (original_L == NULL) {
 			original_L = (mpz_t**)malloc(qnm->M * sizeof(mpz_t*));
 			for(int i = 0; i < qnm->M; i++) {
@@ -447,22 +447,22 @@ int main(int argc, char**argv)
 				mpz_set(original_Z[j], qnm->Z[j]);
 			}
 		}
-		
+
 		// Apply perturbation
 		mpz_clear(scale_factor);
 		mpz_init(scale_factor);
 		mpz_set_ui(scale_factor, 1);  // Reset to 1 before applying perturbation
 		apply_perturbation_to_model(qnm, perturbation_digit, perturbation_seed, scale_factor);
-		
+
 		// Print model with perturbation info
 		if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
 			printmodel_with_perturbation(qnm, perturbation_digit, scale_factor, perturbation_seed, original_L, original_Z);
 		}
-		
+
 		// Retry with perturbation
-		result = solve_model(qnm, argc, argv, verbose_output, log_output, 
-		                    normconst_output, normconst_g_output, throughput_output, 
-		                    queue_output, debug_output, bounds_output, 
+		result = solve_model(qnm, argc, argv, verbose_output, log_output,
+		                    normconst_output, normconst_g_output, throughput_output,
+		                    queue_output, debug_output, bounds_output,
 		                    perturbation_digit, perturbation_seed, auto_perturbation,
 		                    scale_factor, original_L, original_Z);
 		if (result == -1) {
@@ -473,6 +473,19 @@ int main(int argc, char**argv)
 			fprintf(stderr, "  %s %s -p 30     # Apply perturbation at 30th digit\n", argv[0], model_file);
 			fprintf(stderr, "  %s %s -p 15 -s 12345  # Different perturbation at 15th digit with custom seed\n\n", argv[0], model_file);
 			return 1;
+		}
+
+		// After successful solve with automatic perturbation, restore original model parameters
+		// so that the output is computed relative to the original (unperturbed) model
+		if (auto_perturbation && original_L != NULL) {
+			for(int i = 0; i < qnm->M; i++) {
+				for(int j = 0; j < qnm->R; j++) {
+					mpz_set(qnm->L[i][j], original_L[i][j]);
+				}
+			}
+			for(int j = 0; j < qnm->R; j++) {
+				mpz_set(qnm->Z[j], original_Z[j]);
+			}
 		}
 	} else if (result == -1) {
 		fprintf(stderr, "\nError: Model cannot be solved even with perturbation.\n");
