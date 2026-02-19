@@ -12,4 +12,3 @@ extern double MULTIME; // multiplcation time counter
 extern double DIVTIME; // division time counter
 extern double t0,t1;
 extern struct rusage ruse;
-extern int getrusage();

@@ -469,6 +469,18 @@ solve_attempt:
 
 	LS* linsys=NULL;
 	double setup_start, setup_elapsed;
+
+		/* Save initial g (before any iteration) into g_m if needed.
+		 * When N[r] <= M, the inner loop doesn't produce enough saved vectors.
+		 * g_m[N[r]] should hold the initial g for class r, corresponding to
+		 * population n_r=0.  This matches the MATLAB code's Branch A propagation
+		 * equations that carry the initial basis through the full matrix solve. */
+		if (r < qnm->R && qnm->N[r-1] <= qnm->M) {
+			int idx = qnm->N[r-1];
+			mpq_vecdup(g_m[idx], g, cardG+cardGk);
+			Dn_old = Dn;
+		}
+
 		for (nr=1;nr<=qnm->N[r-1];nr++)
 		{
 			n[r-1] = nr;	
