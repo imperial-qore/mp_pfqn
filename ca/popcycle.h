@@ -1,6 +1,4 @@
-#ifndef bool
-#define bool int
-#endif
+#include <stdbool.h>
 
 int* initpop(int R);
 void printpop(int*n, int R);
