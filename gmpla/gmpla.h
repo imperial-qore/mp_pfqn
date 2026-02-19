@@ -47,5 +47,7 @@ mpq_vec_t mpq_vec(int rows,int valuenum, int valueden);
 void mpq_vecdup(mpq_vec_t v1, mpq_vec_t v2, int n);
 void mpq_vecprint(mpq_vec_t, int n);
 void mpq_mspprint(mpq_msp_t msp);
+void mpq_matvecmul(mpq_vec_t rop, mpq_mat_t A, mpq_vec_t v, int N);
+void mpq_mattransmul(mpq_mat_t rop, mpq_mat_t A, mpq_mat_t B, int nrows, int ncols);
 
 #endif
