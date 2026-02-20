@@ -50,4 +50,7 @@ void mpq_mspprint(mpq_msp_t msp);
 void mpq_matvecmul(mpq_vec_t rop, mpq_mat_t A, mpq_vec_t v, int N);
 void mpq_mattransmul(mpq_mat_t rop, mpq_mat_t A, mpq_mat_t B, int nrows, int ncols);
 
+/* LinBox solver (C++ backend, extern "C" interface) */
+int linbox_solve_dense(mpq_mat_t A, mpq_vec_t b, int N);
+
 #endif

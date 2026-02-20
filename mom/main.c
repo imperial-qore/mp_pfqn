@@ -20,6 +20,7 @@ struct rusage ruse;
 /* Define global variables from mom.h */
 qnmodel* qnm;
 bool INTERACTIVE,RANDGEN,CANON,ZSCALE,DEBUG,VERBOSE;
+bool USE_LINBOX;
 
 
 void printcompact(int*n,int R, double elapsed_time)
@@ -278,7 +279,8 @@ int main(int argc, char**argv)
 	int perturbation_seed = 23000;
 	char* model_file = NULL;
 	bool auto_perturbation = false;
-	
+	bool use_linbox = false;
+
 	if(argc < 2)
 	{
 		printf("USAGE: %s [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-d|--exact] [-b|--bounds] [-p digit] [-s seed] model.qn\n", argv[0]);
@@ -292,6 +294,7 @@ int main(int argc, char**argv)
 		printf("  -h, --help       : Print this help message\n");
 		printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
 		printf("  -s seed          : Set perturbation seed (default: 23000)\n");
+		printf("  --linbox         : Use LinBox Dixon p-adic lifting solver (avoids coefficient blowup)\n");
 		return -1;
 	}
 	
@@ -322,6 +325,7 @@ int main(int argc, char**argv)
 			printf("  -h, --help       : Print this help message\n");
 			printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
 			printf("  -s seed          : Set perturbation seed (default: 23000)\n");
+			printf("  --linbox         : Use LinBox Dixon p-adic lifting solver (avoids coefficient blowup)\n");
 			return 0;
 		} else if(strcmp(argv[i], "-p") == 0) {
 			if(i + 1 < argc) {
@@ -341,6 +345,8 @@ int main(int argc, char**argv)
 				printf("Error: -s option requires a seed argument\n");
 				return -1;
 			}
+		} else if(strcmp(argv[i], "--linbox") == 0) {
+			use_linbox = true;
 		} else if(argv[i][0] == '-') {
 			// Skip unknown options silently - no additional logic needed
 		} else {
@@ -360,6 +366,7 @@ int main(int argc, char**argv)
 		printf("  -h, --help       : Print this help message\n");
 		printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
 		printf("  -s seed          : Set perturbation seed (default: 23000)\n");
+		printf("  --linbox         : Use LinBox Dixon p-adic lifting solver (avoids coefficient blowup)\n");
 		return -1;
 	}
 	
@@ -369,6 +376,7 @@ int main(int argc, char**argv)
 		return -1;
 	}
 	
+	USE_LINBOX = use_linbox;
 	qnm=(qnmodel*)readmodel(model_file);
 	
 	// Store original parameters for printing

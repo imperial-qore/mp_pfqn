@@ -208,18 +208,22 @@ LS* setupls_progress(mpz_t** L, int* n, mpz_t *Z, int* mi, int m, int r, double 
 	{
 		for (k=0;k<nck(m,h);k++)
 		{
-//		if(DEBUG) 
+//		if(DEBUG)
 		//printf("%d/%d\n ",k,nck(m,h)-1);
 		fflush(stdout);
 //		if(DEBUG) mpq_matprint(ls->C[t+k].diag,nck(r-1,r-h)*r,nck(r-1,r-h)*r);
 //		if(DEBUG) mpq_mspprint(ls->C[t+k].nondiag);
 		t0=CPUTIME;
-		if (show_progress) {
+		if (USE_LINBOX) {
+			/* Skip LU decomposition — LinBox will solve from the original matrix.
+			 * Set sentinel so blocksolve knows the block is valid. */
+			ls->C[t+k].lu_indices=(int*)1;
+		} else if (show_progress) {
 			ls->C[t+k].lu_indices=(int*)mpq_ludcmp_progress(ls->C[t+k].diag,nck(r-1,r-h)*r, setup_start, n, r, show_progress);
 		} else {
 			ls->C[t+k].lu_indices=(int*)mpq_ludcmp(ls->C[t+k].diag,nck(r-1,r-h)*r);
 		}
-		if (ls->C[t+k].lu_indices == NULL) {
+		if (!USE_LINBOX && ls->C[t+k].lu_indices == NULL) {
 			// Singular matrix encountered during LU decomposition
 			// Free allocated memory before returning
 			int ii, jj;

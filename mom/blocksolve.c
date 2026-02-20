@@ -31,7 +31,16 @@ mpq_vec_t blocksolve(LS* ls, mpq_vec_t b)
 			AORSCTR++;
 			mpq_sub(bg[i],b[nck(ls->m+ls->r-1,ls->r)*ls->r-w+i],bg[i]);
 		}
-		if (mpq_lubksb(ls->C[ls->numdiagblocks-t].diag,bg,n,ls->C[ls->numdiagblocks-t].lu_indices) < 0) {
+		if (USE_LINBOX) {
+			if (linbox_solve_dense(ls->C[ls->numdiagblocks-t].diag, bg, n) < 0) {
+				for (i=n-1;i>=0;i--)
+					mpq_clear(bg[i]);
+				for (i=0;i<nck(ls->m+ls->r-1,ls->r)*ls->r;i++)
+					mpq_clear(g[i]);
+				free(g);
+				return NULL;
+			}
+		} else if (mpq_lubksb(ls->C[ls->numdiagblocks-t].diag,bg,n,ls->C[ls->numdiagblocks-t].lu_indices) < 0) {
 			// Singular matrix encountered
 			for (i=n-1;i>=0;i--)
 				mpq_clear(bg[i]);

@@ -35,6 +35,7 @@ typedef struct
 extern qnmodel* qnm;
 
 extern bool INTERACTIVE,RANDGEN,CANON,ZSCALE,DEBUG,VERBOSE;
+extern bool USE_LINBOX;
 
 #define copy_Gk_in_g(Gk,g){int t; for(t=0;t<cardGk;t++) mpq_set(g[t],Gk[t]); }
 #define copy_G_in_g(G,g){int t; for(t=0;t<cardG;t++) mpq_set(g[cardGk+t],G[t]); }
