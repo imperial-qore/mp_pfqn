@@ -202,8 +202,8 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 			gr=(mpq_vec_t)mpq_vec(cardGk+cardG,0,1);
 			copy_Gk_in_g(Gk,g);
 			copy_G_in_g(G,g);
-			/* annihilate unused normalizing constants */
-			for(s=0;s<r;s++) if(mpz_cmp_ui(qnm->Z[s], 0) == 0) for(t=0;t<nck(m+r-2,r-1);t++) mpq_set_si(g[cardGk+t*r+1+s],0,1);
+			/* annihilate unused normalizing constants (classes 0..r-2 only; class r-1 has no G component) */
+			for(s=0;s<r-1;s++) if(mpz_cmp_ui(qnm->Z[s], 0) == 0) for(t=0;t<nck(m+r-2,r-1);t++) mpq_set_si(g[cardGk+t*r+1+s],0,1);
 		}
 		/* start solving the sequence of linear systems */
 		for (n[r-1]=1;n[r-1]<=qnm->N[r-1];n[r-1]++) /* for all population of class r */ 
@@ -238,8 +238,8 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 			copy_Gk_in_g(Gk,g);
 			copy_G_in_g(G,g);
 			free_Gk();
-			/* annihilate unused normalizing constants */
-			for(s=0;s<r;s++) if(mpz_cmp_ui(qnm->Z[s], 0) == 0) for(t=0;t<nck(m+r-2,r-1);t++) mpq_set_si(g[cardGk+t*r+1+s],0,1);
+			/* annihilate unused normalizing constants (classes 0..r-2 only; class r-1 has no G component) */
+			for(s=0;s<r-1;s++) if(mpz_cmp_ui(qnm->Z[s], 0) == 0) for(t=0;t<nck(m+r-2,r-1);t++) mpq_set_si(g[cardGk+t*r+1+s],0,1);
 			/* G,g and gr are not freed because we need them at the next cycle */	
 		}
 		n[r-1]=qnm->N[r-1];

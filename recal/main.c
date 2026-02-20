@@ -116,6 +116,7 @@ int main(int argc,char ** argv)
 		printf("%.15e\n", logG);
 	} else if (normconst_output) {
 		// Print exact numerator and denominator
+		mpq_canonicalize(G_exact);
 		mpz_t num, den;
 		mpz_init(num);
 		mpz_init(den);

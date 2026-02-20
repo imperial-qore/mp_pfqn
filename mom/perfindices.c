@@ -52,6 +52,7 @@ void perfindices(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, bool verbose_output, b
 		return;
 	} else if (normconst_output) {
 		// Print exact numerator and denominator
+		mpq_canonicalize(G_scaled);
 		mpz_t num, den;
 		mpz_init(num);
 		mpz_init(den);
