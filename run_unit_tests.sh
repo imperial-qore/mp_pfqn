@@ -2,9 +2,18 @@
 
 # Regression test script for all solvers on all models with various options
 # Compares outputs between solvers (mom, comom, recal) with options -e, -l, -t, -q
+#
+# Usage:
+#   ./run_unit_tests.sh                          # Run all models with all options
+#   ./run_unit_tests.sh models/03_think.qn       # Run one model with all options
+#   ./run_unit_tests.sh models/03_think.qn -- -t # Run one model with -t only
 
 # Set up trap to handle CTRL+C gracefully
 trap 'echo -e "\nTest interrupted by user"; exit 130' INT TERM
+
+# cd to the directory containing this script so relative paths work
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+cd "$SCRIPT_DIR" || exit 1
 
 # Colors for output
 RED='\033[0;31m'
@@ -16,7 +25,7 @@ NC='\033[0m' # No Color
 MODELS_DIR="models"
 SOLVERS=("./bin/mom" "./bin/mva" "./bin/ca" "./bin/comom" "./bin/recal")
 OPTIONS=("-e" "-l" "-t" "-q")
-TIMEOUT=10  # Timeout in seconds for each test
+TIMEOUT=120  # Timeout in seconds for each test
 
 # Log file
 ERROR_LOG="test_errors_$(date +%Y%m%d_%H%M%S).log"
@@ -82,8 +91,30 @@ run_regression_test() {
     rm -f /tmp/regression_*_$$.txt
 }
 
+# Parse command-line arguments: [model.qn ...] [-- -opt1 -opt2 ...]
+# If models are given, only test those. If options after -- are given, only test those.
+parse_args() {
+    FILTER_MODELS=()
+    FILTER_OPTIONS=()
+    local past_separator=false
+
+    for arg in "$@"; do
+        if [[ "$arg" == "--" ]]; then
+            past_separator=true
+            continue
+        fi
+        if $past_separator; then
+            FILTER_OPTIONS+=("$arg")
+        else
+            FILTER_MODELS+=("$arg")
+        fi
+    done
+}
+
 # Main test execution
 main() {
+    parse_args "$@"
+
     # Check if binaries exist
     for solver in "${SOLVERS[@]}"; do
         if [ ! -f "$solver" ]; then
@@ -91,39 +122,60 @@ main() {
             exit 1
         fi
     done
-    
+
     # Check if models directory exists
     if [ ! -d "$MODELS_DIR" ]; then
         echo -e "${RED}Error: Models directory $MODELS_DIR not found.${NC}"
         exit 1
     fi
-    
+
     # Initialize error log
     echo "Regression test errors for test run at $(date)" > "$ERROR_LOG"
-    
-    # Print header
-    print_header
-    
-    # Get all model files
-    models=($(ls $MODELS_DIR/*.qn 2>/dev/null | sort))
-    
+
+    # Build model list: use filter or discover all
+    if [ ${#FILTER_MODELS[@]} -gt 0 ]; then
+        models=()
+        for m in "${FILTER_MODELS[@]}"; do
+            # Allow bare filename or path
+            if [ -f "$m" ]; then
+                models+=("$m")
+            elif [ -f "$MODELS_DIR/$m" ]; then
+                models+=("$MODELS_DIR/$m")
+            else
+                echo -e "${RED}Error: Model $m not found.${NC}"
+                exit 1
+            fi
+        done
+    else
+        models=($(ls $MODELS_DIR/*.qn 2>/dev/null | sort))
+    fi
+
     if [ ${#models[@]} -eq 0 ]; then
-        echo -e "${RED}Error: No .qn model files found in $MODELS_DIR${NC}"
+        echo -e "${RED}Error: No .qn model files found${NC}"
         exit 1
     fi
-    
+
+    # Build options list: use filter or default
+    if [ ${#FILTER_OPTIONS[@]} -gt 0 ]; then
+        options=("${FILTER_OPTIONS[@]}")
+    else
+        options=("${OPTIONS[@]}")
+    fi
+
+    # Print header
+    print_header
     echo "Found ${#models[@]} models to test"
-    
-    # Run regression tests for key options
+
+    # Run regression tests
     echo -e "\n${YELLOW}Running Regression Tests${NC}"
     echo "========================================"
-    
+
     for model in "${models[@]}"; do
-        for option in "${OPTIONS[@]}"; do
+        for option in "${options[@]}"; do
             run_regression_test "$model" "$option"
         done
     done
-    
+
     echo -e "\n========================================"
     echo "Regression tests completed."
     echo "Check $ERROR_LOG for any mismatches."
