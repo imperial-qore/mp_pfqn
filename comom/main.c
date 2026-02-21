@@ -1139,6 +1139,13 @@ solve_attempt:
 singular_matrix_detected:
 	// If singular and no perturbation yet, apply automatic perturbation at digit 20
 	if (!auto_perturbation && perturbation_digit == 0) {
+		// If exact normalizing constant was requested, don't auto-perturb
+		if (normconst_output) {
+			fprintf(stderr, "\nError: Model cannot be solved exactly by the CoMoM solver.\n");
+			fprintf(stderr, "The system of equations is singular. No exact normalizing constant available.\n");
+			mpz_clear(scale_factor);
+			return 1;
+		}
 		fprintf(stderr, "\nWarning: Model cannot be solved exactly by the CoMoM solver.\n");
 		fprintf(stderr, "The system of equations is singular. Automatically applying perturbation at digit 20.\n");
 		perturbation_digit = 20;

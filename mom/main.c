@@ -434,6 +434,13 @@ int main(int argc, char**argv)
 
 	// If singular and no perturbation yet, apply automatic perturbation
 	if (result == -1 && !auto_perturbation && perturbation_digit == 0) {
+		// If exact normalizing constant was requested, don't auto-perturb
+		// since the perturbed result won't match the exact answer
+		if (normconst_output) {
+			fprintf(stderr, "\nError: Model cannot be solved exactly by the MoM solver.\n");
+			fprintf(stderr, "The system of equations is singular. No exact normalizing constant available.\n");
+			return 1;
+		}
 		fprintf(stderr, "\nWarning: Model cannot be solved exactly by the MoM solver.\n");
 		fprintf(stderr, "The system of equations is singular. Automatically applying perturbation at digit 20.\n\n");
 		perturbation_digit = 20;
