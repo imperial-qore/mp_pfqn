@@ -117,6 +117,19 @@ int* mpq_ludcmp(mpq_mat_t A, int N)
 		}
 	}
  }
+ /* Check last pivot (the main loop skips this check when j==N) */
+ if (mpq_sgn(A[N-1][N-1])==0) /* singular matrix */
+ {
+	for(i=0;i<N;i++)
+		mpq_clear(vv[i]);
+	free(vv);
+	free(indx);
+	mpq_clear(max);
+	mpq_clear(sum);
+	mpq_clear(t);
+	mpq_clear(w);
+	return NULL;
+ }
  mpq_clear(max);
  mpq_clear(sum);
  mpq_clear(t);

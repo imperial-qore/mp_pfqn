@@ -32,7 +32,7 @@ MODELS_DIR="models"
 TIMEOUT=120  # Timeout in seconds for each test
 
 # Solver groups
-CLOSED_SOLVERS=("./bin/mom" "./bin/mva" "./bin/ca" "./bin/comom" "./bin/comom-dev" "./bin/recal")
+CLOSED_SOLVERS=("./bin/mom" "./bin/mva" "./bin/ca" "./bin/comom" "./bin/recal")
 CLOSED_OPTIONS=("-e" "-l" "-t" "-q")
 
 # New solvers that also handle standard closed models (for parity checking)

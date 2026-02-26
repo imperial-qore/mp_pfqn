@@ -27,18 +27,6 @@ int btf_factorize(btf_info* btf)
 /**
  * btf_solve - Solve the permuted UBT system using backward block substitution.
  *
- * The system P_r * A11 * P_c^T has upper block-triangular structure.
- * We solve from the last (highest-level) block to the first:
- *
- *   1. Permute RHS:  b_perm[i] = b[row_perm[i]]
- *   2. For blk = num_blocks-1 downto 0:
- *        rhs = b_perm[block_starts[blk] .. +size-1]
- *        For each offdiag with from_block == blk:
- *            rhs -= offdiag.mat * x_perm[block_starts[to_block]..+size_to]
- *        Solve: mpq_lubksb(diag, rhs, size, lu_indices)
- *        Store rhs into x_perm
- *   3. Inverse column permutation:  b[col_perm[i]] = x_perm[i]
- *
  * The solution overwrites b in-place. Returns 0 on success, -1 on error.
  */
 int btf_solve(btf_info* btf, mpq_vec_t b, int cardGk)
@@ -75,7 +63,6 @@ int btf_solve(btf_info* btf, mpq_vec_t b, int cardGk)
             mpq_mat_t mat = btf->offdiag[od].mat;
             int nr = btf->offdiag[od].nrows;
 
-            /* rhs[i] -= sum_j mat[i][j] * x_perm[j_start + j] */
             for (int i = 0; i < nr; i++) {
                 for (int j = 0; j < j_sz; j++) {
                     if (mpq_sgn(mat[i][j]) != 0 && mpq_sgn(b_perm[j_start + j]) != 0) {
@@ -87,19 +74,12 @@ int btf_solve(btf_info* btf, mpq_vec_t b, int cardGk)
         }
 
         /* Solve diagonal block */
-        /* mpq_lubksb operates on a contiguous sub-vector; we need to
-         * provide a pointer to the start of this block's portion. */
         mpq_vec_t block_rhs = &b_perm[start];
-
-        /* mpq_lubksb expects the full LU matrix and the vector starting
-         * at index 0. We need a temporary copy since lubksb uses 0-based
-         * indexing into the vector. */
         mpq_vec_t rhs_tmp = (mpq_vec_t)mpq_vec(sz, 0, 1);
         for (int i = 0; i < sz; i++)
             mpq_set(rhs_tmp[i], block_rhs[i]);
 
         if (mpq_lubksb(btf->blocks[blk].diag, rhs_tmp, sz, btf->blocks[blk].lu_indices) < 0) {
-            /* Singular block */
             for (int i = 0; i < sz; i++) mpq_clear(rhs_tmp[i]);
             free(rhs_tmp);
             for (int i = 0; i < n; i++) mpq_clear(b_perm[i]);
@@ -108,7 +88,6 @@ int btf_solve(btf_info* btf, mpq_vec_t b, int cardGk)
             return -1;
         }
 
-        /* Copy solution back */
         for (int i = 0; i < sz; i++)
             mpq_set(block_rhs[i], rhs_tmp[i]);
 
@@ -135,7 +114,6 @@ void btf_free(btf_info* btf)
 {
     if (!btf) return;
 
-    /* Free diagonal blocks */
     if (btf->blocks) {
         for (int b = 0; b < btf->num_blocks; b++) {
             int sz = btf->blocks[b].size;
@@ -155,15 +133,12 @@ void btf_free(btf_info* btf)
         free(btf->blocks);
     }
 
-    /* Free off-diagonal blocks */
     if (btf->offdiag) {
         for (int od = 0; od < btf->num_offdiag; od++) {
-            int nr = btf->offdiag[od].nrows;
-            int nc = btf->offdiag[od].ncols;
             if (btf->offdiag[od].mat) {
-                for (int i = 0; i < nr; i++) {
+                for (int i = 0; i < btf->offdiag[od].nrows; i++) {
                     if (btf->offdiag[od].mat[i]) {
-                        for (int j = 0; j < nc; j++)
+                        for (int j = 0; j < btf->offdiag[od].ncols; j++)
                             mpq_clear(btf->offdiag[od].mat[i][j]);
                         free(btf->offdiag[od].mat[i]);
                     }
@@ -174,7 +149,6 @@ void btf_free(btf_info* btf)
         free(btf->offdiag);
     }
 
-    /* Free permutations */
     if (btf->row_perm) free(btf->row_perm);
     if (btf->col_perm) free(btf->col_perm);
     if (btf->block_starts) free(btf->block_starts);

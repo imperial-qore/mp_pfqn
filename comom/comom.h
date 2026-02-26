@@ -46,6 +46,19 @@ typedef struct
 	mpq_msp_t B1;
 	mpq_msp_t B2;
 	btf_info* btf;
+	/* Direct LU factorization (fallback when BTF has singular blocks) */
+	mpq_mat_t A11_lu;       /* LU-factored copy of A11 (NULL if BTF works) */
+	int* A11_lu_indices;    /* LU pivot indices for direct A11 solve */
+	/* Reduced system for non-filtered combo handling */
+	int n_filt_cols;            /* number of filtered columns (0 = not used) */
+	int* filt_col_map;          /* filt_col_map[j] = original A11 col for filtered col j */
+	mpq_mat_t A11_reduced;      /* LU-factored square matrix [n_filt_cols x n_filt_cols] */
+	int* A11_reduced_indices;   /* LU pivot indices from mpq_ludcmp */
+	int* pivot_rows;            /* original A11 row indices of independent rows [n_filt_cols] */
+	/* Non-filtered combo info (for direct Gk computation at solve time) */
+	int n_nf_combos;            /* number of non-filtered combos */
+	int* nf_combo_indices;      /* combo indices in Dn that are non-filtered [n_nf_combos] */
+	int* nf_col_indices;        /* A11 col indices for non-filtered Gk [n_nf_combos * M] */
 }LS;
 
 #include "profiling.h"

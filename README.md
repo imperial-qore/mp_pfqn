@@ -199,12 +199,6 @@ CoMoM supports the same command-line options as MoM (see table above). The Class
 
 [5]: Casale, G. (2009), *CoMoM: Efficient Class-Oriented Evaluation of Multiclass Performance Models,* IEEE Trans. Softw. Eng. 35, 2 (March 2009), 162–177.
 
-[6]: Casale, G. (2017), *Accelerating performance inference over closed systems by asymptotic methods,* Proc. of ACM SIGMETRICS 2017.
-
-[7]: Bard, Y. and Schweitzer, P. J. (1979), *Queueing models with state-dependent routing,* IBM Journal of Research and Development 23.
-
-[8]: Zahorjan, J. et al. (1982), *Balanced job bound analysis of queueing networks,* Communications of the ACM 25(2).
-
 ## License
 
 This software is provided as-is for academic and research purposes and released as BSD-3.
