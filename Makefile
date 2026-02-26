@@ -29,8 +29,8 @@ LDFLAGS += $(DEP_LDFLAGS)
 
 #.SILENT:
 
-DIRS	= util gmpla mva mom recal rndmodel ca comom routing2visits procomom
-EXE	= ./bin/mom ./bin/comom ./bin/routing2visits ./bin/procomom
+DIRS	= util gmpla mva mvamx mom recal rndmodel ca comom comom-dev routing2visits procomom gld comomld mvaldmx
+EXE	= ./bin/mom ./bin/comom ./bin/comom-dev ./bin/routing2visits ./bin/procomom
 LIBS	= -L. -lsub -lsuba -lsubsub
 
 all : check-deps $(EXE) 
@@ -44,7 +44,7 @@ check-deps:
 			echo "WARNING: MPFR header not found in $(DEPS_DIR)/include/"; \
 		fi; \
 	elif [ "$(DEP_SOURCE)" = "system" ]; then \
-		if [ ! -f "/usr/include/gmp.h" ] && [ ! -f "/usr/local/include/gmp.h" ]; then \
+		if [ ! -f "/usr/include/gmp.h" ] && [ ! -f "/usr/local/include/gmp.h" ] && ! find /usr/include -name "gmp.h" -print -quit 2>/dev/null | grep -q gmp.h; then \
 			echo ""; \
 			echo "ERROR: GMP development headers not found!"; \
 			echo "Please install libgmp-dev:"; \
@@ -55,7 +55,7 @@ check-deps:
 			echo "Or run 'make install-deps' to build from source"; \
 			exit 1; \
 		fi; \
-		if [ ! -f "/usr/include/mpfr.h" ] && [ ! -f "/usr/local/include/mpfr.h" ]; then \
+		if [ ! -f "/usr/include/mpfr.h" ] && [ ! -f "/usr/local/include/mpfr.h" ] && ! find /usr/include -name "mpfr.h" -print -quit 2>/dev/null | grep -q mpfr.h; then \
 			echo ""; \
 			echo "ERROR: MPFR development headers not found!"; \
 			echo "Please install libmpfr-dev:"; \
@@ -73,14 +73,19 @@ $(EXE) :
 	@mkdir -p bin
 	cd gmpla; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	cd mva; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
+	cd mvamx; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	cd mom; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	cd recal; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	cd util; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	cd rndmodel; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	cd ca; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	cd comom; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
+	cd comom-dev; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	cd routing2visits; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	cd procomom; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
+	cd gld; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
+	cd comomld; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
+	cd mvaldmx; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	@echo "Cleaning up .o files..."
 	@find . -name "*.o" -type f -delete
 

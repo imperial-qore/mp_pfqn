@@ -2,12 +2,18 @@
 
 The mp_pfqn library offers fast C solvers for product-form queueing networks using the GNU Multiple Precision Arithmetic Library (GMP). Exact arithmetic in GMP allows to compute normalizing constants for the equilibrium state probabilities on large closed multiclass models. 
 
-- Current solvers:
+- Closed network solvers:
   - Mean Value Analysis (MVA) [1]
   - Convolution Algorithm (CA) [2]
   - Recursion by Chain Algorithm (RECAL) [3]
   - Method of Moments (MoM) [4]
   - Class-Oriented Method of Moments (CoMoM) [5]
+- Load-dependent solvers:
+  - Generalized Load-Dependent (GLD) normalizing constant [6]
+  - CoMoM-LD for load-dependent repairman models
+- Mixed open/closed network solvers:
+  - MVA-MX for mixed networks [7]
+  - MVA-LD-MX for mixed networks with load-dependent stations [8]
 
 ## Quick Start
 Run the following commands from the project root folder:
@@ -50,9 +56,19 @@ mM LM1 LM2 ... LMR  # Queue M: multiplicity, demands at station M per class
 ```
 The demand Lir=Sir*Vir is the product of the mean service time Sir and mean number of visits Vir, both for class-r jobs at station i. See the routing2visits utility to convert a routing probability matrix into the corresponding Vir values.
 
-*IMPORTANT*: All values must be passed as integers. 
+Optional keyword sections can follow the station lines:
+```
+LAMBDA               # Open-class arrival rates (use N=-1 for open classes)
+l1 l2 ... lR         # Arrival rates per class (rational values allowed)
+MU                   # Load-dependent service rates
+mu_11 mu_12 ... mu_1Nt   # Station 1: rates for 1..Nt jobs
+...
+mu_M1 mu_M2 ... mu_MNt   # Station M: rates for 1..Nt jobs
+```
 
-Examples are available under the models/ folders.
+*IMPORTANT*: All values must be passed as integers or rationals (e.g., `1/10`).
+
+Examples are available under the models/ folder.
 
 ### Running Solvers
 
@@ -62,12 +78,20 @@ Examples are available under the models/ folders.
 # Where: M = number of queues, R = number of classes, 
 #        N = total population, seed = random seed
 
-# Run different solvers
+# Run different solvers (closed networks)
 ./bin/mva model.qn      # Mean Value Analysis
 ./bin/ca model.qn       # Convolution Algorithm
 ./bin/recal model.qn    # Recursion by Chain Algorithm
 ./bin/mom model.qn      # Method of Moments
 ./bin/comom model.qn    # Class-Oriented Method of Moments
+
+# Load-dependent solvers (closed networks with MU section)
+./bin/gld model.qn      # GLD normalizing constant
+./bin/comomld model.qn  # CoMoM-LD for repairman models
+
+# Mixed open/closed network solvers (models with LAMBDA section)
+./bin/mvamx model.qn    # Mixed MVA
+./bin/mvaldmx model.qn  # Mixed load-dependent MVA (requires MU section)
 ```
 
 ### Solver Options
@@ -174,6 +198,12 @@ CoMoM supports the same command-line options as MoM (see table above). The Class
 [4]: Casale (2006), *An efficient algorithm for the exact analysis of multiclass queueing networks with large population sizes,* Proc. of ACM SIGMETRICS 2006.
 
 [5]: Casale, G. (2009), *CoMoM: Efficient Class-Oriented Evaluation of Multiclass Performance Models,* IEEE Trans. Softw. Eng. 35, 2 (March 2009), 162–177.
+
+[6]: Casale, G. (2017), *Accelerating performance inference over closed systems by asymptotic methods,* Proc. of ACM SIGMETRICS 2017.
+
+[7]: Bard, Y. and Schweitzer, P. J. (1979), *Queueing models with state-dependent routing,* IBM Journal of Research and Development 23.
+
+[8]: Zahorjan, J. et al. (1982), *Balanced job bound analysis of queueing networks,* Communications of the ACM 25(2).
 
 ## License
 

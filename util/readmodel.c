@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 #include "gmpla.h"
 #include "util.h"
 #include "assert.h"
@@ -9,6 +10,13 @@ qnmodel* readmodel(char* filename)
 	int m;
 	int r;
 
+	/* initialize optional fields */
+	qn->hasOpen = 0;
+	qn->lambda = NULL;
+	qn->isLD = 0;
+	qn->Nt = 0;
+	qn->mu = NULL;
+
 	/* open file*/
 	FILE *f = fopen(filename,"r");
 
@@ -16,7 +24,7 @@ qnmodel* readmodel(char* filename)
 	{
 		printf("File %s cannot be opened\n", filename);
 		exit(1);
-	}	
+	}
 
 	/* read R */
 	if (fscanf(f,"%d\n",&qn->R) != 1) {
@@ -31,7 +39,7 @@ qnmodel* readmodel(char* filename)
 			printf("Error reading N[%d] from file\n", r-1);
 			exit(1);
 		}
-	} 
+	}
 	if (fscanf(f,"\n") != 0) {
 		/* Newline consumed, continue */
 	}
@@ -64,7 +72,7 @@ qnmodel* readmodel(char* filename)
 	qn->mi=(int*)int_vec(qn->M,0);
 	for(m=1;m<=qn->M;m++)
 	{
- 	 if (fscanf(f,"%d",&qn->mi[m-1]) != 1) {
+	 if (fscanf(f,"%d",&qn->mi[m-1]) != 1) {
 		printf("Error reading mi[%d] from file\n", m-1);
 		exit(1);
 	 }
@@ -80,5 +88,48 @@ qnmodel* readmodel(char* filename)
 	 }
 	}
 
+	/* compute total closed population */
+	qn->Nt = 0;
+	for (r = 0; r < qn->R; r++) {
+		if (qn->N[r] > 0)
+			qn->Nt += qn->N[r];
+	}
+
+	/* read optional keyword sections */
+	char keyword[64];
+	while (fscanf(f, "%63s", keyword) == 1) {
+		if (strcmp(keyword, "LAMBDA") == 0) {
+			qn->hasOpen = 1;
+			qn->lambda = (mpq_t*)malloc(qn->R * sizeof(mpq_t));
+			for (r = 0; r < qn->R; r++) {
+				mpq_init(qn->lambda[r]);
+				if (gmp_fscanf(f, "%Qd", &qn->lambda[r]) != 1) {
+					printf("Error reading lambda[%d] from file\n", r);
+					exit(1);
+				}
+				mpq_canonicalize(qn->lambda[r]);
+			}
+		} else if (strcmp(keyword, "MU") == 0) {
+			qn->isLD = 1;
+			if (qn->Nt <= 0) {
+				printf("Error: MU section requires Nt > 0 (total closed population)\n");
+				exit(1);
+			}
+			qn->mu = (mpq_t**)malloc(qn->M * sizeof(mpq_t*));
+			for (m = 0; m < qn->M; m++) {
+				qn->mu[m] = (mpq_t*)malloc(qn->Nt * sizeof(mpq_t));
+				for (int k = 0; k < qn->Nt; k++) {
+					mpq_init(qn->mu[m][k]);
+					if (gmp_fscanf(f, "%Qd", &qn->mu[m][k]) != 1) {
+						printf("Error reading mu[%d][%d] from file\n", m, k);
+						exit(1);
+					}
+					mpq_canonicalize(qn->mu[m][k]);
+				}
+			}
+		}
+	}
+
+	fclose(f);
 	return qn;
 }

@@ -14,14 +14,19 @@
 #define MAX(a,b) ((a>b) ? a : b)
 #define MAXNCKTABLE 100 /* maximum allowed factorial */
 
-typedef struct 
+typedef struct
 {
 	int M; /* number of queues */
 	int R; /* number of classes */
-	int *N; /* job populations */
+	int *N; /* job populations, N[r]=-1 means open class */
 	mpz_t *Z; /* think times */
 	mpz_t **L; /* service demands */
 	int *mi; /* multiplicities */
+	int hasOpen; /* 1 if LAMBDA section present (open classes) */
+	mpq_t *lambda; /* arrival rates [R], NULL if no open classes */
+	int isLD; /* 1 if MU section present */
+	int Nt; /* total closed population */
+	mpq_t **mu; /* load-dependent rates [M][Nt], NULL if not LD */
 } qnmodel;
 
 extern int nckmaxn; /* nchoosek table */
@@ -40,8 +45,11 @@ int sum(int* v, int n);
 
 /* queueing network model */
 qnmodel* readmodel(char* filename);
+void freemodel(qnmodel* qn);
 void printmodel(qnmodel* qn);
 void printmodel_with_perturbation(qnmodel* qn, int perturbation_digit, mpz_t scale_factor, int perturbation_seed, mpz_t** original_L, mpz_t* original_Z);
+int* getclosedclasses(qnmodel* qn, int* numClosed);
+int* getopenclasses(qnmodel* qn, int* numOpen);
 
 /* queueing network population */
 int* initpop(int R);
