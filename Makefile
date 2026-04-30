@@ -30,7 +30,7 @@ LDFLAGS += $(DEP_LDFLAGS)
 #.SILENT:
 
 DIRS	= util gmpla mva mvamx mom recal rndmodel ca comom routing2visits procomom gld comomld mvaldmx lcfsmva
-EXE	= ./bin/mom ./bin/comom ./bin/routing2visits ./bin/procomom
+EXE	= ./bin/mom ./bin/comom ./bin/procomom
 LIBS	= -L. -lsub -lsuba -lsubsub
 
 all : check-deps $(EXE) 
@@ -87,7 +87,7 @@ $(EXE) :
 	cd mvaldmx; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	cd lcfsmva; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	@echo "Cleaning up .o files..."
-	@find . -name "*.o" -type f -delete
+	@find . -name "*.o" -type f -not -path "./deps/*" -delete
 
 install-deps:
 	@echo "Installing dependencies from source..."

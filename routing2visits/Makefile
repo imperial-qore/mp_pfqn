@@ -9,7 +9,10 @@ LIBRARY = librouting2visits.a
 
 .PHONY: all clean library
 
-all: library $(EXECUTABLE)
+# routing2visits.c currently contains only library functions; the CLI
+# driver (main()) was never committed, so the executable target is
+# disabled and only the static library is built.
+all: library
 
 library: $(LIBRARY)
 

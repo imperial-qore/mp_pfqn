@@ -6,7 +6,7 @@ LDFLAGS = -L../deps/local/lib -lgmp -lm -L. -L../lib/
 #LDFLAGS = -static -L./gmp-4.1.4/.libs/ -lgmp -lm  -L../lib/
 
 # LinBox link flags
-LINBOX_LDFLAGS = -L../deps/local/lib -llinbox -lgivaro -lgmpxx -lgmp -lmpfr -l:libopenblas.so.0 -llapack -fopenmp -lstdc++
+LINBOX_LDFLAGS = -L../deps/local/lib -llinbox -lgivaro -lntl -lgmpxx -lgmp -lmpfr -l:libopenblas.so.0 -llapack -fopenmp -lstdc++
 
 SRCS = blocksolve.c main.c mdecrease.c perfindices.c setupls.c mpq_ludcmp_progress.c
 OBJS = $(SRCS:.c=.o)

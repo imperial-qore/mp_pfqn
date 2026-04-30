@@ -43,6 +43,18 @@ fi
 
 print_status "Detected OS: $OS"
 
+# GCC 15 defaults to C23, which breaks GMP 6.3.0's configure tests
+# (e.g. "long long reliability test 1" calls a `void g(){}` with args).
+# Force gnu17 for the dependency builds so configure probing succeeds.
+if command -v gcc &> /dev/null; then
+    GCC_MAJOR=$(gcc -dumpversion | cut -d. -f1)
+    if [[ "$GCC_MAJOR" -ge 15 ]]; then
+        print_status "Detected GCC ${GCC_MAJOR}; forcing -std=gnu17 for dependency configures"
+        export CC="gcc -std=gnu17"
+        export CXX="g++ -std=gnu++17"
+    fi
+fi
+
 # Install system dependencies
 print_status "Installing system dependencies..."
 
