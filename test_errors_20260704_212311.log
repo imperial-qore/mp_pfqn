@@ -1,5 +1,0 @@
-Regression test errors for test run at Sat Jul  4 21:23:11 CEST 2026
-[ERROR] mom on models/08_multiclass.qn with -e (exit 1)
-[ERROR] comom on models/08_multiclass.qn with -e (exit 1)
-[ERROR] mom on models/05_sparse.qn with -e (exit 1)
-[ERROR] comom on models/05_sparse.qn with -e (exit 1)

@@ -5,3 +5,4 @@ deps/
 bin/
 target/
 .idea/
+test_errors_*.log
