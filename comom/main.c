@@ -528,10 +528,10 @@ solve_attempt:
 							mpq_set(linsys->A11_lu[ii][jj], linsys->A11[ii][jj]);
 					linsys->A11_lu_indices = mpq_ludcmp(linsys->A11_lu, (int)cardGk);
 					if (linsys->A11_lu_indices == NULL) {
-						if (debug_output) fprintf(stderr, "DEBUG r=%d: Direct LU failed, trying augmented\n", r);
-						/* Direct LU failed — A11 is truly singular.
-						 * Build augmented system with CE identity rows for
-						 * non-filtered combos to make it non-singular. */
+						if (debug_output) fprintf(stderr, "DEBUG r=%d: Direct LU failed; A11 singular, refusing\n", r);
+						/* Direct LU failed; A11 is truly singular. Refuse like the MoM
+						 * solver instead of fabricating an augmented system, which would
+						 * yield an incorrect (non-unique) normalizing constant. */
 						for (int ii = 0; ii < cardGk; ii++) {
 							for (int jj = 0; jj < cardGk; jj++)
 								mpq_clear(linsys->A11_lu[ii][jj]);
@@ -539,146 +539,7 @@ solve_attempt:
 						}
 						free(linsys->A11_lu);
 						linsys->A11_lu = NULL;
-
-						int M_loc = qnm->M;
-						int n_nf = 0;
-						for (int d_idx = 0; d_idx < Dn->card; d_idx++)
-							if (int_vecsubsum(Dn->combs[d_idx], 0, r-1) >= M_loc)
-								n_nf++;
-
-						if (n_nf == 0) {
-							fprintf(stderr, "Direct LU singular at r=%d but no non-filtered combos\n", r);
-							goto singular_matrix_detected;
-						}
-
-						int n_filt = Dn->card - n_nf;
-						int n_filt_cols = n_filt * M_loc;
-
-						/* Build non-filtered combo lists */
-						linsys->n_nf_combos = n_nf;
-						linsys->nf_combo_indices = (int*)calloc(n_nf, sizeof(int));
-						linsys->nf_col_indices = (int*)calloc(n_nf * M_loc, sizeof(int));
-						int ni = 0;
-						for (int d_idx = 0; d_idx < Dn->card; d_idx++) {
-							if (int_vecsubsum(Dn->combs[d_idx], 0, r-1) >= M_loc) {
-								linsys->nf_combo_indices[ni] = d_idx;
-								for (int kk = 1; kk <= M_loc; kk++)
-									linsys->nf_col_indices[ni * M_loc + (kk-1)] =
-										hash(Dn, Dn->combs[d_idx], kk) - 1;
-								ni++;
-							}
-						}
-
-						/* Build filtered column map */
-						linsys->n_filt_cols = n_filt_cols;
-						linsys->filt_col_map = (int*)calloc(n_filt_cols, sizeof(int));
-						int fi = 0;
-						for (int d_idx = 0; d_idx < Dn->card; d_idx++) {
-							if (int_vecsubsum(Dn->combs[d_idx], 0, r-1) < M_loc) {
-								for (int kk = 1; kk <= M_loc; kk++)
-									linsys->filt_col_map[fi++] =
-										hash(Dn, Dn->combs[d_idx], kk) - 1;
-							}
-						}
-
-						/* GE on filtered columns to find pivot rows */
-						mpq_mat_t tall = (mpq_mat_t)mpq_matzeros((int)cardGk, n_filt_cols);
-						for (int ii = 0; ii < (int)cardGk; ii++)
-							for (int j = 0; j < n_filt_cols; j++)
-								mpq_set(tall[ii][j],
-								        linsys->A11[ii][linsys->filt_col_map[j]]);
-
-						int* row_order = (int*)calloc((int)cardGk, sizeof(int));
-						for (int ii = 0; ii < (int)cardGk; ii++) row_order[ii] = ii;
-
-						mpq_t ge_mul, ge_tmp;
-						mpq_init(ge_mul);
-						mpq_init(ge_tmp);
-						int ge_ok = 1;
-						for (int c = 0; c < n_filt_cols; c++) {
-							int piv = -1;
-							for (int row = c; row < (int)cardGk; row++) {
-								if (mpq_sgn(tall[row][c]) != 0)
-									{ piv = row; break; }
-							}
-							if (piv < 0) { ge_ok = 0; break; }
-							if (piv != c) {
-								for (int j = 0; j < n_filt_cols; j++)
-									mpq_swap(tall[c][j], tall[piv][j]);
-								int tmp = row_order[c];
-								row_order[c] = row_order[piv];
-								row_order[piv] = tmp;
-							}
-							for (int row = c + 1; row < (int)cardGk; row++) {
-								if (mpq_sgn(tall[row][c]) == 0) continue;
-								mpq_div(ge_mul, tall[row][c], tall[c][c]);
-								for (int j = c + 1; j < n_filt_cols; j++) {
-									mpq_mul(ge_tmp, ge_mul, tall[c][j]);
-									mpq_sub(tall[row][j], tall[row][j], ge_tmp);
-								}
-								mpq_set_ui(tall[row][c], 0, 1);
-							}
-						}
-						mpq_clear(ge_mul);
-						mpq_clear(ge_tmp);
-
-						for (int ii = 0; ii < (int)cardGk; ii++) {
-							for (int j = 0; j < n_filt_cols; j++)
-								mpq_clear(tall[ii][j]);
-							free(tall[ii]);
-						}
-						free(tall);
-
-						if (!ge_ok) {
-							free(row_order);
-							fprintf(stderr, "Reduced system rank deficient at r=%d\n", r);
-							goto singular_matrix_detected;
-						}
-
-						linsys->pivot_rows = (int*)calloc(n_filt_cols, sizeof(int));
-						for (int c = 0; c < n_filt_cols; c++)
-							linsys->pivot_rows[c] = row_order[c];
-						free(row_order);
-
-						if (debug_output) {
-							fprintf(stderr, "DEBUG: n_nf=%d, n_filt=%d, n_filt_cols=%d\n", n_nf, n_filt, n_filt_cols);
-							fprintf(stderr, "DEBUG: pivot_rows: ");
-							for (int c = 0; c < n_filt_cols; c++)
-								fprintf(stderr, "%d ", linsys->pivot_rows[c]);
-							fprintf(stderr, "\n");
-							fprintf(stderr, "DEBUG: nf_col_indices: ");
-							for (int j = 0; j < n_nf * M_loc; j++)
-								fprintf(stderr, "%d ", linsys->nf_col_indices[j]);
-							fprintf(stderr, "\n");
-						}
-
-						/* Build augmented cardGk × cardGk matrix:
-						 * - First n_filt_cols rows: A11 at pivot rows (ALL columns)
-						 * - Last n_nf*M rows: CE identity rows at non-filtered columns */
-						linsys->A11_lu = (mpq_mat_t)mpq_matzeros((int)cardGk, (int)cardGk);
-						for (int ii = 0; ii < n_filt_cols; ii++)
-							for (int j = 0; j < (int)cardGk; j++)
-								mpq_set(linsys->A11_lu[ii][j],
-								        linsys->A11[linsys->pivot_rows[ii]][j]);
-						for (int j = 0; j < n_nf * M_loc; j++)
-							mpq_set_ui(linsys->A11_lu[n_filt_cols + j][linsys->nf_col_indices[j]], 1, 1);
-
-						if (debug_output) {
-							fprintf(stderr, "DEBUG: Augmented matrix %ldx%ld:\n", cardGk, cardGk);
-							for (int ii = 0; ii < (int)cardGk; ii++) {
-								fprintf(stderr, "  aug[%d]: ", ii);
-								for (int jj = 0; jj < (int)cardGk; jj++)
-									gmp_fprintf(stderr, "%Qd ", linsys->A11_lu[ii][jj]);
-								fprintf(stderr, "\n");
-							}
-						}
-
-						linsys->A11_lu_indices = mpq_ludcmp(linsys->A11_lu, (int)cardGk);
-						if (linsys->A11_lu_indices == NULL) {
-							fprintf(stderr, "Augmented system singular at r=%d\n", r);
-							goto singular_matrix_detected;
-						}
-						if (debug_output) fprintf(stderr, "DEBUG: Augmented LU succeeded\n");
+						goto singular_matrix_detected;
 					}
 				}
 				setup_elapsed = CPUTIME - setup_start;

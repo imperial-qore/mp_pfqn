@@ -16,6 +16,26 @@ void recal_marginal_exact(qnmodel* qn, int class_to_reduce, mpq_t G_marginal);
 // Reduces population in class_to_reduce by 1 and increases multiplicity of station k by 1
 void recal_queue_marginal_exact(qnmodel* qn, int class_to_reduce, int station_k, mpq_t G_k_marginal);
 
+// Direct rank of a composition in the multichoose(ncols, ksum) enumeration
+// order (v[.][0]=0..ksum, then recurse on the rest). Replaces the previous
+// O(nrows) linear scan (int_matmatchrow); the outer i-loop called that per
+// row, so the old code was O(nrows^2) per step and hung on think-time and
+// large models. This rank is O(ncols + ksum).
+static long int multichoose_rank(int ncols, int ksum, int* row)
+{
+	long int idx = 0;
+	int pos = 0;
+	while (ncols > 1) {
+		int c = row[pos];
+		for (int i = 0; i < c; i++)
+			idx += nck((ncols-1)+(ksum-i)-1, ksum-i);
+		ksum -= c;
+		ncols -= 1;
+		pos += 1;
+	}
+	return idx;
+}
+
 void recal_multi_exact_internal(qnmodel* qn, mpq_t Gex, bool show_progress)
 {
 	struct rusage ruse;
@@ -167,56 +187,13 @@ void recal_multi_exact_internal(qnmodel* qn, mpq_t Gex, bool show_progress)
 				mpq_set_ui(G[i-1], 0, 1);
 				
 				if (hasZ && mpz_cmp_ui(qn->Z[r-1], 0) > 0) {
-					// Add think time term: Z[r] * G_1[mzIndex] / nr
-					// Extract first M elements for matching
-					for (j=0; j<M; j++)
-						mZ[j] = m[j];
-					
-					// Create temporary I_1 subset with only first M columns
-					int subset_size = nck(Mz+Ntot-n,Ntot-n+1);
-					int** I_1_subset = calloc(subset_size, sizeof(int*));
-					if (I_1_subset == NULL) {
-						fprintf(stderr, "Error: Failed to allocate memory in recal. Model may be too large.\n");
-						// Clean up and return
-						for (i=1;i<=G_1_size;i++)
-							mpq_clear(G_1[i-1]);
-						free(G_1);
-						for (i=1;i<=G_size;i++)
-							mpq_clear(G[i-1]);
-						free(G);
-						free(m);
-						free(mZ);
-						free(pop_vector);
-						free(I_1);
-						free(I);
-						return;
-					}
-					for (int k=0; k<subset_size; k++) {
-						I_1_subset[k] = calloc(M, sizeof(int));
-						if (I_1_subset[k] == NULL) {
-							fprintf(stderr, "Error: Failed to allocate memory in recal. Model may be too large.\n");
-							// Clean up
-							for (int kk=0; kk<k; kk++)
-								free(I_1_subset[kk]);
-							free(I_1_subset);
-							for (i=1;i<=G_1_size;i++)
-								mpq_clear(G_1[i-1]);
-							free(G_1);
-							for (i=1;i<=G_size;i++)
-								mpq_clear(G[i-1]);
-							free(G);
-							free(m);
-							free(mZ);
-							free(pop_vector);
-							free(I_1);
-							free(I);
-							return;
-						}
-						for (int l=0; l<M; l++)
-							I_1_subset[k][l] = I_1[k][l];
-					}
-					
-					int mzIndex = int_matmatchrow(I_1_subset, nck(Mz+Ntot-n,Ntot-n+1), M, mZ);
+					// Think time term: Z[r] * G_1[mzIndex] / nr, where mzIndex
+					// is the configuration with one extra job at the delay
+					// server (last station, column index M). The matching row
+					// is unique, so rank it directly instead of scanning.
+					m[M]++;
+					long int mzIndex = multichoose_rank(Mz, (Ntot+1)-n, m);
+					m[M]--;
 					mpq_t term, nr_q;
 					mpq_init(term);
 					mpq_init(nr_q);
@@ -227,22 +204,16 @@ void recal_multi_exact_internal(qnmodel* qn, mpq_t Gex, bool show_progress)
 					mpq_add(G[i-1], G[i-1], term);
 					mpq_clear(term);
 					mpq_clear(nr_q);
-					
-					// Free temporary subset
-					for (int k=0; k<subset_size; k++)
-						free(I_1_subset[k]);
-					free(I_1_subset);
 				}
 				
 				for (j=1; j<=M; j++) // Only iterate over actual queues (not delay server)
 				{
 					m[j-1]++;
-					int matchIndex;
+					long int matchIndex;
 					if (hasZ) {
-						// Full match with M+1 elements
-						matchIndex = int_matmatchrow(I_1, nck(Mz+Ntot-n,Ntot-n+1), Mz, m);
+						matchIndex = multichoose_rank(Mz, (Ntot+1)-n, m);
 					} else {
-						matchIndex = int_matmatchrow(I_1, nck(M+Ntot-n,Ntot-n+1), M, m);
+						matchIndex = multichoose_rank(M, (Ntot+1)-n, m);
 					}
 					
 					mpq_t term, nr_q, L_term;
