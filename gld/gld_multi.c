@@ -16,6 +16,11 @@
  *   G_m(n) = sum_{0 <= k <= n} Y_m(k) * G_{m-1}(n - k)
  *   G(N)   = G_M(N)
  *
+ * Think time Z is modelled as one extra delay (infinite-server) station with
+ * demand Z_r and rate mu[k] = k+1, whose factor reduces to
+ *   Y_Z(k) = prod_r Z_r^{k_r} / prod_r(k_r!).
+ * It is convolved in after the M queueing stations when any Z_r > 0.
+ *
  * A load-independent station (mu[m][k] == 1 for all k, i.e. a single server)
  * obeys the classical Buzen recursion
  *   G_m(n) = G_{m-1}(n) + sum_r L[m][r] * G_m(n - e_r),
@@ -43,7 +48,7 @@ void gld_auto_mu(qnmodel *qn)
 	qn->isLD = 1;
 }
 
-void gld_multi(mpq_t G, mpz_t **L, int *N, mpq_t **mu, int M, int R, int Nt)
+void gld_multi(mpq_t G, mpz_t **L, int *N, mpq_t **mu, mpz_t *Z, int M, int R, int Nt)
 {
 	int m, r, j;
 	long int i;
@@ -53,8 +58,14 @@ void gld_multi(mpq_t G, mpz_t **L, int *N, mpq_t **mu, int M, int R, int Nt)
 		mpq_set_ui(G, 1, 1);
 		return;
 	}
-	/* Base case: no stations, positive population */
-	if (M == 0) {
+	/* Base case: no stations and no think time, positive population */
+	int hasZ = 0;
+	for (r = 0; r < R; r++)
+		if (mpz_sgn(Z[r]) > 0) {
+			hasZ = 1;
+			break;
+		}
+	if (M == 0 && !hasZ) {
 		mpq_set_ui(G, 0, 1);
 		return;
 	}
@@ -68,7 +79,7 @@ void gld_multi(mpq_t G, mpz_t **L, int *N, mpq_t **mu, int M, int R, int Nt)
 		P *= (long int)(N[r] + 1);
 	}
 
-	/* Does any station need the full load-dependent convolution? */
+	/* Does any queueing station need the full load-dependent convolution? */
 	int has_ld = 0;
 	for (m = 0; m < M && !has_ld; m++)
 		for (j = 0; j < Nt; j++)
@@ -76,6 +87,7 @@ void gld_multi(mpq_t G, mpz_t **L, int *N, mpq_t **mu, int M, int R, int Nt)
 				has_ld = 1;
 				break;
 			}
+	int need_scratch = has_ld || hasZ;
 
 	/* Running normalizing constant table G_m; starts at G_0 = delta_0 */
 	mpq_t *Gv = (mpq_t *)malloc(P * sizeof(mpq_t));
@@ -83,9 +95,9 @@ void gld_multi(mpq_t G, mpz_t **L, int *N, mpq_t **mu, int M, int R, int Nt)
 		mpq_init(Gv[i]);
 	mpq_set_ui(Gv[0], 1, 1);
 
-	/* Scratch buffers only needed for load-dependent stations */
+	/* Scratch buffers only needed for full convolutions */
 	mpq_t *Gs = NULL, *Y = NULL;
-	if (has_ld) {
+	if (need_scratch) {
 		Gs = (mpq_t *)malloc(P * sizeof(mpq_t));
 		Y = (mpq_t *)malloc(P * sizeof(mpq_t));
 		for (i = 0; i < P; i++) {
@@ -105,50 +117,58 @@ void gld_multi(mpq_t G, mpz_t **L, int *N, mpq_t **mu, int M, int R, int Nt)
 	mpq_init(tmp);
 	mpq_init(Lq);
 
-	for (m = 0; m < M; m++) {
-		/* Is this station load-independent (single server)? */
-		int li = 1;
-		for (j = 0; j < Nt; j++)
-			if (mpq_cmp_ui(mu[m][j], 1, 1) != 0) {
-				li = 0;
-				break;
-			}
+	/* Total number of stations to convolve, including the optional delay */
+	int Mtot = M + (hasZ ? 1 : 0);
 
-		if (li) {
-			/* In-place Buzen: G[n] += sum_r L[m][r] * G[n - e_r], n ascending */
-			for (r = 0; r < R; r++)
-				nn[r] = 0;
-			for (i = 1; i < P; i++) {
-				/* advance odometer nn to represent linear index i */
-				for (r = 0; r < R; r++) {
-					if (nn[r] < N[r]) {
-						nn[r]++;
-						break;
-					}
+	for (m = 0; m < Mtot; m++) {
+		int is_delay = (m == M); /* the appended delay station */
+
+		if (!is_delay) {
+			/* Is this queueing station load-independent (single server)? */
+			int li = 1;
+			for (j = 0; j < Nt; j++)
+				if (mpq_cmp_ui(mu[m][j], 1, 1) != 0) {
+					li = 0;
+					break;
+				}
+
+			if (li) {
+				/* In-place Buzen: G[n] += sum_r L[m][r] * G[n - e_r], ascending */
+				for (r = 0; r < R; r++)
 					nn[r] = 0;
-				}
-				for (r = 0; r < R; r++) {
-					if (nn[r] > 0) {
-						mpq_set_z(Lq, L[m][r]);
-						mpq_mul(tmp, Lq, Gv[i - stride[r]]);
-						mpq_add(Gv[i], Gv[i], tmp);
+				for (i = 1; i < P; i++) {
+					for (r = 0; r < R; r++) {
+						if (nn[r] < N[r]) {
+							nn[r]++;
+							break;
+						}
+						nn[r] = 0;
+					}
+					for (r = 0; r < R; r++) {
+						if (nn[r] > 0) {
+							mpq_set_z(Lq, L[m][r]);
+							mpq_mul(tmp, Lq, Gv[i - stride[r]]);
+							mpq_add(Gv[i], Gv[i], tmp);
+						}
 					}
 				}
+				continue;
 			}
-			continue;
 		}
 
-		/* Load-dependent station: full convolution via factor table Y_m. */
-		/* muprod[j] = prod_{i=0}^{j-1} mu[m][i] */
-		mpq_t *muprod = (mpq_t *)malloc((Nt + 1) * sizeof(mpq_t));
-		mpq_init(muprod[0]);
-		mpq_set_ui(muprod[0], 1, 1);
-		for (j = 1; j <= Nt; j++) {
-			mpq_init(muprod[j]);
-			mpq_mul(muprod[j], muprod[j - 1], mu[m][j - 1]);
+		/* Full convolution: build the station factor table Y[.] */
+		mpq_t *muprod = NULL;
+		if (!is_delay) {
+			/* muprod[j] = prod_{i=0}^{j-1} mu[m][i] */
+			muprod = (mpq_t *)malloc((Nt + 1) * sizeof(mpq_t));
+			mpq_init(muprod[0]);
+			mpq_set_ui(muprod[0], 1, 1);
+			for (j = 1; j <= Nt; j++) {
+				mpq_init(muprod[j]);
+				mpq_mul(muprod[j], muprod[j - 1], mu[m][j - 1]);
+			}
 		}
 
-		/* Y[i] = Y_m(k) for every class-vector k in the box */
 		for (r = 0; r < R; r++)
 			k[r] = 0;
 		for (i = 0; i < P; i++) {
@@ -156,21 +176,29 @@ void gld_multi(mpq_t G, mpz_t **L, int *N, mpq_t **mu, int M, int R, int Nt)
 			for (r = 0; r < R; r++)
 				j += k[r];
 
+			/* num = j! * prod_r dem[r]^{k_r} for a queueing station;
+			 * num = prod_r Z[r]^{k_r} for the delay station (no j! factor,
+			 * since its mu-product j! cancels the multinomial's j!). */
 			int iszero = 0;
-			mpz_fac_ui(num, j);
+			if (is_delay)
+				mpz_set_ui(num, 1);
+			else
+				mpz_fac_ui(num, j);
 			for (r = 0; r < R; r++) {
 				if (k[r] > 0) {
-					if (mpz_sgn(L[m][r]) == 0) {
+					mpz_ptr dem = is_delay ? Z[r] : L[m][r];
+					if (mpz_sgn(dem) == 0) {
 						iszero = 1;
 						break;
 					}
-					mpz_pow_ui(powv, L[m][r], k[r]);
+					mpz_pow_ui(powv, dem, k[r]);
 					mpz_mul(num, num, powv);
 				}
 			}
 			if (iszero) {
 				mpq_set_ui(Y[i], 0, 1);
 			} else {
+				/* den = prod_r k_r! */
 				mpz_set_ui(den, 1);
 				for (r = 0; r < R; r++) {
 					mpz_fac_ui(powv, k[r]);
@@ -179,7 +207,8 @@ void gld_multi(mpq_t G, mpz_t **L, int *N, mpq_t **mu, int M, int R, int Nt)
 				mpq_set_z(Yq, num);
 				mpq_set_z(tmp, den);
 				mpq_div(Yq, Yq, tmp);
-				mpq_div(Yq, Yq, muprod[j]);
+				if (!is_delay)
+					mpq_div(Yq, Yq, muprod[j]);
 				mpq_set(Y[i], Yq);
 			}
 
@@ -233,9 +262,11 @@ void gld_multi(mpq_t G, mpz_t **L, int *N, mpq_t **mu, int M, int R, int Nt)
 		for (i = 0; i < P; i++)
 			mpq_set(Gv[i], Gs[i]);
 
-		for (j = 0; j <= Nt; j++)
-			mpq_clear(muprod[j]);
-		free(muprod);
+		if (!is_delay) {
+			for (j = 0; j <= Nt; j++)
+				mpq_clear(muprod[j]);
+			free(muprod);
+		}
 	}
 
 	/* idx(N) = sum_r N_r * stride_r = P - 1 */
@@ -251,7 +282,7 @@ void gld_multi(mpq_t G, mpz_t **L, int *N, mpq_t **mu, int M, int R, int Nt)
 	for (i = 0; i < P; i++)
 		mpq_clear(Gv[i]);
 	free(Gv);
-	if (has_ld) {
+	if (need_scratch) {
 		for (i = 0; i < P; i++) {
 			mpq_clear(Gs[i]);
 			mpq_clear(Y[i]);

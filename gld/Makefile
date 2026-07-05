@@ -3,7 +3,7 @@ LD = gcc
 CFLAGS = -g -O4 -I../deps/local/include -I. -I../include/ -I../gmpla/ -I../util/ -Wall
 LDFLAGS = -L../deps/local/lib -lgmp -lmpfr -lm
 
-SRCS = main.c gld_single.c gld_multi.c
+SRCS = main.c gld_multi.c
 OBJS = $(SRCS:.c=.o)
 DEPS = $(SRCS:.c=.d)
 

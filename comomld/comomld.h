@@ -12,7 +12,10 @@
  * Returns normalizing constant G and state probabilities prob[0..Nt].
  *
  * prob[k] = P(k jobs at the queueing station), k=0..Nt
+ *
+ * Returns 0 on success, 1 if the model is unsupported (more than one
+ * queueing station after IS absorption); in that case G is undefined (NaN).
  */
-void comomrm_ld(mpq_t G, mpq_t *prob, qnmodel *qn);
+int comomrm_ld(mpq_t G, mpq_t *prob, qnmodel *qn);
 
 #endif

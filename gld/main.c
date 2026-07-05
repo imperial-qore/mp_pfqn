@@ -65,7 +65,7 @@ int main(int argc, char **argv)
 	mpq_t G;
 	mpq_init(G);
 
-	gld_multi(G, qn->L, qn->N, qn->mu, qn->M, qn->R, qn->Nt);
+	gld_multi(G, qn->L, qn->N, qn->mu, qn->Z, qn->M, qn->R, qn->Nt);
 
 	/* Compute logG */
 	mpf_t G_mpf;

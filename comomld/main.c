@@ -93,7 +93,25 @@ int main(int argc, char **argv)
 	for (int k = 0; k <= Nt; k++)
 		mpq_init(prob[k]);
 
-	comomrm_ld(G, prob, qn);
+	int status = comomrm_ld(G, prob, qn);
+
+	if (status != 0) {
+		/* Model unsupported by CoMoM-LD: G is undefined. Emit NaN so it is
+		 * not mistaken for a valid normalizing constant (was silently 0). */
+		if (log_output || normconst_output || normconst_g_output || prob_output) {
+			printf("NaN\n");
+		} else {
+			printf("========== CoMoM-LD Normalizing Constant ==========\n");
+			printf("G = NaN\n");
+			printf("log(G) = NaN\n");
+		}
+		for (int k = 0; k <= Nt; k++)
+			mpq_clear(prob[k]);
+		free(prob);
+		mpq_clear(G);
+		freemodel(qn);
+		return 0;
+	}
 
 	/* Compute logG */
 	mpf_t G_mpf;

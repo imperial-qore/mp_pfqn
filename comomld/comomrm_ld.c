@@ -24,7 +24,7 @@
  * 4. G = product of all scale values
  * 5. prob[k] = h[Nt - k] for k=0..Nt
  */
-void comomrm_ld(mpq_t G, mpq_t *prob, qnmodel *qn)
+int comomrm_ld(mpq_t G, mpq_t *prob, qnmodel *qn)
 {
 	int M = qn->M;
 	int R = qn->R;
@@ -136,7 +136,7 @@ void comomrm_ld(mpq_t G, mpq_t *prob, qnmodel *qn)
 			mpq_clear(Z_eff[r]);
 		free(Z_eff);
 		free(is_inf);
-		return;
+		return 0;
 	}
 
 	if (M_q != 1) {
@@ -148,7 +148,7 @@ void comomrm_ld(mpq_t G, mpq_t *prob, qnmodel *qn)
 			mpq_clear(Z_eff[r]);
 		free(Z_eff);
 		free(is_inf);
-		return;
+		return 1;
 	}
 
 	for (m = 0; m < M; m++) {
@@ -271,4 +271,6 @@ void comomrm_ld(mpq_t G, mpq_t *prob, qnmodel *qn)
 		mpq_clear(Z_eff[r]);
 	free(Z_eff);
 	free(is_inf);
+
+	return 0;
 }
