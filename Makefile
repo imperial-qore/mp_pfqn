@@ -29,7 +29,7 @@ LDFLAGS += $(DEP_LDFLAGS)
 
 #.SILENT:
 
-DIRS	= util gmpla mva mvamx mom recal rndmodel ca comom routing2visits procomom gld comomld mvaldmx lcfsmva
+DIRS	= util gmpla mva mvamx mom recal rndmodel ca comom routing2visits procomom gld comomld mvaldmx lcfsmva clw clwld
 EXE	= ./bin/mom ./bin/comom ./bin/procomom
 LIBS	= -L. -lsub -lsuba -lsubsub
 
@@ -86,6 +86,8 @@ $(EXE) :
 	cd comomld; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	cd mvaldmx; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	cd lcfsmva; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
+	cd clw; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
+	cd clwld; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	@echo "Cleaning up .o files..."
 	@find . -name "*.o" -type f -not -path "./deps/*" -delete
 

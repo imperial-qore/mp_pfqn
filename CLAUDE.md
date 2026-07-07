@@ -52,6 +52,8 @@ The test script runs all 5 solvers (mva, ca, recal, mom, comom) with options `-e
 | `mom/` | Method of Moments (MoM) | Exact linear system solve; optional LinBox C++ backend |
 | `comom/` | Class-Oriented MoM (CoMoM) | BTF decomposition for sparse systems |
 | `procomom/` | ProCoMoM | Marginal queue-length probabilities |
+| `clw/` | Choudhury-Leung-Whitt (CLW) | Generating-function inversion; single-server + IS. Floating-point (G/logG as doubles, not exact) |
+| `clwld/` | CLW with load-dependent stations | Bertozzi-McKenna per-center transforms; multiserver and load-dependent. Floating-point output |
 
 ### Shared Libraries
 
