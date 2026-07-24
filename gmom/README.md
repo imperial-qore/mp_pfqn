@@ -72,6 +72,17 @@ lcfs_3class   R=3   all 12 basis entries match
   multiserver/replicated stations (`mi>1`) are rejected with a clear
   message rather than mis-solved. The b=1 basis assumes `m=(1,...,1)`,
   the reference's stated domain; the base convolution is single-server.
+- **Init-time singularity check and auto-reorder.** `pfqn_sing.c` provides
+  a shared oracle `pfqn_recursion_singular` / `pfqn_nonsingular_recclass`:
+  the coefficient matrix depends only on the loadings (not the population),
+  so singularity is decided once at startup by factorizing each level's
+  `A^T A`. If the recursion would go singular, gmom moves the offending
+  class to the recursion position (its loadings then leave the coefficient
+  matrix) and solves in that order, un-permuting `X`/`Q` back; if no single
+  class reorder removes it, gmom reports a genuine degeneracy and points to
+  `ca`/`safe_comom`. This replaces the old mid-recursion abort. NB the
+  oracle is exact for gmom's (b=1) matrix; mom/comom use a different basis
+  whose degeneracy is stronger, so they must probe their own matrix.
 - **Singular models.** Models whose MoM coefficient matrix is singular
   (equal-loading / demand relations: `05_sparse`, `06_large`,
   `08_multiclass`, the `test_singular*` family, ...) make the normal

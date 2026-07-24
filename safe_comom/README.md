@@ -24,14 +24,17 @@ tier is exact, so the result is always the exact answer.
 | tier | method | handles |
 |---|---|---|
 | 1 | plain CoMoM (`bin/comom`) | non-singular models |
-| 2 | CoMoM after permuting the class order | singularities that depend only on which class is processed last (the recursion class) |
+| 2 | CoMoM with a different recursion class (O(R) search) | singularities that depend only on which class is processed last |
 | 3 | exact convolution (`bin/ca`) | genuine loading degeneracies no class order removes |
 
 - **Tier 2** is the cheap case of the appendix: a singularity removed by
-  processing a non-degenerate class last. Permutations are probed with the
-  fast `comom -e` path (which errors instantly on a singular system rather
-  than running the slow perturbation fallback); only the winning
-  permutation is solved with the requested flag. `G(N)` is invariant to
+  processing a non-degenerate class last. Since the recursion class's
+  loadings do not enter the coefficient matrix, only the choice of last
+  class matters, so safe_comom tries each class as the recursion class --
+  O(R) orders, not O(R!). Each is probed with the fast `comom -e` path
+  (which errors instantly on a singular system rather than running the slow
+  perturbation fallback); only the winning order is solved with the
+  requested flag. `G(N)` is invariant to
   class order, so `-e`/`-g`/`-l` need no remapping; `-t` and `-q` are
   mapped back to the original class order.
 - **Tier 3** is the fully-peeled limit of the appendix's MVA-like

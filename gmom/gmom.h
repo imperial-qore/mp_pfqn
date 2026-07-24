@@ -60,4 +60,8 @@ static inline int gmom_lvl_1(int r) { int v=r-2; return v<0?0:v; }
  * convolution, valid for Z=0 and Z!=0 alike.  Result in G (mpq). */
 void gmom_base(mpq_t G, mpz_t* d, int mult, int* pop, mpz_t* Z, int r);
 
+/* shared singularity oracle (pfqn_sing.c) */
+int pfqn_recursion_singular(mpz_t** L, int M, int R);
+int pfqn_nonsingular_recclass(mpz_t** L, int M, int R);
+
 #endif

@@ -19,9 +19,13 @@
  * (R-1 instead of R) because the generalized basis is more compact.
  */
 void gmom_measures(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM,
-                   int out_e, int out_g, int out_l, int out_t, int out_q)
+                   int out_e, int out_g, int out_l, int out_t, int out_q, int* cperm)
 {
 	int M = qn->M, R = qn->R;
+	/* cperm[j] = original class at permuted position j; inv[c] = permuted
+	 * position of original class c.  X/Q are printed in ORIGINAL order. */
+	int inv[64], _c; for (_c = 0; _c < R; _c++) inv[_c] = _c;
+	if (cperm) for (_c = 0; _c < R; _c++) inv[cperm[_c]] = _c;
 	mpz_t** L = qn->L; mpz_t* Z = qn->Z; int* N = qn->N; int* mi = qn->mi;
 	int t, i, s, l, j;
 	mpq_t tmp, tmp2; mpq_init(tmp); mpq_init(tmp2);
@@ -114,16 +118,17 @@ void gmom_measures(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM,
 	} else if (out_g) {
 		printf("%.15e\n", mpq_get_d(G[0]));
 	} else if (out_t) {
-		for (s = 1; s <= R; s++) { mpq_div(tmp, G[s], G[0]); printf("%.15e\n", mpq_get_d(tmp)); }
+		for (_c = 0; _c < R; _c++) { mpq_div(tmp, G[inv[_c]+1], G[0]); printf("%.15e\n", mpq_get_d(tmp)); }
 	} else if (out_q) {
 		for (i = 1; i <= M; i++) {
-			for (s = 1; s <= R; s++) {
+			for (_c = 0; _c < R; _c++) {
+				s = inv[_c] + 1;
 				mpq_set_z(tmp, L[i-1][s-1]);
 				mpq_mul(tmp, tmp, Gk[(i-1)*(R+1) + s]);
 				mpq_div(tmp, tmp, G[0]);
 				mpq_set_si(tmp2, mi[i-1], 1); mpq_mul(tmp, tmp, tmp2);
 				printf("%.15e", mpq_get_d(tmp));
-				if (s < R) printf(" ");
+				if (_c < R-1) printf(" ");
 			}
 			printf("\n");
 		}
@@ -131,11 +136,12 @@ void gmom_measures(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM,
 		printf("========== gmom (generalized MoM, b=1) ==========\n");
 		printf("G = %.15e\n", mpq_get_d(G[0]));
 		printf("\nX (throughputs):\n");
-		for (s = 1; s <= R; s++) { mpq_div(tmp, G[s], G[0]); printf("X[%d] = %.15e\n", s, mpq_get_d(tmp)); }
+		for (_c = 0; _c < R; _c++) { mpq_div(tmp, G[inv[_c]+1], G[0]); printf("X[%d] = %.15e\n", _c+1, mpq_get_d(tmp)); }
 		printf("\nQ (mean queue lengths):\n");
 		for (i = 1; i <= M; i++) {
 			printf("Q[%d] =", i);
-			for (s = 1; s <= R; s++) {
+			for (_c = 0; _c < R; _c++) {
+				s = inv[_c] + 1;
 				mpq_set_z(tmp, L[i-1][s-1]); mpq_mul(tmp, tmp, Gk[(i-1)*(R+1)+s]); mpq_div(tmp, tmp, G[0]);
 				mpq_set_si(tmp2, mi[i-1], 1); mpq_mul(tmp, tmp, tmp2);
 				printf("\t%.15e", mpq_get_d(tmp));

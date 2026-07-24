@@ -11,7 +11,7 @@ struct rusage ruse;
 double t0, t1;
 
 extern void gmva(mpq_t G, mpz_t** dem, int nq, int* pop, mpz_t* Z, int r);
-extern void gmom_measures(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM, int oe, int og, int ol, int ot, int oq);
+extern void gmom_measures(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM, int oe, int og, int ol, int ot, int oq, int* cperm);
 
 /* ---- small dense helpers over rectangular mpq matrices ---------------- */
 
@@ -162,6 +162,33 @@ int main(int argc, char** argv)
 	mpz_t** L = qn->L; mpz_t* Z = qn->Z; int* N = qn->N;
 	nckinit(M + R - 1, R);
 
+	/* Init-time singularity screen (loading-only, one factorisation per
+	 * level).  If the recursion would hit a degenerate matrix, move the
+	 * offending class to the recursion position (its loadings then leave
+	 * the coefficient matrix); if no single-class reorder removes it, the
+	 * model is genuinely degenerate for gmom's basis. */
+	int* cperm = (int*) malloc(R * sizeof(int));
+	for (i = 0; i < R; i++) cperm[i] = i;
+	if (pfqn_recursion_singular(L, M, R)) {
+		int fix = pfqn_nonsingular_recclass(L, M, R);
+		if (fix < 0) {
+			fprintf(stderr, "gmom: model is singular under every class order (genuine loading degeneracy); use bin/ca or bin/safe_comom\n");
+			return 1;
+		}
+		/* cperm[j] = original class placed at position j (fix goes last) */
+		int c = 0, j;
+		for (j = 0; j < R; j++) if (j != fix) cperm[c++] = j;
+		cperm[R-1] = fix;
+		/* apply the permutation to L columns, N and Z (work in place) */
+		mpz_t** L2 = (mpz_t**) malloc(M * sizeof(mpz_t*));
+		int k;
+		for (k = 0; k < M; k++) { L2[k] = (mpz_t*) malloc(R * sizeof(mpz_t)); for (j = 0; j < R; j++) { mpz_init_set(L2[k][j], L[k][cperm[j]]); } }
+		int* N2 = (int*) malloc(R * sizeof(int)); mpz_t* Z2 = (mpz_t*) malloc(R * sizeof(mpz_t));
+		for (j = 0; j < R; j++) { N2[j] = N[cperm[j]]; mpz_init_set(Z2[j], Z[cperm[j]]); }
+		L = L2; N = N2; Z = Z2;
+		qn->L = L2; qn->N = N2; qn->Z = Z2;   /* measures reads from qn */
+	}
+
 	int* nvec = (int*) calloc(R, sizeof(int));
 
 	/* V slots for m=1..M */
@@ -276,7 +303,7 @@ int main(int argc, char** argv)
 
 	/* plain G(N), X, Q via the mdecrease replica-descent */
 	if (!grM) { fprintf(stderr, "gmom: internal error, grM not captured\n"); return 2; }
-	gmom_measures(qn, vl[M], grM, out_e, out_g, out_l, out_t, out_q);
+	gmom_measures(qn, vl[M], grM, out_e, out_g, out_l, out_t, out_q, cperm);
 
 	return 0;
 }

@@ -128,26 +128,28 @@ static void print_unpermuted(const char* out, int R, int M, int* perm, int is_q)
 	for (i = 0; i < nv; i++) free(vals[i]);
 }
 
-/* recursive permutation generator; returns 1 as soon as a non-singular
- * CoMoM run is found (result printed), 0 otherwise.  Skips the identity
- * (already tried as Tier 1).  Caps the number of permutations tried. */
-static int try_perms(qnmodel* qn, const char* flag, int is_t, int is_q,
-                     int* perm, int depth, int R, int* used, int* budget)
+/* Recursion-class search (the appendix's reorder idea).  The recursion
+ * class's loadings do not enter the coefficient matrix, so a singularity
+ * that depends on which class is processed last is removed by moving a
+ * suitable class to that position.  Try each class as the last (recursion)
+ * class -- O(R) orders, not O(R!) -- probing singularity with the fast
+ * comom -e path; solve and print the first non-singular one.  Returns 1 on
+ * success. */
+static int recclass_search(qnmodel* qn, const char* flag, int is_t, int is_q)
 {
-	if (*budget <= 0) return 0;
-	if (depth == R) {
-		int j, identity = 1;
-		for (j = 0; j < R; j++) if (perm[j] != j) { identity = 0; break; }
-		if (identity) return 0;
-		(*budget)--;
+	int R = qn->R, c, j;
+	int perm[64];
+	for (c = 0; c < R; c++) {
+		if (c == R-1) continue;               /* identity already tried (Tier 1) */
+		/* class c last, the others in original order */
+		int p = 0;
+		for (j = 0; j < R; j++) if (j != c) perm[p++] = j;
+		perm[R-1] = c;
 		char tmp[64]; snprintf(tmp, sizeof(tmp), "/tmp/safe_comom_%d.qn", (int)getpid());
 		write_perm(tmp, qn, perm);
 		char out[1<<20]; int sing;
-		/* probe singularity with the cheap -e path (comom errors out fast
-		 * on a singular system, whereas -t/-q would instead run the slow
-		 * perturbation fallback).  Only solve the winning permutation. */
-		run_solver("comom", tmp, "-e", out, sizeof(out), &sing);
-		if (sing) { unlink(tmp); return 0; }
+		run_solver("comom", tmp, "-e", out, sizeof(out), &sing);   /* fast probe */
+		if (sing) { unlink(tmp); continue; }
 		run_solver("comom", tmp, flag, out, sizeof(out), &sing);
 		unlink(tmp);
 		if (!sing) {
@@ -155,14 +157,6 @@ static int try_perms(qnmodel* qn, const char* flag, int is_t, int is_q,
 			else fputs(out, stdout);
 			return 1;
 		}
-		return 0;
-	}
-	int v;
-	for (v = 0; v < R; v++) {
-		if (used[v]) continue;
-		used[v] = 1; perm[depth] = v;
-		if (try_perms(qn, flag, is_t, is_q, perm, depth+1, R, used, budget)) return 1;
-		used[v] = 0;
 	}
 	return 0;
 }
@@ -199,7 +193,6 @@ int main(int argc, char** argv)
 
 	/* Tier 2: CoMoM over class permutations */
 	qnmodel* qn = readmodel((char*)model);
-	int R = qn->R;
 	if (qn->hasOpen) {
 		/* open/mixed models are outside CoMoM's (and ca's) closed-network
 		 * domain; report rather than emit a bogus convolution result. */
@@ -207,9 +200,8 @@ int main(int argc, char** argv)
 		fprintf(stderr, "safe_comom: open/mixed model is out of scope for CoMoM\n");
 		return 1;
 	}
-	if (!qn->isLD && R <= 8) {
-		int perm[64], used[64] = {0}, budget = 5040; /* <= 7! tries */
-		if (try_perms(qn, flag, is_t, is_q, perm, 0, R, used, &budget)) return 0;
+	if (!qn->isLD) {
+		if (recclass_search(qn, flag, is_t, is_q)) return 0;
 	}
 
 	/* Tier 3: exact convolution (always exact) */
