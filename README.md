@@ -8,6 +8,7 @@ The mp_pfqn library offers fast C solvers for product-form queueing networks usi
   - Recursion by Chain Algorithm (RECAL) [3]
   - Method of Moments (MoM) [4]
   - Class-Oriented Method of Moments (CoMoM) [5]
+  - Generalized Method of Moments (gmom, divide-and-conquer, b=1) [9]
 - Load-dependent solvers:
   - Generalized Load-Dependent (GLD) normalizing constant [6]
   - CoMoM-LD for load-dependent repairman models
@@ -84,6 +85,7 @@ Examples are available under the models/ folder.
 ./bin/recal model.qn    # Recursion by Chain Algorithm
 ./bin/mom model.qn      # Method of Moments
 ./bin/comom model.qn    # Class-Oriented Method of Moments
+./bin/gmom model.qn     # Generalized (divide-and-conquer) Method of Moments
 
 # Load-dependent solvers (closed networks with MU section)
 ./bin/gld model.qn      # GLD normalizing constant
@@ -158,6 +160,23 @@ RECAL supports the same command-line options as MVA (see table above).
 ```
 
 CoMoM supports the same command-line options as MoM (see table above). The Class-Oriented Method of Moments provides an efficient algorithm specifically designed for multiclass models with large population sizes.
+
+#### gmom Solver Options
+
+```bash
+./bin/gmom [ -e | -g | -l | -t | -q | --validate ] models/02_bottleneck.qn
+```
+
+`gmom` implements the generalized (divide-and-conquer, b=1) Method of
+Moments: the model on the prefix `{1..m}` of queues is built from the model
+on `{1..m-1}` plus one queue-removal (subtractive-convolution) branch, and
+the overdetermined per-level system is solved by exact normal equations.
+It supports `-e` (exact `G(N)` num/den), `-g` (`G(N)` double), `-l`
+(`log G`), `-t` (throughputs), `-q` (queue lengths), and `--validate`
+(check the whole moment basis against exact convolution). It requires at
+least two classes and closed, distinct single-server stations; open/mixed,
+load-dependent (`MU`), and multiserver (`mi>1`) models are rejected. `G`,
+`X`, and `Q` match `ca` bit-for-bit on the supported models.
 
 #### Examples
 

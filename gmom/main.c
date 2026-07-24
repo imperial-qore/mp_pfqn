@@ -11,6 +11,7 @@ struct rusage ruse;
 double t0, t1;
 
 extern void gmva(mpq_t G, mpz_t** dem, int nq, int* pop, mpz_t* Z, int r);
+extern void gmom_measures(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM, int oe, int og, int ol, int ot, int oq);
 
 /* ---- small dense helpers over rectangular mpq matrices ---------------- */
 
@@ -80,6 +81,7 @@ static void oner(int* pop, int* nvec, int r, int s)
 /* free/alloc an mpq vector slot */
 static mpq_vec_t vnew(int n) { return mpq_vec(n, 0, 1); }
 static void vfree(mpq_vec_t v, int n) { int i; if (!v) return; for (i = 0; i < n+1; i++) mpq_clear(v[i]); free(v); }
+static void fp_copy_vec(mpq_vec_t d, mpq_vec_t s, int n) { int i; for (i = 0; i < n; i++) mpq_set(d[i], s[i]); }
 
 
 /* Fill V[m] both slots directly from exact convolution at the current
@@ -126,7 +128,7 @@ static void fill_level1(mpq_vec_t* vl, mpq_vec_t* vl1, int* lenl, int* lenl1,
 int main(int argc, char** argv)
 {
 	int i, s, m, r, nr;
-	bool out_e = false, out_g = false, out_l = false, validate = false;
+	bool out_e = false, out_g = false, out_l = false, out_t = false, out_q = false, validate = false;
 	char* model_file = NULL;
 
 	t0 = CPUTIME;
@@ -134,6 +136,8 @@ int main(int argc, char** argv)
 		if      (!strcmp(argv[i], "-e") || !strcmp(argv[i], "--ex"))  out_e = true;
 		else if (!strcmp(argv[i], "-g") || !strcmp(argv[i], "--nc"))  out_g = true;
 		else if (!strcmp(argv[i], "-l") || !strcmp(argv[i], "--log")) out_l = true;
+		else if (!strcmp(argv[i], "-t") || !strcmp(argv[i], "--tput")) out_t = true;
+		else if (!strcmp(argv[i], "-q") || !strcmp(argv[i], "--qlen")) out_q = true;
 		else if (!strcmp(argv[i], "--validate")) validate = true;
 		else if (argv[i][0] != '-') model_file = argv[i];
 	}
@@ -153,6 +157,8 @@ int main(int argc, char** argv)
 		fprintf(stderr, "gmom: open/mixed models are not supported (class %d is open); use a closed model\n", c+1); return 1; } }
 	if (qn->hasOpen) { fprintf(stderr, "gmom: open/mixed models are not supported\n"); return 1; }
 	if (qn->isLD)    { fprintf(stderr, "gmom: load-dependent stations are not supported\n"); return 1; }
+	{ int q; for (q = 0; q < M; q++) if (qn->mi[q] > 1) {
+		fprintf(stderr, "gmom: multiserver/replicated stations (mi>1 at queue %d) are not supported; the b=1 basis assumes distinct single-server queues\n", q+1); return 1; } }
 	mpz_t** L = qn->L; mpz_t* Z = qn->Z; int* N = qn->N;
 	nckinit(M + R - 1, R);
 
@@ -163,6 +169,7 @@ int main(int argc, char** argv)
 	mpq_vec_t* vl1 = (mpq_vec_t*) calloc(M+1, sizeof(mpq_vec_t));
 	int* lenl  = (int*) calloc(M+1, sizeof(int));
 	int* lenl1 = (int*) calloc(M+1, sizeof(int));
+	mpq_vec_t grM = NULL; int lengrM = 0;   /* top basis at N-1_R, for mdecrease */
 
 	/* ================= class 1 initialisation (r=2) ================= */
 	nvec[0] = N[0];
@@ -209,6 +216,11 @@ int main(int argc, char** argv)
 		/* population sweep of class r */
 		for (nr = 1; nr <= N[r-1]; nr++) {
 			nvec[r-1] = nr;
+			/* capture the top basis at N-1_R just before the final step */
+			if (r == R && nr == N[R-1]) {
+				vfree(grM, lengrM); lengrM = lenl[M]; grM = vnew(lenl[M]);
+				fp_copy_vec(grM, vl[M], lenl[M]);
+			}
 			fill_level1(vl, vl1, lenl, lenl1, L, r, nvec, Z);
 			for (m = 2; m <= M; m++) {
 				int colA = LS[m]->colA, colC = LS[m]->colC, colD = LS[m]->colD, nrows = LS[m]->nrows;
@@ -237,11 +249,7 @@ int main(int argc, char** argv)
 	}
 
 	/* ===================== output / validation ===================== */
-	mpq_t G; mpq_init(G); mpq_set(G, vl[M][0]);
-
 	if (validate) {
-		/* the whole top basis vl[M] must equal exact convolution of the
-		 * augmented models Ladd(L, Ik(i,:)) at N-1_s */
 		int* pop = (int*) malloc(R * sizeof(int));
 		mpq_t ref; mpq_init(ref);
 		int total = 0, totbad = 0;
@@ -258,35 +266,17 @@ int main(int argc, char** argv)
 					if (badm <= 2) gmp_fprintf(stderr, "  m=%d i=%d s=%d gmom=%Qd conv=%Qd\n", m, i, s, vl[m][i*R+s], ref);
 				}
 			}
-			fprintf(stderr, "level m=%d: %d/%d wrong\n", m, badm, szIk*R);
 			free(Ik);
 		}
 		mpq_clear(ref); free(pop);
 		if (totbad) { printf("VALIDATE: %d/%d WRONG\n", totbad, total); return 1; }
 		printf("VALIDATE: all %d basis entries match exact convolution\n", total);
+		return 0;
 	}
 
-	if (out_e) {
-		mpq_canonicalize(G);
-		mpz_t num, den; mpz_init(num); mpz_init(den);
-		mpq_get_num(num, G); mpq_get_den(den, G);
-		gmp_printf("%Zd\n%Zd\n", num, den);
-		mpz_clear(num); mpz_clear(den);
-	} else if (out_g) {
-		printf("%.15e\n", mpq_get_d(G));
-	} else if (out_l) {
-		mpf_t f; mpf_init(f); mpf_set_q(f, G);
-		printf("%.15e\n", log(mpf_get_d(f))); mpf_clear(f);
-	} else if (!validate) {
-		printf("========== gmom (generalized MoM, b=1) ==========\n");
-		gmp_printf("V{M,l}(1) = %Qd\n", G);
-		printf("G as double = %.15e\n", mpq_get_d(G));
-		t1 = CPUTIME;
-		printf("Elapsed time: %.6f s\n", t1 - t0);
-		printf("Note: this is the top basis entry (augmented model); plain\n");
-		printf("G(N)/X/Q require the mdecrease post-step, not yet wired.\n");
-	}
+	/* plain G(N), X, Q via the mdecrease replica-descent */
+	if (!grM) { fprintf(stderr, "gmom: internal error, grM not captured\n"); return 2; }
+	gmom_measures(qn, vl[M], grM, out_e, out_g, out_l, out_t, out_q);
 
-	mpq_clear(G);
 	return 0;
 }

@@ -26,17 +26,24 @@ chain `1 -> 2 -> ... -> M`.
 Per level the CE+PC system is overdetermined and is solved in exact
 rational arithmetic by normal equations `(A^T A) x = A^T b` (eq 8 of the
 paper), matching how the reference and `bin/procomom` solve it. The result
-is the moment **basis** `V{M,l}`; the program prints its top entry
-`V{M,l}(1)`, exactly as the reference `mbmom1` does.
+is the moment **basis** `V{M,l}`, from which `gmom` recovers the plain
+normalizing constant `G(N)`, throughputs `X_r` and mean queue lengths
+`Q_kr` by the mdecrease replica-descent (the `mom/mdecrease.c` post-step,
+started one level lower because the generalized basis is more compact).
 
 ## Options
 
 | flag | meaning |
 |---|---|
-| `-e` | top basis entry as exact numerator/denominator |
-| `-g` | as a double |
-| `-l` | log of the top basis entry |
+| `-e` | exact `G(N)` numerator/denominator |
+| `-g` | `G(N)` as a double |
+| `-l` | log `G(N)` |
+| `-t` | throughputs `X_r`, one per line |
+| `-q` | mean queue lengths `Q_kr`, one row per station |
 | `--validate` | check the whole basis, at every level, against exact convolution |
+
+`G(N)`, `X` and `Q` are bit-for-bit identical to `bin/ca` on every
+in-scope non-singular model (02, 03, 09, 13, lcfs_2class, lcfs_3class).
 
 ## Correctness
 
@@ -60,9 +67,11 @@ lcfs_3class   R=3   all 12 basis entries match
 
 ## Scope and two findings from the port
 
-- **Closed product-form only.** Open/mixed models (a class with `N<0` /
-  `LAMBDA`) and load-dependent stations (`MU`) are rejected with a clear
-  message rather than mis-solved. This matches the reference's domain.
+- **Distinct single-server closed queues only.** Open/mixed models (a
+  class with `N<0` / `LAMBDA`), load-dependent stations (`MU`), and
+  multiserver/replicated stations (`mi>1`) are rejected with a clear
+  message rather than mis-solved. The b=1 basis assumes `m=(1,...,1)`,
+  the reference's stated domain; the base convolution is single-server.
 - **Singular models.** Models whose MoM coefficient matrix is singular
   (equal-loading / demand relations: `05_sparse`, `06_large`,
   `08_multiclass`, the `test_singular*` family, ...) make the normal
@@ -80,14 +89,15 @@ lcfs_3class   R=3   all 12 basis entries match
   sweep, so the recursion still carries the `O(N)` cost. With the shift,
   `09_asymmetric` (Z != 0) fails; with the exact init it validates.
 
-## Not yet wired: performance measures
+## Performance measures (mdecrease)
 
-The program outputs the moment basis (the reference's deliverable). Plain
-`G(N)`, throughputs `X_r` and queue lengths `Q_kr` require the `mdecrease`
-post-step that peels the added replicas off the top basis, as
-`mom/mdecrease.c` does for the original-MoM basis. That is a separate,
-well-scoped layer; the core divide-and-conquer engine here is complete and
-exactly validated.
+`measures.c` recovers `G(N)`, `X_r` and `Q_kr` from the basis by the
+replica-descent of the original MoM (a port of `mom/mdecrease.c` +
+`perfindices`). Two adaptations: the descent starts at level `R-1` rather
+than `R` (gmom's basis is one level more compact), and the class-`R`
+decrement `G(N-1_R)` that the descent needs is supplied by capturing the
+top basis one population step back (`grM`, the analogue of mom's `gr`).
+Validated bit-for-bit against `bin/ca`.
 
 ## Files
 
@@ -96,4 +106,6 @@ exactly validated.
 - `setup1.c` - the six per-level matrices `A,B,C,D,E,F` (port of
   `setup1.m`), with the overdetermined row count computed.
 - `main.c` - the `mbmom1` recursion, normal-equations solve, exact
-  new-class init, CLI and validation harness.
+  new-class init, `grM` capture, CLI and validation harness.
+- `measures.c` - mdecrease replica-descent and perfindices for
+  `G(N)`/`X`/`Q`.
