@@ -29,8 +29,8 @@ LDFLAGS += $(DEP_LDFLAGS)
 
 #.SILENT:
 
-DIRS	= util gmpla fpla zpla mva mvamx mom recal rndmodel ca comom routing2visits procomom gld comomld mvaldmx lcfsmva clw clwld momf mommod gmom
-EXE	= ./bin/mom ./bin/momf ./bin/mommod ./bin/gmom ./bin/comom ./bin/procomom
+DIRS	= util gmpla fpla zpla mva mvamx mom recal rndmodel ca comom routing2visits procomom gld comomld mvaldmx lcfsmva clw clwld momf mommod gmom safe_comom
+EXE	= ./bin/mom ./bin/momf ./bin/mommod ./bin/gmom ./bin/comom ./bin/safe_comom ./bin/procomom
 LIBS	= -L. -lsub -lsuba -lsubsub
 
 all : check-deps $(EXE) 

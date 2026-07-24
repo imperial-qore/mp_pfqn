@@ -9,6 +9,7 @@ The mp_pfqn library offers fast C solvers for product-form queueing networks usi
   - Method of Moments (MoM) [4]
   - Class-Oriented Method of Moments (CoMoM) [5]
   - Generalized Method of Moments (gmom, divide-and-conquer, b=1) [9]
+  - safe_comom: CoMoM with exact hybrid MVA/CoMoM fallback for singular models [5]
 - Load-dependent solvers:
   - Generalized Load-Dependent (GLD) normalizing constant [6]
   - CoMoM-LD for load-dependent repairman models
@@ -86,6 +87,7 @@ Examples are available under the models/ folder.
 ./bin/mom model.qn      # Method of Moments
 ./bin/comom model.qn    # Class-Oriented Method of Moments
 ./bin/gmom model.qn     # Generalized (divide-and-conquer) Method of Moments
+./bin/safe_comom model.qn # CoMoM, exact even on singular (degenerate) models
 
 # Load-dependent solvers (closed networks with MU section)
 ./bin/gld model.qn      # GLD normalizing constant
@@ -177,6 +179,22 @@ It supports `-e` (exact `G(N)` num/den), `-g` (`G(N)` double), `-l`
 least two classes and closed, distinct single-server stations; open/mixed,
 load-dependent (`MU`), and multiserver (`mi>1`) models are rejected. `G`,
 `X`, and `Q` match `ca` bit-for-bit on the supported models.
+
+#### safe_comom Solver Options
+
+```bash
+./bin/safe_comom [ -e | -g | -l | -t | -q ] models/08_multiclass.qn
+```
+
+`safe_comom` returns the exact `G(N)`, `X`, `Q` even for degenerate models
+whose CoMoM coefficient matrix is singular, where `bin/comom` errors out.
+It applies the hybrid MVA/CoMoM of Casale (IEEE TSE 2009), Appendix A, as
+a tiered exact orchestrator: plain CoMoM; then CoMoM after permuting the
+class order (removing singularities that depend on the recursion class);
+then exact convolution (`ca`) for genuine loading degeneracies that no
+order removes. Every tier is exact, so the result matches `comom` on
+non-singular models and `ca` on singular ones. See
+`safe_comom/README.md`.
 
 #### Examples
 
