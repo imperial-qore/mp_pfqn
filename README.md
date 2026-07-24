@@ -175,10 +175,13 @@ on `{1..m-1}` plus one queue-removal (subtractive-convolution) branch, and
 the overdetermined per-level system is solved by exact normal equations.
 It supports `-e` (exact `G(N)` num/den), `-g` (`G(N)` double), `-l`
 (`log G`), `-t` (throughputs), `-q` (queue lengths), and `--validate`
-(check the whole moment basis against exact convolution). It requires at
-least two classes and closed, distinct single-server stations; open/mixed,
-load-dependent (`MU`), and multiserver (`mi>1`) models are rejected. `G`,
-`X`, and `Q` match `ca` bit-for-bit on the supported models.
+(check the whole moment basis against exact convolution), and `-p digit` /
+`-s seed` (perturbation for degenerate models, as in MoM/CoMoM). It
+requires at least two classes and closed, distinct single-server stations;
+open/mixed, load-dependent (`MU`), and multiserver (`mi>1`) models are
+rejected. `G`, `X`, and `Q` match `ca` bit-for-bit on the supported
+models; degenerate models are handled by class reorder (exact) or
+perturbation (approximate, `-e` refuses).
 
 #### safe_comom Solver Options
 

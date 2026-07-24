@@ -41,6 +41,8 @@ started one level lower because the generalized basis is more compact).
 | `-t` | throughputs `X_r`, one per line |
 | `-q` | mean queue lengths `Q_kr`, one row per station |
 | `--validate` | check the whole basis, at every level, against exact convolution |
+| `-p digit` | perturb demands/think-times at that decimal digit (approximate solution for degenerate models) |
+| `-s seed` | RNG seed for the perturbation (default 23000) |
 
 `G(N)`, `X` and `Q` are bit-for-bit identical to `bin/ca` on every
 in-scope non-singular model (02, 03, 09, 13, lcfs_2class, lcfs_3class).
@@ -79,8 +81,8 @@ lcfs_3class   R=3   all 12 basis entries match
   `A^T A`. If the recursion would go singular, gmom moves the offending
   class to the recursion position (its loadings then leave the coefficient
   matrix) and solves in that order, un-permuting `X`/`Q` back; if no single
-  class reorder removes it, gmom reports a genuine degeneracy and points to
-  `ca`/`safe_comom`. This replaces the old mid-recursion abort. NB the
+  class reorder removes it, gmom falls back to perturbation (see below).
+  This replaces the old mid-recursion abort. NB the
   oracle is exact for gmom's (b=1) matrix; mom/comom use a different basis
   whose degeneracy is stronger, so they must probe their own matrix.
 - **Singular models.** Models whose MoM coefficient matrix is singular

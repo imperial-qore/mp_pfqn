@@ -11,7 +11,7 @@ struct rusage ruse;
 double t0, t1;
 
 extern void gmva(mpq_t G, mpz_t** dem, int nq, int* pop, mpz_t* Z, int r);
-extern void gmom_measures(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM, int oe, int og, int ol, int ot, int oq, int* cperm);
+extern void gmom_measures(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM, int oe, int og, int ol, int ot, int oq, int* cperm, mpz_t scale_factor);
 
 /* ---- small dense helpers over rectangular mpq matrices ---------------- */
 
@@ -125,10 +125,59 @@ static void fill_level1(mpq_vec_t* vl, mpq_vec_t* vl1, int* lenl, int* lenl1,
 	free(combo0); free(pop);
 }
 
+void generate_permutation(int* perm, int n, unsigned int seed) {
+	// Initialize with 1 to n
+	for(int i = 0; i < n; i++) {
+		perm[i] = i + 1;
+	}
+	
+	// Use a simple linear congruential generator for reproducible randomness
+	unsigned int rand_state = seed;
+	
+	// Fisher-Yates shuffle
+	for(int i = n - 1; i > 0; i--) {
+		// Generate random number using LCG
+		rand_state = rand_state * 1103515245 + 12345;
+		int j = (rand_state / 65536) % (i + 1);
+		
+		// Swap elements i and j
+		int temp = perm[i];
+		perm[i] = perm[j];
+		perm[j] = temp;
+	}
+}
+
+void apply_perturbation_to_model(qnmodel* qnm, int perturbation_digit, int perturbation_seed, mpz_t scale_factor) {
+	// Calculate scale factor: 10^d where d is the perturbation digit
+	mpz_set_ui(scale_factor, 10);
+	mpz_pow_ui(scale_factor, scale_factor, perturbation_digit);
+	
+	// For each class, generate a random permutation of 1 to M+1
+	int* perm = (int*)calloc(qnm->M + 1, sizeof(int));
+	
+	for(int j = 0; j < qnm->R; j++) {
+		// Generate permutation for class j using seed based on class index
+		generate_permutation(perm, qnm->M + 1, perturbation_seed + j * 1000);
+		
+		// Apply perturbation to L[i][j] for all stations i
+		for(int i = 0; i < qnm->M; i++) {
+			mpz_mul(qnm->L[i][j], qnm->L[i][j], scale_factor);
+			mpz_add_ui(qnm->L[i][j], qnm->L[i][j], perm[i]);
+		}
+		
+		// Apply perturbation to Z[j] using the last element of permutation
+		mpz_mul(qnm->Z[j], qnm->Z[j], scale_factor);
+		mpz_add_ui(qnm->Z[j], qnm->Z[j], perm[qnm->M]);
+	}
+	
+	free(perm);
+}
+
 int main(int argc, char** argv)
 {
 	int i, s, m, r, nr;
 	bool out_e = false, out_g = false, out_l = false, out_t = false, out_q = false, validate = false;
+	int pdigit = 0, pseed = 23000;
 	char* model_file = NULL;
 
 	t0 = CPUTIME;
@@ -139,10 +188,12 @@ int main(int argc, char** argv)
 		else if (!strcmp(argv[i], "-t") || !strcmp(argv[i], "--tput")) out_t = true;
 		else if (!strcmp(argv[i], "-q") || !strcmp(argv[i], "--qlen")) out_q = true;
 		else if (!strcmp(argv[i], "--validate")) validate = true;
+		else if (!strcmp(argv[i], "-p")) { if (i+1 < argc) pdigit = atoi(argv[++i]); }
+		else if (!strcmp(argv[i], "-s") || !strcmp(argv[i], "--seed")) { if (i+1 < argc) pseed = atoi(argv[++i]); }
 		else if (argv[i][0] != '-') model_file = argv[i];
 	}
 	if (!model_file) {
-		printf("USAGE: %s [-e|-g|-l] [--validate] model.qn\n", argv[0]);
+		printf("USAGE: %s [-e|-g|-l|-t|-q] [--validate] [-p digit] [-s seed] model.qn\n", argv[0]);
 		printf("  gmom: generalized (divide-and-conquer, b=1) Method of Moments.\n");
 		printf("  Outputs the top normalizing-constant basis entry V{M,l}(1),\n");
 		printf("  matching the reference mbmom1.  --validate checks the whole\n");
@@ -162,6 +213,9 @@ int main(int argc, char** argv)
 	mpz_t** L = qn->L; mpz_t* Z = qn->Z; int* N = qn->N;
 	nckinit(M + R - 1, R);
 
+	mpz_t scale_factor; mpz_init_set_ui(scale_factor, 1);
+	if (pdigit > 0) apply_perturbation_to_model(qn, pdigit, pseed, scale_factor);
+
 	/* Init-time singularity screen (loading-only, one factorisation per
 	 * level).  If the recursion would hit a degenerate matrix, move the
 	 * offending class to the recursion position (its loadings then leave
@@ -172,9 +226,17 @@ int main(int argc, char** argv)
 	if (pfqn_recursion_singular(L, M, R)) {
 		int fix = pfqn_nonsingular_recclass(L, M, R);
 		if (fix < 0) {
-			fprintf(stderr, "gmom: model is singular under every class order (genuine loading degeneracy); use bin/ca or bin/safe_comom\n");
-			return 1;
-		}
+			if (out_e) {
+				fprintf(stderr, "gmom: model is singular under every class order (genuine loading degeneracy);\n  no exact G available. Use bin/ca or bin/safe_comom, or -g/-t/-q with -p for a perturbed approximation.\n");
+				return 1;
+			}
+			/* auto-perturb at digit 20 (as mom/comom do) for an approximate answer */
+			if (mpz_cmp_ui(scale_factor, 1) == 0) {
+				fprintf(stderr, "gmom: singular system; automatically applying perturbation at digit 20 (approximate result).\n");
+				apply_perturbation_to_model(qn, 20, pseed, scale_factor);
+				L = qn->L; Z = qn->Z; N = qn->N;
+			}
+		} else {
 		/* cperm[j] = original class placed at position j (fix goes last) */
 		int c = 0, j;
 		for (j = 0; j < R; j++) if (j != fix) cperm[c++] = j;
@@ -187,6 +249,7 @@ int main(int argc, char** argv)
 		for (j = 0; j < R; j++) { N2[j] = N[cperm[j]]; mpz_init_set(Z2[j], Z[cperm[j]]); }
 		L = L2; N = N2; Z = Z2;
 		qn->L = L2; qn->N = N2; qn->Z = Z2;   /* measures reads from qn */
+		}
 	}
 
 	int* nvec = (int*) calloc(R, sizeof(int));
@@ -303,7 +366,7 @@ int main(int argc, char** argv)
 
 	/* plain G(N), X, Q via the mdecrease replica-descent */
 	if (!grM) { fprintf(stderr, "gmom: internal error, grM not captured\n"); return 2; }
-	gmom_measures(qn, vl[M], grM, out_e, out_g, out_l, out_t, out_q, cperm);
+	gmom_measures(qn, vl[M], grM, out_e, out_g, out_l, out_t, out_q, cperm, scale_factor);
 
 	return 0;
 }
