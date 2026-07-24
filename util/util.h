@@ -3,12 +3,20 @@
 
 #include <gmp.h>
 
+/* Use the standard bool unconditionally.
+ *
+ * The previous fallback defined bool as unsigned int whenever <stdbool.h>
+ * had not already been included in the translation unit.  Since some
+ * sources include <stdbool.h> and others do not, the same global bool was
+ * a 1-byte _Bool in one object and a 4-byte unsigned int in another.
+ * Reading such a global through the wider type picks up three adjacent
+ * bytes of unrelated data, so its value varied between runs: in mom this
+ * made USE_LINBOX read as true at random in setupls.c/blocksolve.c,
+ * silently taking a different solve path from the one that built the
+ * factors and producing wrong results (including negative queue lengths)
+ * in a few percent of runs. */
 #ifndef __cplusplus
-  #ifndef _STDBOOL_H
-    #define bool unsigned int
-    #define true 1
-    #define false 0
-  #endif
+  #include <stdbool.h>
 #endif
 #define MIN(a,b) ((a<b) ? a : b)
 #define MAX(a,b) ((a>b) ? a : b)

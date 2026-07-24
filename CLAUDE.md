@@ -20,7 +20,13 @@ make
 make clean && make
 ```
 
-Binaries are placed in `bin/`: `mva`, `ca`, `recal`, `mom`, `comom`, `procomom`, `rndmodel`, `routing2visits`.
+Binaries are placed in `bin/`: `mva`, `ca`, `recal`, `mom`, `momf`, `mommod`, `comom`, `procomom`, `rndmodel`, `routing2visits`.
+
+**`bool` in headers**: `util/util.h` includes `<stdbool.h>` unconditionally. It must
+not go back to defining `bool` as `unsigned int`: sources differ in whether they
+include `<stdbool.h>`, so that made the same global a 1-byte `_Bool` in one object
+and a 4-byte `unsigned int` in another, and `mom` silently returned wrong results in
+a few percent of runs. See `mommod/README.md`.
 
 ## Testing
 
@@ -54,10 +60,14 @@ The test script runs all 5 solvers (mva, ca, recal, mom, comom) with options `-e
 | `procomom/` | ProCoMoM | Marginal queue-length probabilities |
 | `clw/` | Choudhury-Leung-Whitt (CLW) | Generating-function inversion; single-server + IS. Floating-point (G/logG as doubles, not exact) |
 | `clwld/` | CLW with load-dependent stations | Bertozzi-McKenna per-center transforms; multiserver and load-dependent. Floating-point output |
+| `momf/` | MoM in fixed-precision floating point | MPFR at a settable working precision, optional Wilkinson/Moler iterative refinement. Built to measure whether the exact arithmetic is necessary; see `momf/README.md` |
+| `mommod/` | Multi-modular MoM | Whole recursion replayed in `Z/p` for many word-size primes, CRT plus rational reconstruction at the end, OpenMP over primes (`-j`). `-B` halves the prime count via denominator-bounded reconstruction, verified against witness primes held out of the CRT (`-W`); off by default since it is probabilistic. See `mommod/README.md` |
 
 ### Shared Libraries
 
 - **`gmpla/`** — GMP linear algebra: dense matrices (`mpq_mat_t`), sparse matrices (`mpq_msp_t`), LU decomposition (`mpq_ludcmp`/`mpq_lubksb`), LinBox interface
+- **`fpla/`** — the same API over MPFR floats at a run-time settable precision (`fp_*`), plus iterative refinement
+- **`zpla/`** — the same API over `Z/p` in machine words (`zp_*`), Montgomery arithmetic, CRT and rational reconstruction
 - **`util/`** — Model I/O (`readmodel`), population enumeration (`nextpop`, `popindex`), combinatorics (`nck`)
 
 ### Core Data Structure (`util/util.h`)
