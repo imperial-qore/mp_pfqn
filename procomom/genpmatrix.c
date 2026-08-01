@@ -7,18 +7,19 @@
 /* Count the number of rows in the P matrices for class r */
 static int count_rows(combsrep* Dn, int r, int R, int M)
 {
+	int W = Dn->stride;
 	int numRows = 0;
 	int d;
 
 	for (d = 0; d < Dn->card; d++) {
 		if (int_vecsubsum(Dn->combs[d], r-1, R-2) > 0) {
-			/* Branch A: propagation */
-			numRows += M;
+			/* Branch A: propagation, one row per component */
+			numRows += W;
 		} else {
 			/* Branch B */
 			if (int_vecsubsum(Dn->combs[d], 0, r-1) < M) {
-				/* CE + PC + extra PC = (M-1) + (r-1) + 1 */
-				numRows += M + r - 1;
+				/* CE (one per station carried) + PC + extra PC */
+				numRows += (W - 1) + (r - 1) + 1;
 			} else {
 				/* Boundary: extra PC only */
 				numRows += 1;
@@ -41,7 +42,8 @@ PMatrices* genpmatrix(combsrep* Dn, qnmodel* qnm, int* Ncur, int r)
 	mpz_t** L = qnm->L;
 	mpz_t* Z = qnm->Z;
 
-	int basisSize = Dn->card * M;
+	int W = Dn->stride;            /* base + stations 1..W-1 */
+	int basisSize = Dn->card * W;
 	int numRows = count_rows(Dn, r, R, M);
 
 	PMatrices* pm = (PMatrices*)calloc(1, sizeof(PMatrices));
@@ -66,9 +68,9 @@ PMatrices* genpmatrix(combsrep* Dn, qnmodel* qnm, int* Ncur, int r)
 			 * Branch A: propagation through class boundaries
 			 * MATLAB: sum(Dn(d,r:R-1)) > 0
 			 */
-			for (k = 0; k < M; k++) {
+			for (k = 0; k < W; k++) {
 				/* A[row, phash(Dn[d], k+1)] = 1 */
-				int col_A = d * M + k;  /* = phash(Dn, Dn[d], k+1) */
+				int col_A = d * W + k;  /* = phash(Dn, Dn[d], k+1) */
 				mpq_set_si(pm->A[row][col_A], 1, 1);
 
 				if (int_vecsubsum(Dn->combs[d], r, R-2) > 0) {
@@ -95,14 +97,14 @@ PMatrices* genpmatrix(combsrep* Dn, qnmodel* qnm, int* Ncur, int r)
 
 			if (int_vecsubsum(Dn->combs[d], 0, r-1) < M) {
 				/*
-				 * CE equations: for k=1..M-1
-				 * Compares station k+1 vs station 1 (reference)
+				 * CE equations: one per station carried, k=1..W-1
+				 * component k against the base component
 				 * Shift direction: UP (Dn[d] + e_s), matching CoMoM
 				 */
-				for (k = 1; k <= M-1; k++) {
-					/* A: station k+1 = 1, station 1 = -1 */
-					mpq_set_si(pm->A[row][d*M + k], 1, 1);
-					mpq_set_si(pm->A[row][d*M + 0], -1, 1);
+				for (k = 1; k <= W-1; k++) {
+					/* A: station k component = 1, base component = -1 */
+					mpq_set_si(pm->A[row][d*W + k], 1, 1);
+					mpq_set_si(pm->A[row][d*W + 0], -1, 1);
 
 					/* Shifted terms for classes 1..r-1 */
 					for (s = 1; s <= r-1; s++) {
@@ -118,8 +120,8 @@ PMatrices* genpmatrix(combsrep* Dn, qnmodel* qnm, int* Ncur, int r)
 						}
 					}
 
-					/* B: L(k,r) at Dn[d], station k+1 */
-					mpq_set_z(pm->B[row][d*M + k], L[k-1][r-1]);
+					/* B: L(k,r) at Dn[d], station k component */
+					mpq_set_z(pm->B[row][d*W + k], L[k-1][r-1]);
 
 					row++;
 				}
@@ -134,7 +136,7 @@ PMatrices* genpmatrix(combsrep* Dn, qnmodel* qnm, int* Ncur, int r)
 					int nd_s = Ncur[s-1] - Dn->combs[d][s-1];
 
 					/* A: nd(s) * base component of Dn[d] */
-					mpq_set_si(pm->A[row][d*M + 0], nd_s, 1);
+					mpq_set_si(pm->A[row][d*W + 0], nd_s, 1);
 
 					/* Shifted = Dn[d] + e_s (UP shift, matching CoMoM) */
 					int j;
@@ -152,11 +154,19 @@ PMatrices* genpmatrix(combsrep* Dn, qnmodel* qnm, int* Ncur, int r)
 							mpq_set_z(pm->DC[row][col_base], L[M-1][s-1]);
 						}
 
-						/* A: -L(k,s) for k=1..M-1 at station k+1 of shifted */
-						for (k = 1; k <= M-1; k++) {
+						/* A: -m'(k)*L(k,s) for every station k=1..M at the
+						 * station-k component of shifted.  The multiplicity is
+						 * what comom/setupls.c:103 carries and this file was
+						 * missing.  The station sum runs over the model with the
+						 * reference COPY removed, so station M carries mi_M - 1
+						 * (see the PC identity in promom/README.md); that term
+						 * vanishes for a single-server reference, which is why
+						 * it went unnoticed. */
+						for (k = 1; k <= W-1; k++) {
 							int col = phash(Dn, shifted, k+1);
-							if (col >= 0 && col < basisSize) {
-								mpz_neg(neg_val, L[k-1][s-1]);
+							int mult = qnm->mi[k-1] - (k == M ? 1 : 0);
+							if (col >= 0 && col < basisSize && mult != 0) {
+								mpz_mul_si(neg_val, L[k-1][s-1], -mult);
 								mpq_set_z(pm->A[row][col], neg_val);
 							}
 						}
@@ -177,18 +187,23 @@ PMatrices* genpmatrix(combsrep* Dn, qnmodel* qnm, int* Ncur, int r)
 				int nd_r = Ncur[r-1] - Dn->combs[d][r-1];
 
 				/* A: nd(r) at base component of Dn[d] */
-				mpq_set_si(pm->A[row][d*M + 0], nd_r, 1);
+				mpq_set_si(pm->A[row][d*W + 0], nd_r, 1);
 
 				/* B: Z(r) at base component of Dn[d] */
-				mpq_set_z(pm->B[row][d*M + 0], Z[r-1]);
+				mpq_set_z(pm->B[row][d*W + 0], Z[r-1]);
 
-				/* B: L(k,r) for k=1..M-1 at station k+1 of Dn[d] */
-				for (k = 1; k <= M-1; k++) {
-					mpq_set_z(pm->B[row][d*M + k], L[k-1][r-1]);
+				/* B: m'(k)*L(k,r) for every station k=1..M at the station-k
+				 * component of Dn[d], m'(M) = mi_M - 1 as above.
+				 * Matches comom/setupls.c:135. */
+				for (k = 1; k <= W-1; k++) {
+					int mult = qnm->mi[k-1] - (k == M ? 1 : 0);
+					if (mult == 0) continue;
+					mpz_mul_si(neg_val, L[k-1][r-1], mult);
+					mpq_set_z(pm->B[row][d*W + k], neg_val);
 				}
 
 				/* DD: L(M,r) at base component of Dn[d] */
-				mpq_set_z(pm->DD[row][d*M + 0], L[M-1][r-1]);
+				mpq_set_z(pm->DD[row][d*W + 0], L[M-1][r-1]);
 
 				row++;
 			}

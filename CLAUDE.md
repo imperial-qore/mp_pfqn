@@ -61,8 +61,9 @@ The test script runs all 5 solvers (mva, ca, recal, mom, comom) with options `-e
 | `safe_comom/` | CoMoM exact on singular models | Hybrid MVA/CoMoM (TSE'09 Appendix A): tiered orchestrator - plain CoMoM, then class-permuted CoMoM, then exact convolution (`ca`) for genuine loading degeneracies. Every tier exact. See `safe_comom/README.md` |
 | `safe_mom/` | MoM exact on singular models | Same tiered construction on the MoM basis: plain `mom -X`, then class-permuted `mom -X`, then exact convolution (`ca`). Adds `-X`/`--no-perturb` to `mom` (fail instead of auto-perturbing). Tier driver shared with `safe_comom` (`util/safe_tiers.c`). See `safe_mom/README.md` |
 | `safe_gmom/` | Generalized MoM exact on singular models | Same tiers on gmom's b=1 basis: `gmom -X`, class-permuted `gmom -X`, then `ca`. Adds `-X`/`--no-perturb` to `gmom`. Tier 2 never fires (gmom picks the class order itself via its exact b=1 oracle); Tier 3 also absorbs gmom's domain limits (R=1, multiserver, load-dependent). Open/mixed reported as out of scope. See `safe_gmom/README.md` |
-| `procomom/` | ProCoMoM | Marginal queue-length probabilities |
+| `procomom/` | ProCoMoM | Marginal queue-length probabilities on the CoMoM basis. Auto-perturbs on singular systems (approximate), unlike `promom`. Three defects fixed after parity testing against `promom`/`ca`: missing `mi` weights in the PC rows (was wrong at every station of any model with a replicated station); no basis column for the reference station's own replica (stride now `M+1` only when that station is replicated -- widening it unconditionally makes `A^T A` singular); and duplicated output rows on the perturbation retry. `-P` now matches `promom` bit-for-bit. See `procomom/README.md` |
 | `promom/` | ProMoM | Marginal queue-length probabilities on the MoM basis (replica combinations x class decrements) instead of the CoMoM one. Same `A q(n) = B q_prev(n) + n[DC q(n-1) + DD q_prev(n-1)]` shape as procomom; the population constraint holds the reference copy out of the station sum. `-q` matches exact `ca` to 5e-16; `-P` is bit-for-bit `procomom` on single-server models and CORRECT where procomom is wrong (any `mi>1`). See `promom/README.md` |
+| `safe_promom/` | ProMoM exact on class-order singularities | Tier wrapper over `util/safe_tiers`: plain `promom`, then class-permuted `promom`. NO Tier 3 -- convolution returns queue lengths, not distributions, so a model degenerate under every class order is declined rather than perturbed. Tier 2 recovers `08_multiclass` and `11_swapped`. See `safe_promom/README.md` |
 | `clw/` | Choudhury-Leung-Whitt (CLW) | Generating-function inversion; single-server + IS. Floating-point (G/logG as doubles, not exact) |
 | `clwld/` | CLW with load-dependent stations | Bertozzi-McKenna per-center transforms; multiserver and load-dependent. Floating-point output |
 | `momf/` | MoM in fixed-precision floating point | MPFR at a settable working precision, optional Wilkinson/Moler iterative refinement. Built to measure whether the exact arithmetic is necessary; see `momf/README.md` |
@@ -76,7 +77,7 @@ The test script runs all 5 solvers (mva, ca, recal, mom, comom) with options `-e
 - **`util/`** — Model I/O (`readmodel`), population enumeration (`nextpop`, `popindex`), combinatorics (`nck`),
   the shared b=1 level builder and singularity oracle (`setup1`, `pfqn_recursion_singular`,
   `pfqn_nonsingular_recclass` in `pfqn_sing.{c,h}`), and the tiered exact-wrapper driver
-  (`safe_tiers.{c,h}`, used by `safe_comom`, `safe_mom` and `safe_gmom`)
+  (`safe_tiers.{c,h}`, used by `safe_comom`, `safe_mom`, `safe_gmom` and `safe_promom`)
 
 ### Core Data Structure (`util/util.h`)
 

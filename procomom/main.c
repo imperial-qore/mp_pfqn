@@ -65,6 +65,19 @@ static void free_mpq_mat(mpq_mat_t mat, int rows, int cols)
 	free(mat);
 }
 
+/* Components per shift for the current rotation, and the basis size that
+ * follows.  The basis is the base component plus stations 1..M-1: with a
+ * single-server reference station (the one rotated to position M) its own
+ * replica term has weight mi_M - 1 = 0 everywhere, so giving it a column
+ * would leave that column unconstrained and A^T A singular.  When the
+ * reference IS replicated the weight is nonzero and the column is needed, so
+ * the stride widens to M+1. */
+static int set_stride(combsrep* Dn, qnmodel* qn)
+{
+	Dn->stride = (qn->mi[qn->M - 1] > 1) ? qn->M + 1 : qn->M;
+	return Dn->card * Dn->stride;
+}
+
 /* Swap L rows and mi values for stations a and b (0-based) */
 static void swap_stations(qnmodel* qnm, int a, int b)
 {
@@ -404,8 +417,11 @@ solve_attempt:;
 	for (int d = 0; d < Dn->card; d++)
 		Dn->combs[d][R-1] = 0;
 	Dn->combs = (int**)sortbynnzpos(Dn->combs, Dn->card, R);
+	/* Width of a shift block.  The reference station is rotated to position M,
+	 * so the stride is recomputed per rotation in the loops below. */
+	Dn->stride = M;
 
-	int basisSize = Dn->card * M;
+	int basisSize = Dn->card * Dn->stride;
 	int sumN = sum(qnm->N, R);
 
 	/* Allocate result distribution array */
@@ -421,9 +437,16 @@ solve_attempt:;
 		mpf_t fval;
 		mpf_init(fval);
 
+		/* Buffer the results: on a singular solve this function jumps back to
+		 * solve_attempt and recomputes every station, so anything already
+		 * printed would be emitted twice.  Print only once all M stations
+		 * have succeeded. */
+		double* qbuf = (double*) calloc(M, sizeof(double));
+
 		for (int k = 1; k <= M; k++) {
 			/* Swap station k-1 with station M-1 to make station k the reference */
 			swap_stations(qnm, k-1, M-1);
+			basisSize = set_stride(Dn, qnm);
 
 			/* Run algorithm */
 			int ret = solve_procomom(qnm, Dn, sumN, dist, basisSize, 0);
@@ -457,14 +480,22 @@ solve_attempt:;
 			if (mpq_sgn(total_prob) != 0)
 				mpq_div(Q_k, Q_k, total_prob);
 
+			/* mi_k > 1 means mi_k replicated single-server queues, and the
+			 * distribution above is the marginal at ONE copy, so the station
+			 * total is mi_k times its mean.  Same convention as promom -q,
+			 * and what makes this comparable with ca -q summed over classes. */
+			{ mpq_t mq; mpq_init(mq); mpq_set_si(mq, qnm->mi[k-1], 1);
+			  mpq_mul(Q_k, Q_k, mq); mpq_clear(mq); }
 			mpf_set_q(fval, Q_k);
-			printf("%.15e\n", mpf_get_d(fval));
+			qbuf[k-1] = mpf_get_d(fval);
 
 			mpq_clear(total_prob);
 			mpq_clear(Q_k);
 			mpq_clear(term);
 		}
 
+		for (int k = 1; k <= M; k++) printf("%.15e\n", qbuf[k-1]);
+		free(qbuf);
 		mpf_clear(fval);
 	} else if (prob_output) {
 		/*
@@ -474,8 +505,12 @@ solve_attempt:;
 		mpf_t fval;
 		mpf_init(fval);
 
+		/* buffered for the same reason as the -q branch above */
+		double* pbuf = (double*) calloc((size_t)M * (sumN+1), sizeof(double));
+
 		for (int k = 1; k <= M; k++) {
 			swap_stations(qnm, k-1, M-1);
+			basisSize = set_stride(Dn, qnm);
 
 			int ret = solve_procomom(qnm, Dn, sumN, dist, basisSize, 0);
 			if (ret < 0) {
@@ -498,14 +533,20 @@ solve_attempt:;
 				if (mpq_sgn(total_prob) != 0)
 					mpq_div(p, p, total_prob);
 				mpf_set_q(fval, p);
-				printf("%.15e", mpf_get_d(fval));
-				if (j < sumN) printf(" ");
+				pbuf[(size_t)(k-1)*(sumN+1) + j] = mpf_get_d(fval);
 				mpq_clear(p);
 			}
-			printf("\n");
 			mpq_clear(total_prob);
 		}
 
+		for (int k = 1; k <= M; k++) {
+			for (int j = 0; j <= sumN; j++) {
+				printf("%.15e", pbuf[(size_t)(k-1)*(sumN+1) + j]);
+				if (j < sumN) printf(" ");
+			}
+			printf("\n");
+		}
+		free(pbuf);
 		mpf_clear(fval);
 	} else {
 		/*
@@ -517,6 +558,7 @@ solve_attempt:;
 
 		for (int k = 1; k <= M; k++) {
 			swap_stations(qnm, k-1, M-1);
+			basisSize = set_stride(Dn, qnm);
 
 			int ret = solve_procomom(qnm, Dn, sumN, dist, basisSize,
 			                          (k == 1) ? show_progress : 0);
@@ -557,6 +599,8 @@ solve_attempt:;
 				}
 			}
 
+			{ mpq_t mq; mpq_init(mq); mpq_set_si(mq, qnm->mi[k-1], 1);
+			  mpq_mul(Q_k, Q_k, mq); mpq_clear(mq); }
 			mpf_set_q(fval, Q_k);
 			printf("  Q[%d] = %.15e\n", k, mpf_get_d(fval));
 

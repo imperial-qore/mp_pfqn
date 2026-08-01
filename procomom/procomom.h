@@ -16,6 +16,9 @@ typedef struct
 	int k;       /* choose from k types (M stations) */
 	int card;    /* nchoosek(n+k-1, k) */
 	int **combs; /* matrix of combinations */
+	int stride;  /* components per shift: M normally (base + stations 1..M-1),
+	                M+1 when the reference station is replicated and its own
+	                replica term needs a column of its own.  See phash.c. */
 } combsrep;
 
 /* P matrices: 4 dense rectangular matrices [numRows x basisSize] */

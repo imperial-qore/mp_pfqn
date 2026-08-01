@@ -37,6 +37,7 @@ static const safe_cfg CFG = {
 	.solver_flags = "-X",      /* never accept gmom's perturbed fallback */
 	.probe_flags  = "-e -X",   /* cheap exact-only probe: fails at once if singular */
 	.fallback     = "ca",
+	.permuted_flags = "-t -q",   /* both are indexed by class */
 	.usage =
 	  "  Generalized MoM (b=1) that always returns the exact answer: plain\n"
 	  "  gmom, then gmom with a permuted class order, then exact convolution\n"

@@ -130,6 +130,17 @@ Implemented:
   gives 9.049316350000000e+11, matching `ca` to 16 digits.
 - also added: `-X`/`--no-perturb`, the exact-only probe that Step 2 needs.
 
+Regression of the unchanged flags against `bin/ca` over all 28 models: 12
+exact, 8 skipped as outside gmom's domain, 2 timing out past 300 s
+(`06_large`, `12_expanded` -- pre-existing slowness, `ca` completes both),
+and 2 differing in the last printed digit only (`test_singular4` -t/-q,
+`test_singular6` -q, e.g. 9.999999999999999e-01 against 1.000000000000000e+00).
+Those two auto-perturb at digit 20, and a 1e-20 relative perturbation sits
+below double precision, so only the last digit moves; the other eight
+auto-perturbing models match exactly.
+`apply_signed_perturbation_to_model(..., +1, ...)` is arithmetically
+identical to the old `apply_perturbation_to_model`, so none of this is new.
+
 ## Step 2 - `safe_gmom` (small, low payoff)
 
 `gmom` already implements the Tier-2 analogue internally (init-time
@@ -219,12 +230,38 @@ mom-singular, 2 load-dependent, 2 open/mixed. The singular set is exactly
 it should. It reports the singularity instead of perturbing, where
 `procomom` perturbs at digit 20.
 
-Follow-on (small, not done): a `safe_promom` over `util/safe_tiers` would
-recover `08_multiclass` and `11_swapped` from the class-permutation tier
-alone. Note there is no exact Tier-3 for marginals -- `bin/ca` gives queue
-lengths, not distributions -- so a genuinely degenerate model would still be
-declined; that tier would need a convolution-based marginal, which does not
-exist in the tree yet.
+## Step 5 - `safe_promom` [DONE]
+
+Follow-on from Step 3: a tier wrapper giving `promom` the class-permutation
+tier. Implemented as `safe_promom/` over `util/safe_tiers.c`, registered in
+`DIRS`/`EXE` and the top-level recipe. Tier 2 recovers `08_multiclass` and
+`11_swapped` -- the same two models `safe_mom` answers at its Tier 2 -- and
+both match `bin/ca -q` summed over classes exactly.
+
+Two extensions to `safe_cfg` were needed, both backward compatible:
+
+- `permuted_flags`: which output flags are indexed BY CLASS and so must be
+  mapped back after a Tier-2 run. The three existing wrappers declare
+  `"-t -q"` and are bit-for-bit unchanged; `safe_promom` declares `""`,
+  because `-P` and `-q` are per STATION and the marginal at a station does
+  not depend on the class processing order.
+- `fallback = NULL`: `safe_promom` has NO Tier 3. The others fall back to
+  `bin/ca`, exact for G/X/Q, but convolution in this tree returns mean queue
+  lengths, not marginal DISTRIBUTIONS, so there is nothing exact to fall back
+  to. A model degenerate under every class order is declined with a message
+  rather than answered approximately.
+
+Coverage: `safe_promom` answers 11 of the 28 models against `promom`'s 9, all
+matching `bin/ca -q` summed over classes (max relative error 4.6e-16). The 17
+declined are 13 singular under every class order, 2 load-dependent and 2
+open/mixed. With no Tier 3 a load-dependent model would have been reported as
+singular, which it is not -- the driver skips the class search for `isLD` --
+so that case now reports out-of-domain instead.
+
+This is the one wrapper in the family with a genuinely open bottom tier.
+Closing it needs a convolution-based marginal distribution, which does not
+exist in the tree; that is the natural next piece of work if exact marginals
+on degenerate models are wanted.
 
 ## Step 4 - `gcomom` (largest, do last)
 

@@ -46,8 +46,13 @@ started one level lower because the generalized basis is more compact).
 | `-b` | bracket a perturbed run by re-solving with `-eps` as well as `+eps` (requires `-p`) |
 | `--force-perturb` | allow the perturbed solve under `-e` |
 
-`G(N)`, `X` and `Q` are bit-for-bit identical to `bin/ca` on every
-in-scope non-singular model (02, 03, 09, 13, lcfs_2class, lcfs_3class).
+`G(N)`, `X` and `Q` are bit-for-bit identical to `bin/ca` on every in-scope
+non-singular model (02, 03, 09, 13, lcfs_2class, lcfs_3class), and on the
+auto-perturbing ones too (05_sparse, 07, 08, test_singular2/3/5/7/8). Two
+auto-perturbing models differ in the last printed digit only
+(`test_singular4` -t/-q, `test_singular6` -q): the digit-20 perturbation is
+below double precision, so the difference is one ulp. `06_large` and
+`12_expanded` are in scope but exceed a 300 s budget.
 
 ## Perturbation
 

@@ -8,10 +8,11 @@
    For the empty network, only the zero combination is valid (all others
    have N-Dn[d] with negative entries). At n=0, P(0 customers) = 1 for
    all stations.
-   Sets pk[phash(zero_comb, k)] = 1 for k=1..M, rest = 0. */
+   Sets pk[phash(zero_comb, k)] = 1 for every component, rest = 0. */
 void pexact(mpq_vec_t pk, combsrep* Dn, int M)
 {
-	int basisSize = Dn->card * M;
+	(void) M;
+	int basisSize = Dn->card * Dn->stride;
 	int i, k;
 
 	/* Zero everything */
@@ -22,7 +23,7 @@ void pexact(mpq_vec_t pk, combsrep* Dn, int M)
 	   (all zeros sort first). Set pk = 1 for all stations at this
 	   combination. */
 	int* zero_comb = (int*)int_vec(Dn->n, 0);
-	for (k = 1; k <= M; k++) {
+	for (k = 1; k <= Dn->stride; k++) {
 		int idx = phash(Dn, zero_comb, k);
 		if (idx >= 0 && idx < basisSize)
 			mpq_set_si(pk[idx], 1, 1);
