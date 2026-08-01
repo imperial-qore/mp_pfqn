@@ -19,7 +19,8 @@
  * (R-1 instead of R) because the generalized basis is more compact.
  */
 void gmom_measures(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM,
-                   int out_e, int out_g, int out_l, int out_t, int out_q, int* cperm, mpz_t scale_factor)
+                   int out_e, int out_g, int out_l, int out_t, int out_q, int* cperm, mpz_t scale_factor,
+                   gmom_out* cap)
 {
 	int M = qn->M, R = qn->R;
 	/* cperm[j] = original class at permuted position j; inv[c] = permuted
@@ -119,6 +120,29 @@ void gmom_measures(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM,
 		mpq_t d; mpq_init(d); mpq_set_z(d, sp);
 		mpq_div(G0s, G0s, d);
 		mpq_clear(d); mpz_clear(sp);
+	}
+
+	if (cap) {
+		/* -b: hand every measure back to the caller, print nothing */
+		mpf_t f; mpf_init(f); mpf_set_q(f, G0s);
+		cap->G    = mpq_get_d(G0s);
+		cap->logG = log(mpf_get_d(f));
+		mpf_clear(f);
+		for (_c = 0; _c < R; _c++) {
+			mpq_div(tmp, G[inv[_c]+1], G[0]);
+			if (scaled) mpq_mul(tmp, tmp, qscale);
+			cap->X[_c] = mpq_get_d(tmp);
+		}
+		for (i = 1; i <= M; i++) for (_c = 0; _c < R; _c++) {
+			s = inv[_c] + 1;
+			mpz_t oL; mpz_init(oL); if (scaled) mpz_tdiv_q(oL, L[i-1][s-1], scale_factor); else mpz_set(oL, L[i-1][s-1]);
+			if (mpz_sgn(oL) == 0) mpq_set_si(tmp, 0, 1);
+			else { mpq_set_z(tmp, L[i-1][s-1]); mpq_mul(tmp, tmp, Gk[(i-1)*(R+1)+s]); mpq_div(tmp, tmp, G[0]); mpq_set_si(tmp2, mi[i-1], 1); mpq_mul(tmp, tmp, tmp2); }
+			mpz_clear(oL);
+			cap->Q[(i-1)*R + _c] = mpq_get_d(tmp);
+		}
+		mpq_clear(tmp); mpq_clear(tmp2); mpq_clear(G0s); mpq_clear(qscale);
+		return;
 	}
 
 	if (out_l) {

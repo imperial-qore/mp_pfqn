@@ -11,7 +11,7 @@ struct rusage ruse;
 double t0, t1;
 
 extern void gmva(mpq_t G, mpz_t** dem, int nq, int* pop, mpz_t* Z, int r);
-extern void gmom_measures(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM, int oe, int og, int ol, int ot, int oq, int* cperm, mpz_t scale_factor);
+extern void gmom_measures(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM, int oe, int og, int ol, int ot, int oq, int* cperm, mpz_t scale_factor, gmom_out* cap);
 
 /* ---- small dense helpers over rectangular mpq matrices ---------------- */
 
@@ -147,60 +147,62 @@ void generate_permutation(int* perm, int n, unsigned int seed) {
 	}
 }
 
-void apply_perturbation_to_model(qnmodel* qnm, int perturbation_digit, int perturbation_seed, mpz_t scale_factor) {
+/* sign = +1 adds the perturbation (mom's convention), sign = -1 subtracts it.
+ * A demand of 0 is left at 0 under sign = -1, since a negative demand is not
+ * a model; that entry then carries no perturbation error either way. */
+void apply_signed_perturbation_to_model(qnmodel* qnm, int perturbation_digit, int perturbation_seed, int sign, mpz_t scale_factor) {
 	// Calculate scale factor: 10^d where d is the perturbation digit
 	mpz_set_ui(scale_factor, 10);
 	mpz_pow_ui(scale_factor, scale_factor, perturbation_digit);
-	
+
 	// For each class, generate a random permutation of 1 to M+1
 	int* perm = (int*)calloc(qnm->M + 1, sizeof(int));
-	
+
 	for(int j = 0; j < qnm->R; j++) {
 		// Generate permutation for class j using seed based on class index
 		generate_permutation(perm, qnm->M + 1, perturbation_seed + j * 1000);
-		
+
 		// Apply perturbation to L[i][j] for all stations i
 		for(int i = 0; i < qnm->M; i++) {
+			int zero = (mpz_sgn(qnm->L[i][j]) == 0);
 			mpz_mul(qnm->L[i][j], qnm->L[i][j], scale_factor);
-			mpz_add_ui(qnm->L[i][j], qnm->L[i][j], perm[i]);
+			if (sign > 0)          mpz_add_ui(qnm->L[i][j], qnm->L[i][j], perm[i]);
+			else if (!zero)        mpz_sub_ui(qnm->L[i][j], qnm->L[i][j], perm[i]);
 		}
-		
+
 		// Apply perturbation to Z[j] using the last element of permutation
+		int zeroz = (mpz_sgn(qnm->Z[j]) == 0);
 		mpz_mul(qnm->Z[j], qnm->Z[j], scale_factor);
-		mpz_add_ui(qnm->Z[j], qnm->Z[j], perm[qnm->M]);
+		if (sign > 0)             mpz_add_ui(qnm->Z[j], qnm->Z[j], perm[qnm->M]);
+		else if (!zeroz)          mpz_sub_ui(qnm->Z[j], qnm->Z[j], perm[qnm->M]);
 	}
-	
+
 	free(perm);
 }
 
-int main(int argc, char** argv)
+void apply_perturbation_to_model(qnmodel* qnm, int perturbation_digit, int perturbation_seed, mpz_t scale_factor) {
+	apply_signed_perturbation_to_model(qnm, perturbation_digit, perturbation_seed, +1, scale_factor);
+}
+
+/* A completed gmom solve: everything downstream of the recursion (measures,
+ * validation) works off this, so -b can run the recursion twice under two
+ * perturbation seeds and bracket the two answers. */
+typedef struct {
+	qnmodel*  qn;
+	mpq_vec_t vlM;    /* top basis at N     */
+	mpq_vec_t grM;    /* top basis at N-1_R */
+	int*      cperm;
+	mpz_t     scale;
+} gmom_sol;
+
+/* One complete solve: model load, domain checks, singularity screen and the
+ * divide-and-conquer recursion.  Returns 0 on success, 1 on error, 2 when
+ * --validate consumed the run. */
+static int gmom_compute(char* model_file, int pdigit, int pseed, int psign,
+                        bool out_e, bool force_perturb, bool no_perturb, bool validate,
+                        bool print_model, gmom_sol* sol)
 {
 	int i, s, m, r, nr;
-	bool out_e = false, out_g = false, out_l = false, out_t = false, out_q = false, validate = false;
-	int pdigit = 0, pseed = 23000;
-	char* model_file = NULL;
-
-	t0 = CPUTIME;
-	for (i = 1; i < argc; i++) {
-		if      (!strcmp(argv[i], "-e") || !strcmp(argv[i], "--ex"))  out_e = true;
-		else if (!strcmp(argv[i], "-g") || !strcmp(argv[i], "--nc"))  out_g = true;
-		else if (!strcmp(argv[i], "-l") || !strcmp(argv[i], "--log")) out_l = true;
-		else if (!strcmp(argv[i], "-t") || !strcmp(argv[i], "--tput")) out_t = true;
-		else if (!strcmp(argv[i], "-q") || !strcmp(argv[i], "--qlen")) out_q = true;
-		else if (!strcmp(argv[i], "--validate")) validate = true;
-		else if (!strcmp(argv[i], "-p")) { if (i+1 < argc) pdigit = atoi(argv[++i]); }
-		else if (!strcmp(argv[i], "-s") || !strcmp(argv[i], "--seed")) { if (i+1 < argc) pseed = atoi(argv[++i]); }
-		else if (argv[i][0] != '-') model_file = argv[i];
-	}
-	if (!model_file) {
-		printf("USAGE: %s [-e|-g|-l|-t|-q] [--validate] [-p digit] [-s seed] model.qn\n", argv[0]);
-		printf("  gmom: generalized (divide-and-conquer, b=1) Method of Moments.\n");
-		printf("  Outputs the top normalizing-constant basis entry V{M,l}(1),\n");
-		printf("  matching the reference mbmom1.  --validate checks the whole\n");
-		printf("  basis against exact convolution of the augmented models.\n");
-		return -1;
-	}
-
 	qnmodel* qn = readmodel(model_file);
 	int M = qn->M, R = qn->R;
 	if (R < 2) { fprintf(stderr, "gmom requires at least two classes\n"); return 1; }
@@ -213,8 +215,20 @@ int main(int argc, char** argv)
 	mpz_t** L = qn->L; mpz_t* Z = qn->Z; int* N = qn->N;
 	nckinit(M + R - 1, R);
 
+	/* keep the unperturbed demands so the header can report the model as
+	 * read plus the per-class epsilon actually applied (as mom does) */
+	mpz_t** original_L = (mpz_t**) malloc(M * sizeof(mpz_t*));
+	mpz_t*  original_Z = (mpz_t*)  malloc(R * sizeof(mpz_t));
+	{ int k, j;
+	  for (k = 0; k < M; k++) { original_L[k] = (mpz_t*) malloc(R * sizeof(mpz_t));
+	    for (j = 0; j < R; j++) mpz_init_set(original_L[k][j], qn->L[k][j]); }
+	  for (j = 0; j < R; j++) mpz_init_set(original_Z[j], qn->Z[j]); }
+	int* original_N = (int*) malloc(R * sizeof(int));
+	{ int j; for (j = 0; j < R; j++) original_N[j] = qn->N[j]; }
+
 	mpz_t scale_factor; mpz_init_set_ui(scale_factor, 1);
-	if (pdigit > 0) apply_perturbation_to_model(qn, pdigit, pseed, scale_factor);
+	int applied_digit = 0;
+	if (pdigit > 0) { apply_signed_perturbation_to_model(qn, pdigit, pseed, psign, scale_factor); applied_digit = pdigit; }
 
 	/* Init-time singularity screen (loading-only, one factorisation per
 	 * level).  If the recursion would hit a degenerate matrix, move the
@@ -226,16 +240,24 @@ int main(int argc, char** argv)
 	if (pfqn_recursion_singular(L, M, R)) {
 		int fix = pfqn_nonsingular_recclass(L, M, R);
 		if (fix < 0) {
-			if (out_e) {
-				fprintf(stderr, "gmom: model is singular under every class order (genuine loading degeneracy);\n  no exact G available. Use bin/ca or bin/safe_comom, or -g/-t/-q with -p for a perturbed approximation.\n");
+			if (no_perturb) {
+				/* exact-only probe (safe_gmom): report and fail rather
+				 * than degrade to a perturbed approximation */
+				fprintf(stderr, "gmom: singular system under every class order and --no-perturb given; no exact answer\n");
+				return 1;
+			}
+			if (out_e && !force_perturb) {
+				fprintf(stderr, "gmom: model is singular under every class order (genuine loading degeneracy);\n  no exact G available. Use bin/ca or bin/safe_gmom, or -g/-t/-q with -p for a perturbed\n  approximation, or --force-perturb to print the perturbed rational anyway.\n");
 				return 1;
 			}
 			/* auto-perturb at digit 20 (as mom/comom do) for an approximate answer */
 			if (mpz_cmp_ui(scale_factor, 1) == 0) {
 				fprintf(stderr, "gmom: singular system; automatically applying perturbation at digit 20 (approximate result).\n");
 				apply_perturbation_to_model(qn, 20, pseed, scale_factor);
+				applied_digit = 20;
 				L = qn->L; Z = qn->Z; N = qn->N;
 			}
+			if (out_e) fprintf(stderr, "gmom: --force-perturb: the rational printed under -e is the EXACT G of the\n  PERTURBED model, not of the model as read.\n");
 		} else {
 		/* cperm[j] = original class placed at position j (fix goes last) */
 		int c = 0, j;
@@ -250,6 +272,20 @@ int main(int argc, char** argv)
 		L = L2; N = N2; Z = Z2;
 		qn->L = L2; qn->N = N2; qn->Z = Z2;   /* measures reads from qn */
 		}
+	}
+
+	/* Header in the default (no output flag) mode.  Printed off a view of
+	 * the model in its ORIGINAL class order and with the demands as read,
+	 * so a perturbed run is self-describing: the eps= column reports the
+	 * perturbation actually applied, whether from -p or from the automatic
+	 * digit-20 fallback above. */
+	if (print_model) {
+		qnmodel view = *qn;
+		view.L = original_L; view.Z = original_Z; view.N = original_N;
+		if (applied_digit > 0)
+			printmodel_with_perturbation(&view, applied_digit, scale_factor, pseed, original_L, original_Z);
+		else
+			printmodel(&view);
 	}
 
 	int* nvec = (int*) calloc(R, sizeof(int));
@@ -361,12 +397,124 @@ int main(int argc, char** argv)
 		mpq_clear(ref); free(pop);
 		if (totbad) { printf("VALIDATE: %d/%d WRONG\n", totbad, total); return 1; }
 		printf("VALIDATE: all %d basis entries match exact convolution\n", total);
+		return 2;
+	}
+
+	if (!grM) { fprintf(stderr, "gmom: internal error, grM not captured\n"); return 1; }
+	sol->qn    = qn;
+	sol->vlM   = vl[M];
+	sol->grM   = grM;
+	sol->cperm = cperm;
+	mpz_init_set(sol->scale, scale_factor);
+	return 0;
+}
+
+/* -b: two solves at the same digit and seed, one with +eps and one with -eps.
+ * G is a polynomial with non-negative coefficients in the demands, so it is
+ * monotone in them and [G(-eps), G(+eps)] encloses the exact G(N) (likewise
+ * log G).  X and Q are ratios of such polynomials and are NOT monotone in
+ * general, so their interval is an error indicator, not a proven enclosure;
+ * the output labels which is which. */
+static void print_bracket(const char* label, double a, double b)
+{
+	double lo = a < b ? a : b, hi = a < b ? b : a;
+	double mid = 0.5*(lo+hi);
+	double rel = (mid != 0.0) ? (hi-lo)/(2.0*(mid < 0 ? -mid : mid)) : 0.0;
+	printf("%-12s %.15e  [%.15e, %.15e]  relhw=%.2e\n", label, mid, lo, hi, rel);
+}
+
+int main(int argc, char** argv)
+{
+	int i;
+	bool out_e = false, out_g = false, out_l = false, out_t = false, out_q = false;
+	bool validate = false, out_b = false, force_perturb = false, no_perturb = false;
+	int pdigit = 0, pseed = 23000;
+	char* model_file = NULL;
+
+	t0 = CPUTIME;
+	for (i = 1; i < argc; i++) {
+		if      (!strcmp(argv[i], "-e") || !strcmp(argv[i], "--ex"))  out_e = true;
+		else if (!strcmp(argv[i], "-g") || !strcmp(argv[i], "--nc"))  out_g = true;
+		else if (!strcmp(argv[i], "-l") || !strcmp(argv[i], "--log")) out_l = true;
+		else if (!strcmp(argv[i], "-t") || !strcmp(argv[i], "--tput")) out_t = true;
+		else if (!strcmp(argv[i], "-q") || !strcmp(argv[i], "--qlen")) out_q = true;
+		else if (!strcmp(argv[i], "-b") || !strcmp(argv[i], "--bounds")) out_b = true;
+		else if (!strcmp(argv[i], "--force-perturb")) force_perturb = true;
+		else if (!strcmp(argv[i], "-X") || !strcmp(argv[i], "--no-perturb")) no_perturb = true;
+		else if (!strcmp(argv[i], "--validate")) validate = true;
+		else if (!strcmp(argv[i], "-p")) { if (i+1 < argc) pdigit = atoi(argv[++i]); }
+		else if (!strcmp(argv[i], "-s") || !strcmp(argv[i], "--seed")) { if (i+1 < argc) pseed = atoi(argv[++i]); }
+		else if (argv[i][0] != '-') model_file = argv[i];
+	}
+	if (!model_file) {
+		printf("USAGE: %s [-e|-g|-l|-t|-q] [-b] [--validate] [--force-perturb] [-p digit] [-s seed] model.qn\n", argv[0]);
+		printf("  gmom: generalized (divide-and-conquer, b=1) Method of Moments.\n");
+		printf("  Outputs the top normalizing-constant basis entry V{M,l}(1),\n");
+		printf("  matching the reference mbmom1.  --validate checks the whole\n");
+		printf("  basis against exact convolution of the augmented models.\n");
+		printf("  -b, --bounds      : bracket a perturbed run by re-solving with a\n");
+		printf("                      second seed; requires -p (see gmom/README.md)\n");
+		printf("  --force-perturb   : allow the perturbed solve under -e (the printed\n");
+		printf("                      rational is then exact for the PERTURBED model)\n");
+		printf("  -X, --no-perturb  : fail on a singular system instead of auto-perturbing\n");
+		printf("                      (exact-only probe, used by bin/safe_gmom)\n");
+		return -1;
+	}
+	if (out_b && pdigit == 0) {
+		fprintf(stderr, "gmom: -b/--bounds requires -p digit (there is nothing to bracket without a perturbation)\n");
+		return 1;
+	}
+	if (out_b && out_e) {
+		fprintf(stderr, "gmom: -b/--bounds is incompatible with -e (a bracket is not a single exact rational)\n");
+		return 1;
+	}
+
+	if (!out_b) {
+		gmom_sol sol;
+		bool print_model = !(out_e || out_g || out_l || out_t || out_q || validate);
+		int rc = gmom_compute(model_file, pdigit, pseed, +1, out_e, force_perturb, no_perturb, validate, print_model, &sol);
+		if (rc) return rc == 2 ? 0 : rc;
+		gmom_measures(sol.qn, sol.vlM, sol.grM, out_e, out_g, out_l, out_t, out_q, sol.cperm, sol.scale, NULL);
 		return 0;
 	}
 
-	/* plain G(N), X, Q via the mdecrease replica-descent */
-	if (!grM) { fprintf(stderr, "gmom: internal error, grM not captured\n"); return 2; }
-	gmom_measures(qn, vl[M], grM, out_e, out_g, out_l, out_t, out_q, cperm, scale_factor);
+	/* bounds: same digit and seed, one solve with +eps and one with -eps */
+	gmom_sol sp, sm;
+	int rc = gmom_compute(model_file, pdigit, pseed, +1, false, force_perturb, no_perturb, false, false, &sp);
+	if (rc) return rc == 2 ? 0 : rc;
+	int M = sp.qn->M, R = sp.qn->R;
+	gmom_out op, om;
+	op.X = (double*) malloc(R * sizeof(double)); op.Q = (double*) malloc(M*R * sizeof(double));
+	om.X = (double*) malloc(R * sizeof(double)); om.Q = (double*) malloc(M*R * sizeof(double));
+	gmom_measures(sp.qn, sp.vlM, sp.grM, 0, 0, 0, 0, 0, sp.cperm, sp.scale, &op);
+	rc = gmom_compute(model_file, pdigit, pseed, -1, false, force_perturb, no_perturb, false, false, &sm);
+	if (rc) { fprintf(stderr, "gmom: the -eps solve failed; no bracket available\n"); return rc == 2 ? 0 : rc; }
+	gmom_measures(sm.qn, sm.vlM, sm.grM, 0, 0, 0, 0, 0, sm.cperm, sm.scale, &om);
 
+	printf("========== gmom (perturbation bracket, digit %d, seed %d) ==========\n", pdigit, pseed);
+	printf("Columns: midpoint  [lower, upper]  relative half-width.\n");
+	printf("Lower/upper are the -eps and +eps solves.  G and log(G) are monotone\n");
+	printf("in the demands, so their interval encloses the exact value; the X and Q\n");
+	printf("intervals are ratios of such quantities and are error indicators only.\n\n");
+	if (out_l) {
+		print_bracket("log(G)", om.logG, op.logG);
+	} else if (out_g || !(out_t || out_q)) {
+		print_bracket("G", om.G, op.G);
+	}
+	if (out_t || !(out_g || out_l || out_q)) {
+		int r;
+		printf("\nX (throughputs, indicative interval):\n");
+		for (r = 0; r < R; r++) { char lbl[32]; snprintf(lbl, sizeof lbl, "X[%d]", r+1); print_bracket(lbl, om.X[r], op.X[r]); }
+	}
+	if (out_q || !(out_g || out_l || out_t)) {
+		int k, r;
+		printf("\nQ (mean queue lengths, indicative interval):\n");
+		for (k = 0; k < M; k++) for (r = 0; r < R; r++) {
+			char lbl[32]; snprintf(lbl, sizeof lbl, "Q[%d][%d]", k+1, r+1);
+			print_bracket(lbl, om.Q[k*R+r], op.Q[k*R+r]);
+		}
+	}
+	printf("=========================================\n");
+	free(op.X); free(op.Q); free(om.X); free(om.Q);
 	return 0;
 }

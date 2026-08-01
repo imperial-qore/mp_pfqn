@@ -43,9 +43,45 @@ started one level lower because the generalized basis is more compact).
 | `--validate` | check the whole basis, at every level, against exact convolution |
 | `-p digit` | perturb demands/think-times at that decimal digit (approximate solution for degenerate models) |
 | `-s seed` | RNG seed for the perturbation (default 23000) |
+| `-b` | bracket a perturbed run by re-solving with `-eps` as well as `+eps` (requires `-p`) |
+| `--force-perturb` | allow the perturbed solve under `-e` |
 
 `G(N)`, `X` and `Q` are bit-for-bit identical to `bin/ca` on every
 in-scope non-singular model (02, 03, 09, 13, lcfs_2class, lcfs_3class).
+
+## Perturbation
+
+A perturbation replaces each demand `L_kr` by `L_kr*10^d + eps_kr` with
+`eps_kr` a small integer, so the perturbed model is solved exactly and the
+answer is descaled analytically: `G` is homogeneous of degree `sum(N)` in the
+demands and is divided by `10^(d*sum(N))`, `X_r = G(N-1_r)/G(N)` picks up one
+factor `10^d`, and in `Q_kr` the two powers cancel (`measures.c`). The
+demands are therefore *not* restored before the measures are computed - they
+must not be, since the basis was built from the perturbed model.
+
+- **Default output** reports the model as read together with the `eps=`
+  actually applied per class, via `printmodel_with_perturbation`, so a
+  perturbed run is self-describing rather than only flagged on stderr. This
+  covers the automatic digit-20 fallback as well as an explicit `-p`.
+- **`-e`** normally refuses on a genuinely singular model, since a perturbed
+  rational is not the exact `G`. `--force-perturb` prints it anyway, with a
+  stderr note that the rational is exact for the *perturbed* model; useful for
+  measuring the perturbation error against `bin/ca`.
+- **`-b`** solves twice at the same digit and seed, once with `+eps` and once
+  with `-eps`, and prints `midpoint [lower, upper] relhw`. `G` is a polynomial
+  with non-negative coefficients in the demands, hence monotone in them, so
+  `[G(-eps), G(+eps)]` **encloses** the exact `G(N)` (same for `log G`). `X`
+  and `Q` are ratios of such polynomials and are not monotone in general, so
+  their intervals are labelled as error indicators, not proven enclosures. A
+  demand of `0` is left at `0` under `-eps`, since a negative demand is not a
+  model. This is a strict improvement on `mom -b`, which is still the stub it
+  announces ("bounds computation using dual perturbation is in development").
+
+```
+$ ./bin/gmom models/08_multiclass.qn -p 3 -b
+G            4.766175608676675e+34  [4.763085381152656e+34, 4.769265836200694e+34]  relhw=6.48e-04
+```
+exact `G = 4.766087716788053e+34`, inside the bracket as expected.
 
 ## Correctness
 
@@ -74,7 +110,7 @@ lcfs_3class   R=3   all 12 basis entries match
   multiserver/replicated stations (`mi>1`) are rejected with a clear
   message rather than mis-solved. The b=1 basis assumes `m=(1,...,1)`,
   the reference's stated domain; the base convolution is single-server.
-- **Init-time singularity check and auto-reorder.** `pfqn_sing.c` provides
+- **Init-time singularity check and auto-reorder.** `util/pfqn_sing.c` provides
   a shared oracle `pfqn_recursion_singular` / `pfqn_nonsingular_recclass`:
   the coefficient matrix depends only on the loadings (not the population),
   so singularity is decided once at startup by factorizing each level's

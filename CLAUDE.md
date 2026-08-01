@@ -57,9 +57,12 @@ The test script runs all 5 solvers (mva, ca, recal, mom, comom) with options `-e
 | `recal/` | Recursion by Chain (RECAL) | Efficient chain-based recursion |
 | `mom/` | Method of Moments (MoM) | Exact linear system solve; optional LinBox C++ backend |
 | `comom/` | Class-Oriented MoM (CoMoM) | BTF decomposition for sparse systems |
-| `gmom/` | Generalized MoM (divide-and-conquer, b=1) | Prefix-chain queue-removal branch (one queue per step); overdetermined per-level system solved by exact normal equations; mdecrease recovers G(N)/X/Q; distinct single-server closed queues only. See `gmom/README.md` |
+| `gmom/` | Generalized MoM (divide-and-conquer, b=1) | Prefix-chain queue-removal branch (one queue per step); overdetermined per-level system solved by exact normal equations; mdecrease recovers G(N)/X/Q; distinct single-server closed queues only. `-p`/`-s` perturbation with analytic descaling, `-b` two-sided (+eps/-eps) bracket, `--force-perturb`, `-X`. See `gmom/README.md` |
 | `safe_comom/` | CoMoM exact on singular models | Hybrid MVA/CoMoM (TSE'09 Appendix A): tiered orchestrator - plain CoMoM, then class-permuted CoMoM, then exact convolution (`ca`) for genuine loading degeneracies. Every tier exact. See `safe_comom/README.md` |
+| `safe_mom/` | MoM exact on singular models | Same tiered construction on the MoM basis: plain `mom -X`, then class-permuted `mom -X`, then exact convolution (`ca`). Adds `-X`/`--no-perturb` to `mom` (fail instead of auto-perturbing). Tier driver shared with `safe_comom` (`util/safe_tiers.c`). See `safe_mom/README.md` |
+| `safe_gmom/` | Generalized MoM exact on singular models | Same tiers on gmom's b=1 basis: `gmom -X`, class-permuted `gmom -X`, then `ca`. Adds `-X`/`--no-perturb` to `gmom`. Tier 2 never fires (gmom picks the class order itself via its exact b=1 oracle); Tier 3 also absorbs gmom's domain limits (R=1, multiserver, load-dependent). Open/mixed reported as out of scope. See `safe_gmom/README.md` |
 | `procomom/` | ProCoMoM | Marginal queue-length probabilities |
+| `promom/` | ProMoM | Marginal queue-length probabilities on the MoM basis (replica combinations x class decrements) instead of the CoMoM one. Same `A q(n) = B q_prev(n) + n[DC q(n-1) + DD q_prev(n-1)]` shape as procomom; the population constraint holds the reference copy out of the station sum. `-q` matches exact `ca` to 5e-16; `-P` is bit-for-bit `procomom` on single-server models and CORRECT where procomom is wrong (any `mi>1`). See `promom/README.md` |
 | `clw/` | Choudhury-Leung-Whitt (CLW) | Generating-function inversion; single-server + IS. Floating-point (G/logG as doubles, not exact) |
 | `clwld/` | CLW with load-dependent stations | Bertozzi-McKenna per-center transforms; multiserver and load-dependent. Floating-point output |
 | `momf/` | MoM in fixed-precision floating point | MPFR at a settable working precision, optional Wilkinson/Moler iterative refinement. Built to measure whether the exact arithmetic is necessary; see `momf/README.md` |
@@ -70,7 +73,10 @@ The test script runs all 5 solvers (mva, ca, recal, mom, comom) with options `-e
 - **`gmpla/`** — GMP linear algebra: dense matrices (`mpq_mat_t`), sparse matrices (`mpq_msp_t`), LU decomposition (`mpq_ludcmp`/`mpq_lubksb`), LinBox interface
 - **`fpla/`** — the same API over MPFR floats at a run-time settable precision (`fp_*`), plus iterative refinement
 - **`zpla/`** — the same API over `Z/p` in machine words (`zp_*`), Montgomery arithmetic, CRT and rational reconstruction
-- **`util/`** — Model I/O (`readmodel`), population enumeration (`nextpop`, `popindex`), combinatorics (`nck`)
+- **`util/`** — Model I/O (`readmodel`), population enumeration (`nextpop`, `popindex`), combinatorics (`nck`),
+  the shared b=1 level builder and singularity oracle (`setup1`, `pfqn_recursion_singular`,
+  `pfqn_nonsingular_recclass` in `pfqn_sing.{c,h}`), and the tiered exact-wrapper driver
+  (`safe_tiers.{c,h}`, used by `safe_comom`, `safe_mom` and `safe_gmom`)
 
 ### Core Data Structure (`util/util.h`)
 
@@ -105,6 +111,7 @@ m1 L11 L12 ... L1R   # station 1: multiplicity, demands per class
 All solvers share: `-l` (log NC), `-e` (exact NC num/den), `-g` (NC as double), `-t` (throughputs), `-q` (queue lengths), `-d` (all metrics exact rational).
 
 MoM/CoMoM additionally support: `-p digit` (perturbation), `-s seed` (perturbation seed).
+`mom` also supports `-X`/`--no-perturb`: fail on a singular system instead of auto-perturbing.
 
 ## Build System Details
 
