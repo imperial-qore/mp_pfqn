@@ -280,6 +280,12 @@ int main(int argc, char**argv)
 	char* model_file = NULL;
 	bool auto_perturbation = false;
 	bool use_linbox = false;
+	/* -X: never fall back to the automatic perturbation.  On a singular
+	 * system the solver reports the singularity and exits non-zero instead
+	 * of returning an approximate answer.  This is the fast-fail probe used
+	 * by bin/safe_mom to decide when to move to the next tier; an explicit
+	 * -p is still honoured. */
+	bool no_perturb = false;
 
 	if(argc < 2)
 	{
@@ -295,6 +301,7 @@ int main(int argc, char**argv)
 		printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
 		printf("  -s seed          : Set perturbation seed (default: 23000)\n");
 		printf("  --linbox         : Use LinBox Dixon p-adic lifting solver (avoids coefficient blowup)\n");
+		printf("  -X, --no-perturb : Fail on a singular system instead of auto-perturbing (exact-only probe)\n");
 		return -1;
 	}
 	
@@ -326,6 +333,7 @@ int main(int argc, char**argv)
 			printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
 			printf("  -s seed          : Set perturbation seed (default: 23000)\n");
 			printf("  --linbox         : Use LinBox Dixon p-adic lifting solver (avoids coefficient blowup)\n");
+		printf("  -X, --no-perturb : Fail on a singular system instead of auto-perturbing (exact-only probe)\n");
 			return 0;
 		} else if(strcmp(argv[i], "-p") == 0) {
 			if(i + 1 < argc) {
@@ -347,6 +355,8 @@ int main(int argc, char**argv)
 			}
 		} else if(strcmp(argv[i], "--linbox") == 0) {
 			use_linbox = true;
+		} else if(strcmp(argv[i], "-X") == 0 || strcmp(argv[i], "--no-perturb") == 0) {
+			no_perturb = true;
 		} else if(argv[i][0] == '-') {
 			// Skip unknown options silently - no additional logic needed
 		} else {
@@ -367,6 +377,7 @@ int main(int argc, char**argv)
 		printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
 		printf("  -s seed          : Set perturbation seed (default: 23000)\n");
 		printf("  --linbox         : Use LinBox Dixon p-adic lifting solver (avoids coefficient blowup)\n");
+		printf("  -X, --no-perturb : Fail on a singular system instead of auto-perturbing (exact-only probe)\n");
 		return -1;
 	}
 	
@@ -434,6 +445,12 @@ int main(int argc, char**argv)
 
 	// If singular and no perturbation yet, apply automatic perturbation
 	if (result == -1 && !auto_perturbation && perturbation_digit == 0) {
+		// -X: exact-only mode, report the singularity and fail fast
+		if (no_perturb) {
+			fprintf(stderr, "\nError: Model cannot be solved exactly by the MoM solver.\n");
+			fprintf(stderr, "The system of equations is singular; -X suppresses the perturbation fallback.\n");
+			return 1;
+		}
 		// If exact normalizing constant was requested, don't auto-perturb
 		// since the perturbed result won't match the exact answer
 		if (normconst_output) {

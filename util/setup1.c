@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <gmp.h>
 #include <gmpla.h>
-#include "gmom.h"
+#include "pfqn_sing.h"
 
 /* Port of setup1.m: build the six matrices A,B,C,D,E,F for the prefix
  * sub-model on queues 1..m (queue m removed to reach level m-1), for the

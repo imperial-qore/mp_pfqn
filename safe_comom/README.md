@@ -19,7 +19,8 @@ Options are those of `comom`: `-e` (exact `G` num/den), `-g`, `-l`, `-t`,
 ## Tiers
 
 `safe_comom` orchestrates the exact solvers already in the tree; every
-tier is exact, so the result is always the exact answer.
+tier is exact, so the result is always the exact answer.  The tier driver
+is shared with `bin/safe_mom` and lives in `util/safe_tiers.{c,h}`.
 
 | tier | method | handles |
 |---|---|---|

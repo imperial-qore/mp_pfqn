@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <gmp.h>
 #include <gmpla.h>
-#include "gmom.h"
+#include "pfqn_sing.h"
 
 /* Shared singularity oracle for the MoM / CoMoM / gmom family.
  *
