@@ -22,7 +22,44 @@ make -C procomom
 
 Unlike `promom`, `procomom` auto-perturbs at digit 20 on a singular system
 rather than declining, so it answers the degenerate models too -- but
-approximately.
+approximately, and on some of them not in practical time (see below).
+
+`--progress` reports per-step timing on stderr; stdout stays machine-readable.
+A run can take hours, and without it a slow run is indistinguishable from a
+hung one.
+
+## Where the time goes
+
+Two quite different cost regimes, worth telling apart before optimising:
+
+**Large basis, small numbers.** `10_diverse` (M=8, R=4) is NOT singular and
+never perturbs, but its basis is 1320:
+
+```
+station 1/8  class 1/4  Nr 1/25  basis 1320  gen 0.08s  AtA 4.6s  LU 1.2s  solve 0.1s  step 6.5s  peak 2 bits
+```
+
+560 steps at ~6.5 s is about an hour, roughly 75% of it in `mpq_mattransmul`
+forming `AtA`/`AtB`/`AtDC`/`AtDD`. Those four products are rebuilt from
+scratch every step even though `A`, `B`, `DC`, `DD` depend on the population
+only through the scalars `nd_s = Ncur[s-1] - Dn[d][s-1]` in the PC rows.
+Updating `AtA` incrementally instead would remove most of that. NOT DONE.
+
+**Coefficient growth after perturbation.** `05_sparse` hits `Singular AtA at
+class 2, Nr=1`, retries at digit 20, and the rationals then inflate without
+bound:
+
+```
+class 2/4  Nr 6/6   LU   0.01s  solve  0.01s  step   0.07s  peak   13 bits
+class 3/4  Nr 4/4   LU   0.99s  solve  1.01s  step   2.05s  peak 1426 bits
+class 4/4  Nr 1/2   LU 142.91s  solve 44.95s  step 187.92s
+```
+
+`AtA` stays flat at 0.04 s -- its matrices hold the small original demands --
+while LU and back-substitution explode. This model is impractical for
+`procomom`, not merely slow, and the incremental-`AtA` idea above would not
+help it. `bin/camarg` returns it exactly in seconds and is the right tool
+there.
 
 ## Multiserver stations: three defects, all fixed
 
@@ -38,6 +75,13 @@ any model containing a replicated station, not only the replicated one:
 
 `procomom -P` is now bit-for-bit identical to `promom -P` on this model, the
 two bases agreeing exactly as they should.
+
+Wider `mi>1` coverage is in `bugs/procomom_multiserver/`: four small fixtures
+putting the replicated station first, last (which exercises the replicated
+REFERENCE path for every station in turn), everywhere, and alongside think
+times. All four match `ca` and `camarg` exactly, `-P` bit-for-bit. They exist
+because the replicated models in `models/` cannot serve as a quick check --
+`10_diverse` needs about an hour and `11_swapped` is degenerate.
 
 **1. Missing multiplicities.** `genpmatrix.c` never referenced `qnm->mi`,
 while the CoMoM system it mirrors carries `mi[k-1]*L[k-1][s-1]` in its

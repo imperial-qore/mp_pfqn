@@ -14,6 +14,31 @@ qnmodel* qnm;
 double t0, t1;
 struct rusage ruse;
 
+/* --progress: per-step timing on stderr, so stdout stays machine-readable.
+ * procomom can run for hours on a perturbed degenerate model and the ordinary
+ * -q/-P modes are silent, which makes a slow run indistinguishable from a
+ * hung one.  This reports where the time actually goes: matrix assembly, the
+ * A^T A products, the LU factorisation, and the n-sweep of back-substitutions.
+ * PROGRESS_STATION is the rotation currently being solved. */
+static int PROGRESS = 0;
+static int PROGRESS_STATION = 0, PROGRESS_NSTATIONS = 0;
+
+/* Largest entry, in bits, over the whole pk table.  On a perturbed model the
+ * rationals inflate step by step and that growth is what makes the LU and the
+ * back-substitutions expensive; a single n-slice is a poor sample because the
+ * high-n slices are still zero early in the sweep. */
+static double peak_bits(mpq_vec_t* pk, int nmax, int len)
+{
+	size_t best = 0; int n, i;
+	for (n = 0; n <= nmax; n++)
+		for (i = 0; i < len; i++) {
+			size_t b = mpz_sizeinbase(mpq_numref(pk[n][i]), 2)
+			         + mpz_sizeinbase(mpq_denref(pk[n][i]), 2);
+			if (b > best) best = b;
+		}
+	return (double) best;
+}
+
 static void printcompact(int* n, int R, double elapsed_time)
 {
 	int s;
@@ -146,8 +171,10 @@ static int solve_procomom(qnmodel* qnm, combsrep* Dn, int sumN,
 					mpq_set_si(pk[n][i], 0, 1);
 
 			/* Generate matrices A, B, DC, DD */
+			double t_gen0 = CPUTIME;
 			PMatrices* pm = genpmatrix(Dn, qnm, Ncur, r);
 			int numRows_saved = pm->numRows;
+			double t_gen = CPUTIME - t_gen0;
 
 			/* Compute normal equation matrices: basisSize x basisSize */
 			mpq_mat_t AtA = mpq_matzeros(basisSize, basisSize);
@@ -155,16 +182,20 @@ static int solve_procomom(qnmodel* qnm, combsrep* Dn, int sumN,
 			mpq_mat_t AtDC = mpq_matzeros(basisSize, basisSize);
 			mpq_mat_t AtDD = mpq_matzeros(basisSize, basisSize);
 
+			double t_mm0 = CPUTIME;
 			mpq_mattransmul(AtA, pm->A, pm->A, pm->numRows, basisSize);
 			mpq_mattransmul(AtB, pm->A, pm->B, pm->numRows, basisSize);
 			mpq_mattransmul(AtDC, pm->A, pm->DC, pm->numRows, basisSize);
 			mpq_mattransmul(AtDD, pm->A, pm->DD, pm->numRows, basisSize);
+			double t_mm = CPUTIME - t_mm0;
 
 			/* Free the rectangular matrices */
 			free_pmatrices(pm);
 
 			/* LU decompose AtA */
+			double t_lu0 = CPUTIME;
 			int* lu_indices = mpq_ludcmp(AtA, basisSize);
+			double t_lu = CPUTIME - t_lu0;
 			if (lu_indices == NULL) {
 				fprintf(stderr, "\nSingular AtA at class %d, Nr=%d (numRows=%d, basisSize=%d)\n",
 				        r, nr, numRows_saved, basisSize);
@@ -177,6 +208,7 @@ static int solve_procomom(qnmodel* qnm, combsrep* Dn, int sumN,
 			}
 
 			int sumNcur = sum(Ncur, R);
+			double t_solve0 = CPUTIME;
 
 			/* n=0: AtA * pk[0] = AtB * pklast[0] */
 			mpq_matvecmul(rhs, AtB, pklast[0], basisSize);
@@ -235,6 +267,18 @@ static int solve_procomom(qnmodel* qnm, combsrep* Dn, int sumN,
 				printf(" [%.6f s]", step_elapsed);
 				fflush(stdout);
 			}
+			if (PROGRESS) {
+				double t_solve = CPUTIME - t_solve0;
+				fprintf(stderr,
+				  "[procomom] station %d/%d  class %d/%d  Nr %d/%d  n<=%d  basis %d"
+				  "  gen %.2fs  AtA %.2fs  LU %.2fs  solve %.2fs  step %.2fs"
+				  "  total %.1fs  peak %.0f bits\n",
+				  PROGRESS_STATION, PROGRESS_NSTATIONS, r, R, nr, qnm->N[r-1],
+				  sumNcur, basisSize, t_gen, t_mm, t_lu, t_solve,
+				  CPUTIME - step_start, CPUTIME - t0,
+				  peak_bits(pk, sumNcur, basisSize));
+				fflush(stderr);
+			}
 		}
 		if (show_progress)
 			printf(" (Class %d done)\n", r);
@@ -288,6 +332,7 @@ int main(int argc, char** argv)
 		printf("  -P, --prob  : Print marginal probability distributions per station\n");
 		printf("  -p digit    : Apply perturbation at the specified digit\n");
 		printf("  -s seed     : Set perturbation seed (default: 23000)\n");
+		printf("  --progress  : Report per-step timing on stderr (diagnostic)\n");
 		printf("  -h, --help  : Print this help message\n");
 		return -1;
 	}
@@ -297,6 +342,8 @@ int main(int argc, char** argv)
 			queue_output = true;
 		} else if (strcmp(argv[i], "-P") == 0 || strcmp(argv[i], "--prob") == 0) {
 			prob_output = true;
+		} else if (strcmp(argv[i], "--progress") == 0) {
+			PROGRESS = 1;
 		} else if (strcmp(argv[i], "-p") == 0) {
 			if (i + 1 < argc) {
 				perturbation_digit = atoi(argv[++i]);
@@ -447,6 +494,8 @@ solve_attempt:;
 			/* Swap station k-1 with station M-1 to make station k the reference */
 			swap_stations(qnm, k-1, M-1);
 			basisSize = set_stride(Dn, qnm);
+			PROGRESS_STATION = k; PROGRESS_NSTATIONS = M;
+			if (PROGRESS) fprintf(stderr, "[procomom] === station %d/%d, basis %d ===\n", k, M, basisSize);
 
 			/* Run algorithm */
 			int ret = solve_procomom(qnm, Dn, sumN, dist, basisSize, 0);
@@ -511,6 +560,8 @@ solve_attempt:;
 		for (int k = 1; k <= M; k++) {
 			swap_stations(qnm, k-1, M-1);
 			basisSize = set_stride(Dn, qnm);
+			PROGRESS_STATION = k; PROGRESS_NSTATIONS = M;
+			if (PROGRESS) fprintf(stderr, "[procomom] === station %d/%d, basis %d ===\n", k, M, basisSize);
 
 			int ret = solve_procomom(qnm, Dn, sumN, dist, basisSize, 0);
 			if (ret < 0) {
@@ -559,6 +610,8 @@ solve_attempt:;
 		for (int k = 1; k <= M; k++) {
 			swap_stations(qnm, k-1, M-1);
 			basisSize = set_stride(Dn, qnm);
+			PROGRESS_STATION = k; PROGRESS_NSTATIONS = M;
+			if (PROGRESS) fprintf(stderr, "[procomom] === station %d/%d, basis %d ===\n", k, M, basisSize);
 
 			int ret = solve_procomom(qnm, Dn, sumN, dist, basisSize,
 			                          (k == 1) ? show_progress : 0);

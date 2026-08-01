@@ -12,18 +12,18 @@
  *
  *   Tier 1  bin/promom                (exact or fail)
  *   Tier 2  bin/promom over the O(R) recursion-class choices
- *   Tier 3  none - see below
+ *   Tier 3  bin/camarg                (exact convolution marginals)
  *
  * Both tiers are exact, so a printed result is always the exact marginal.
  * The tier machinery is shared with safe_mom, safe_comom and safe_gmom
  * (util/safe_tiers.c).
  *
- * NO TIER 3.  The other wrappers fall back to bin/ca, which is exact for
- * G/X/Q, but convolution in this tree returns mean queue lengths, not
- * marginal DISTRIBUTIONS, so there is nothing exact to fall back to.  A model
- * that is degenerate under every class order is therefore declined, with a
- * message, rather than answered approximately.  Closing that would need a
- * convolution-based marginal, which does not exist here yet.
+ * Tier 3 is bin/camarg, the convolution analogue for distributions: it has no
+ * coefficient matrix, so it is exact on the degenerate models too.  It costs
+ * the full population lattice, exponential in R, which is why it is the last
+ * tier and not the first.  (This module originally had no Tier 3, bin/ca
+ * returning means rather than distributions; camarg was written to close
+ * that.)
  *
  * Output.  promom's -P (per station, sumN+1 probabilities) and -q (per
  * station, one mean) carry no class index: the marginal at a station does not
@@ -37,15 +37,14 @@ static const safe_cfg CFG = {
 	.solver         = "promom",
 	.solver_flags   = "",       /* promom has no auto-perturbation to suppress */
 	.probe_flags    = "-q",     /* fails at the first singular class transition */
-	.fallback       = NULL,     /* no exact convolution marginal exists */
+	.fallback       = "camarg", /* exact convolution marginals, always exact */
 	.permuted_flags = "",       /* -P and -q are per station, not per class */
 	.flags_usage    = "[-P|-q]",
 	.usage =
 	  "  Marginal queue-length probabilities that are always exact: plain\n"
-	  "  promom, then promom with a permuted class order.  Never returns a\n"
-	  "  perturbed result; a model degenerate under every class order is\n"
-	  "  declined, since convolution offers no exact marginal to fall back\n"
-	  "  on.  Use bin/procomom for a perturbed approximation there.\n"
+	  "  promom, then promom with a permuted class order, then exact\n"
+	  "  convolution marginals (bin/camarg) for genuine degeneracies.\n"
+	  "  Never returns a perturbed result.\n"
 };
 
 int main(int argc, char** argv)

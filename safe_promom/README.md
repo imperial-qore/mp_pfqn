@@ -23,14 +23,15 @@ queue length per station).
 |---|---|---|
 | 1 | plain `bin/promom` | non-singular models |
 | 2 | `promom` with a different recursion class (O(R) search) | singularities that depend only on which class is processed last |
-| 3 | none | see below |
+| 3 | exact convolution marginals (`bin/camarg`) | genuine degeneracies no class order removes |
 
-**There is no Tier 3.** The other wrappers fall back to `bin/ca`, exact for
-`G`, `X` and `Q`, but convolution in this tree returns mean queue lengths, not
-marginal DISTRIBUTIONS. A model degenerate under every class order is
-therefore declined with a message rather than answered approximately. Closing
-that would need a convolution-based marginal, which does not exist here yet.
-This is the one wrapper in the family with a genuinely open bottom tier.
+Tier 3 is `bin/camarg`, not `bin/ca`: the other wrappers fall back to `ca`,
+exact for `G`/`X`/`Q`, but that returns mean queue lengths rather than
+marginal DISTRIBUTIONS. `camarg` is the convolution analogue for
+distributions and has no coefficient matrix, so it is exact on degenerate
+models too. It costs the full population lattice, exponential in `R`, which
+is why it is the last tier. This module originally had no Tier 3 and declined
+those models; `camarg` was written to close that.
 
 ## Output is not un-permuted
 
@@ -48,12 +49,22 @@ existing wrappers declare `"-t -q"` and are unaffected.
 models in `models/` that it answers, `promom` alone answering 9:
 
 ```
-answered (11): 01_single 02_bottleneck 03_think 04_replicated 08_multiclass
+Tier 1/2 (11): 01_single 02_bottleneck 03_think 04_replicated 08_multiclass
                09_asymmetric 11_swapped 13_gld_small lcfs_1class lcfs_2class
                lcfs_3class                      max relative error 4.6e-16
-declined (17): 13 singular under every class order (05 06 07 10 12 and the 8
-               test_singular*), 2 load-dependent (14_ld_multi 15_repairman),
+Tier 3   (13): 05 06 07 10 12 and the 8 test_singular*, via camarg,
+               all exact against ca (max relative error 3.8e-16)
+declined  (4): 2 load-dependent (14_ld_multi 15_repairman),
                2 open/mixed (16_mixed 17_mixed_ld)
+
+24 of 28 answered, all exact, against 11 before camarg existed.
+```
+
+Tier 3 in action on a model the wrapper used to decline:
+
+```
+05_sparse   7.029371599625782  2.714314259317468  1.210158762282142  3.466738499139438  5.579416879635168
+ca summed   7.029371599625782  2.714314259317468  1.210158762282142  3.466738499139439  5.579416879635168
 ```
 
 Tier 2 recovers the two models `promom` alone declines for a
@@ -83,4 +94,4 @@ degeneracy they do not have.
 | `safe_mom` | `mom -X` | `ca` | yes |
 | `safe_comom` | `comom` | `ca` | yes |
 | `safe_gmom` | `gmom -X` | `ca` | no, gmom reorders internally |
-| `safe_promom` | `promom` | none | yes |
+| `safe_promom` | `promom` | `camarg` | yes |
