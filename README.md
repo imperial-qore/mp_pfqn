@@ -9,10 +9,10 @@ The mp_pfqn library offers fast C solvers for product-form queueing networks usi
   - Method of Moments (MoM) [4]
   - Class-Oriented Method of Moments (CoMoM) [5]
   - Generalized Method of Moments (gmom, divide-and-conquer, b=1) [9]
-  - safe_comom: CoMoM with exact hybrid MVA/CoMoM fallback for singular models [5]
+  - CoMoM with exact hybrid MVA/CoMoM fallback for singular models [5]
 - Load-dependent solvers:
   - Generalized Load-Dependent (GLD) normalizing constant [6]
-  - CoMoM-LD for load-dependent repairman models
+  - CoMoM-LD for load-dependent repairman models [10]
 - Mixed open/closed network solvers:
   - MVA-MX for mixed networks [7]
   - MVA-LD-MX for mixed networks with load-dependent stations [8]
@@ -169,19 +169,7 @@ CoMoM supports the same command-line options as MoM (see table above). The Class
 ./bin/gmom [ -e | -g | -l | -t | -q | --validate ] models/02_bottleneck.qn
 ```
 
-`gmom` implements the generalized (divide-and-conquer, b=1) Method of
-Moments: the model on the prefix `{1..m}` of queues is built from the model
-on `{1..m-1}` plus one queue-removal (subtractive-convolution) branch, and
-the overdetermined per-level system is solved by exact normal equations.
-It supports `-e` (exact `G(N)` num/den), `-g` (`G(N)` double), `-l`
-(`log G`), `-t` (throughputs), `-q` (queue lengths), and `--validate`
-(check the whole moment basis against exact convolution), and `-p digit` /
-`-s seed` (perturbation for degenerate models, as in MoM/CoMoM). It
-requires at least two classes and closed, distinct single-server stations;
-open/mixed, load-dependent (`MU`), and multiserver (`mi>1`) models are
-rejected. `G`, `X`, and `Q` match `ca` bit-for-bit on the supported
-models; degenerate models are handled by class reorder (exact) or
-perturbation (approximate, `-e` refuses).
+`gmom` implements the generalized (divide-and-conquer, b=1) Method of Moments. It supports the same options as MoM, plus `--validate` to check the whole moment basis against exact convolution. It requires at least two classes and closed, distinct single-server stations. See `gmom/README.md`.
 
 #### safe_comom Solver Options
 
@@ -189,15 +177,7 @@ perturbation (approximate, `-e` refuses).
 ./bin/safe_comom [ -e | -g | -l | -t | -q ] models/08_multiclass.qn
 ```
 
-`safe_comom` returns the exact `G(N)`, `X`, `Q` even for degenerate models
-whose CoMoM coefficient matrix is singular, where `bin/comom` errors out.
-It applies the hybrid MVA/CoMoM of Casale (IEEE TSE 2009), Appendix A, as
-a tiered exact orchestrator: plain CoMoM; then CoMoM after permuting the
-class order (removing singularities that depend on the recursion class);
-then exact convolution (`ca`) for genuine loading degeneracies that no
-order removes. Every tier is exact, so the result matches `comom` on
-non-singular models and `ca` on singular ones. See
-`safe_comom/README.md`.
+`safe_comom` returns the exact `G(N)`, `X` and `Q` also for degenerate models whose CoMoM coefficient matrix is singular, where `bin/comom` errors out. It applies the hybrid MVA/CoMoM of [5], Appendix A, as a tiered exact orchestrator. See `safe_comom/README.md`.
 
 #### Examples
 
@@ -238,6 +218,8 @@ non-singular models and `ca` on singular ones. See
 [4]: Casale (2006), *An efficient algorithm for the exact analysis of multiclass queueing networks with large population sizes,* Proc. of ACM SIGMETRICS 2006.
 
 [5]: Casale, G. (2009), *CoMoM: Efficient Class-Oriented Evaluation of Multiclass Performance Models,* IEEE Trans. Softw. Eng. 35, 2 (March 2009), 162–177.
+
+[10]: Casale, G., Gao, Y., Niu, Z., and Zhu, L. (2024), *LN: A Flexible Algorithmic Framework for Layered Queueing Network Analysis,* ACM Trans. Model. Comput. Simul. 34, 3 (July 2024), Article 17.
 
 ## License
 
