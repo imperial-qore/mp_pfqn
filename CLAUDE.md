@@ -20,7 +20,7 @@ make
 make clean && make
 ```
 
-Binaries are placed in `bin/`: `mva`, `ca`, `recal`, `mom`, `momf`, `mommod`, `comom`, `procomom`, `rndmodel`, `routing2visits`.
+Binaries are placed in `bin/`: `mva`, `ca`, `recal`, `mom`, `momf`, `mommod`, `comom`, `comommod`, `procomom`, `rndmodel`, `routing2visits`.
 
 **`bool` in headers**: `util/util.h` includes `<stdbool.h>` unconditionally. It must
 not go back to defining `bool` as `unsigned int`: sources differ in whether they
@@ -64,6 +64,7 @@ The test script runs all 5 solvers (mva, ca, recal, mom, comom) with options `-e
 | `clwld/` | CLW with load-dependent stations | Bertozzi-McKenna per-center transforms; multiserver and load-dependent. Floating-point output |
 | `momf/` | MoM in fixed-precision floating point | MPFR at a settable working precision, optional Wilkinson/Moler iterative refinement. Built to measure whether the exact arithmetic is necessary; see `momf/README.md` |
 | `mommod/` | Multi-modular MoM | Whole recursion replayed in `Z/p` for many word-size primes, CRT plus rational reconstruction at the end, OpenMP over primes (`-j`). `-B` halves the prime count via denominator-bounded reconstruction, verified against witness primes held out of the CRT (`-W`); off by default since it is probabilistic. See `mommod/README.md` |
+| `comommod/` | Multi-modular CoMoM | The `comom` class-oriented recursion replayed in `Z/p` for many word-size primes, CRT plus rational reconstruction at the end, OpenMP over primes (`-j`). Same flags as `mommod`, except that `-B`'s denominator bound defaults to a third of the modulus: CoMoM denominators grow with the population instead of staying a few dozen bits wide. Refuses singular models rather than perturbing them, as `mommod` does. See `comommod/README.md` |
 
 ### Shared Libraries
 
