@@ -184,7 +184,7 @@ int* fp_ludcmp(fp_mat_t A, int N)
 	mpfr_t max, sum, t, w;
 	mpfr_init2(max,FP_WPREC); mpfr_init2(sum,FP_WPREC);
 	mpfr_init2(t,FP_WPREC);   mpfr_init2(w,FP_WPREC);
-	fp_vec_t vv = fp_vec(N+1,0,1);
+	fp_vec_t vv = fp_vec(N,0,1); /* N+1 entries, matching the clears below */
 
 	fp_set_d(t,1);
 	for (i=1;i<=N;i++)
@@ -386,7 +386,10 @@ int fp_lurefine(fp_mat_t Aorig, fp_mat_t LU, int* indx, fp_vec_t b,
 			fp_add(x[i], x[i], r[i]);
 			fp_abs(w, x[i]); if (fp_cmp(w,nx)>0) fp_set(nx,w);
 		}
-		double rel = (fp_sgn(nx)==0) ? 0.0 : fp_get_d(nd)/fp_get_d(nx);
+		/* ratio in MPFR: fp_get_d(nx) overflows to inf once |x| > 1e308,
+		 * which made rel 0 (stop after one sweep) or NaN (never stop). */
+		double rel = 0.0;
+		if (fp_sgn(nx)!=0) { fp_div(w, nd, nx); rel = fp_get_d(w); }
 		if (lastrel) *lastrel = rel;
 		if (rel <= tol) { it++; break; }
 	}

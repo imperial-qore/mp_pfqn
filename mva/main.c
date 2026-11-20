@@ -92,6 +92,7 @@ int main(int argc,char ** argv)
 	}
 	
 	qn=(qnmodel*)readmodel(model_file);
+	qn_require_closed(qn, "mva", 0);
 	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output && !exact_output) {
 		printmodel(qn);
 	}

@@ -202,6 +202,7 @@ int main(int argc, char** argv)
 	}
 
 	qnmodel* qn = readmodel(model_file);
+	qn_require_closed(qn, "gmom", 0);
 	int M = qn->M, R = qn->R;
 	if (R < 2) { fprintf(stderr, "gmom requires at least two classes\n"); return 1; }
 	{ int c; for (c = 0; c < R; c++) if (qn->N[c] < 0) {
@@ -365,6 +366,8 @@ int main(int argc, char** argv)
 	}
 
 	/* plain G(N), X, Q via the mdecrease replica-descent */
+	/* N_R=0: the class-R sweep never runs, and G(.,N-1_R)=0 (negative population). */
+	if (!grM && N[R-1] == 0) { lengrM = lenl[M]; grM = vnew(lenl[M]); }
 	if (!grM) { fprintf(stderr, "gmom: internal error, grM not captured\n"); return 2; }
 	gmom_measures(qn, vl[M], grM, out_e, out_g, out_l, out_t, out_q, cperm, scale_factor);
 

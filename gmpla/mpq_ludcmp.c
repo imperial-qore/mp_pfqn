@@ -13,10 +13,8 @@ int* mpq_ludcmp(mpq_mat_t A, int N)
  mpq_t sum; mpq_init(sum);
  mpq_t t; mpq_init(t);
  mpq_t w; mpq_init(w);
- mpq_vec_t vv=(mpq_vec_t)mpq_vec(N+1,0,1);
+ mpq_vec_t vv=(mpq_vec_t)mpq_vec(N,0,1); /* N+1 entries, already initialised */
 
- for(i=1;i<=N;i++)
-	 mpq_init(vv[i-1]);
  mpq_set_d(t,1); // serve nel loop
  for(i=1;i<=N;i++)
  {
@@ -30,7 +28,7 @@ int* mpq_ludcmp(mpq_mat_t A, int N)
 	if (mpq_sgn(max)==0) /* singular matrix */
 	{
 		// Free allocated memory before returning
-		for(i=0;i<N;i++)
+		for(i=0;i<=N;i++)
 			mpq_clear(vv[i]);
 		free(vv);
 		free(indx);
@@ -96,7 +94,7 @@ int* mpq_ludcmp(mpq_mat_t A, int N)
 		if (mpq_sgn(A[j-1][j-1])==0) /* singular matrix */
 		{
 			// Free allocated memory before returning
-			for(i=0;i<N;i++)
+			for(i=0;i<=N;i++)
 				mpq_clear(vv[i]);
 			free(vv);
 			free(indx);
@@ -120,7 +118,7 @@ int* mpq_ludcmp(mpq_mat_t A, int N)
  /* Check last pivot (the main loop skips this check when j==N) */
  if (mpq_sgn(A[N-1][N-1])==0) /* singular matrix */
  {
-	for(i=0;i<N;i++)
+	for(i=0;i<=N;i++)
 		mpq_clear(vv[i]);
 	free(vv);
 	free(indx);
@@ -134,7 +132,7 @@ int* mpq_ludcmp(mpq_mat_t A, int N)
  mpq_clear(sum);
  mpq_clear(t);
  mpq_clear(w);
- for(i=0;i<N;i++)
+ for(i=0;i<=N;i++)
 	mpq_clear(vv[i]);
  free(vv);
  return indx;

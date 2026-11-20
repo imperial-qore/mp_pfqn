@@ -171,7 +171,7 @@ int main(int argc, char **argv)
 {
     rndmodel_params params;
     FILE *f = stdout;
-    int L[1000][100];
+    int **L = NULL; /* L[1..M][1..R], sized once M and R are known */
     int M, R, r, i;
 
     if (argc < 2) {
@@ -190,6 +190,9 @@ int main(int argc, char **argv)
         /* Backward compatibility mode */
         M = params.M;
         R = params.R;
+        if (M < 1 || R < 1) { fprintf(stderr, "rndmodel: need M >= 1 and R >= 1\n"); return 1; }
+        L = (int**) malloc((M+1) * sizeof(int*));
+        for (i = 0; i <= M; i++) L[i] = (int*) calloc(R+1, sizeof(int));
         fprintf(f, "%d\n", R);
         for (r = 1; r <= R; r++) {
             fprintf(f, "%d ", params.N / R);  /* Distribute total jobs equally */
@@ -219,6 +222,9 @@ int main(int argc, char **argv)
         /* New options mode */
         R = randi(params.R_min, params.R_max);
         M = randi(params.M_min, params.M_max);
+        if (M < 1 || R < 1) { fprintf(stderr, "rndmodel: need M >= 1 and R >= 1\n"); return 1; }
+        L = (int**) malloc((M+1) * sizeof(int*));
+        for (i = 0; i <= M; i++) L[i] = (int*) calloc(R+1, sizeof(int));
         
         fprintf(f, "%d\n", R);
         
@@ -253,5 +259,7 @@ int main(int argc, char **argv)
         }
     }
 
+    for (i = 0; i <= M; i++) free(L[i]);
+    free(L);
     return 0;
 }

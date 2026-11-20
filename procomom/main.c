@@ -184,7 +184,11 @@ static int solve_procomom(qnmodel* qnm, combsrep* Dn, int sumN,
 				mpq_matvecmul(tmp1, AtDC, pk[n-1], basisSize);
 				mpq_matvecmul(tmp2, AtDD, pklast[n-1], basisSize);
 
-				mpq_set_si(n_q, n, 1);
+				/* The reference station's jobs gain a factor j for a single
+				 * queue; for mi(M) identical replicas the total over the
+				 * replicas carries C(j+mi-1,mi-1) j!/prod n_r! L^n, so the
+				 * ratio between j and j-1 jobs is (j+mi-1) instead. */
+				mpq_set_si(n_q, n + qnm->mi[M-1] - 1, 1);
 				for (i = 0; i < basisSize; i++) {
 					mpq_t term;
 					mpq_init(term);
@@ -323,6 +327,7 @@ int main(int argc, char** argv)
 	}
 
 	qnm = (qnmodel*)readmodel(model_file);
+	qn_require_closed(qnm, "procomom", 0);
 	if (queue_output || prob_output)
 		show_progress = false;
 
@@ -420,6 +425,10 @@ solve_attempt:;
 		 */
 		mpf_t fval;
 		mpf_init(fval);
+		/* Printed only once every station has solved: a later station that
+		 * turns out singular restarts the solve with perturbation, which
+		 * would otherwise print the earlier stations a second time. */
+		double* Qout = (double*)calloc((size_t)M, sizeof(double));
 
 		for (int k = 1; k <= M; k++) {
 			/* Swap station k-1 with station M-1 to make station k the reference */
@@ -430,6 +439,7 @@ solve_attempt:;
 			if (ret < 0) {
 				/* Swap back before handling error */
 				swap_stations(qnm, k-1, M-1);
+				free(Qout);
 				goto singular_matrix_detected;
 			}
 
@@ -458,12 +468,15 @@ solve_attempt:;
 				mpq_div(Q_k, Q_k, total_prob);
 
 			mpf_set_q(fval, Q_k);
-			printf("%.15e\n", mpf_get_d(fval));
+			Qout[k-1] = mpf_get_d(fval);
 
 			mpq_clear(total_prob);
 			mpq_clear(Q_k);
 			mpq_clear(term);
 		}
+		for (int k = 0; k < M; k++)
+			printf("%.15e\n", Qout[k]);
+		free(Qout);
 
 		mpf_clear(fval);
 	} else if (prob_output) {
@@ -473,6 +486,8 @@ solve_attempt:;
 		 */
 		mpf_t fval;
 		mpf_init(fval);
+		/* buffered for the same reason as -q above */
+		double* Pout = (double*)calloc((size_t)M * (sumN + 1), sizeof(double));
 
 		for (int k = 1; k <= M; k++) {
 			swap_stations(qnm, k-1, M-1);
@@ -480,6 +495,7 @@ solve_attempt:;
 			int ret = solve_procomom(qnm, Dn, sumN, dist, basisSize, 0);
 			if (ret < 0) {
 				swap_stations(qnm, k-1, M-1);
+				free(Pout);
 				goto singular_matrix_detected;
 			}
 			swap_stations(qnm, k-1, M-1);
@@ -498,13 +514,19 @@ solve_attempt:;
 				if (mpq_sgn(total_prob) != 0)
 					mpq_div(p, p, total_prob);
 				mpf_set_q(fval, p);
-				printf("%.15e", mpf_get_d(fval));
-				if (j < sumN) printf(" ");
+				Pout[(size_t)(k-1) * (sumN + 1) + j] = mpf_get_d(fval);
 				mpq_clear(p);
 			}
-			printf("\n");
 			mpq_clear(total_prob);
 		}
+		for (int k = 0; k < M; k++) {
+			for (int j = 0; j <= sumN; j++) {
+				printf("%.15e", Pout[(size_t)k * (sumN + 1) + j]);
+				if (j < sumN) printf(" ");
+			}
+			printf("\n");
+		}
+		free(Pout);
 
 		mpf_clear(fval);
 	} else {

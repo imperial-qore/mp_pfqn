@@ -342,6 +342,37 @@ int comom_image(qnmodel* qnm, combsrep** Dn_all, zp_t p, zp_t* res)
 				free(comb);
 			}
 		}
+
+		/* N_R = 0: the loop above never ran.  g is still the class-R basis
+		 * at n_R = 0, i.e. G(N - comb), which is what the extraction above
+		 * reads at nr = N_R. */
+		if (r == R && qnm->N[r-1] == 0)
+		{
+			int* comb = (int*) calloc((size_t)r, sizeof(int));
+			for (s=1;s<=r;s++) comb[s-1] = Dn->combs[0][s-1];
+			for (s=1;s<=R-1;s++)
+			{
+				int index;
+				comb[s-1]++;
+				index = hash(Dn,comb,0)-1;
+				marginal_G[s-1] = g[index];
+				for (k=1;k<=M;k++)
+				{
+					index = hash(Dn,comb,k)-1;
+					marginal_Gk[k-1][s-1] = g[index];
+				}
+				comb[s-1]--;
+			}
+			free(comb);
+		}
+		/* a class with no jobs: G(N-e_s) is an unreachable population */
+		if (r == R)
+			for (s=1;s<=R-1;s++)
+				if (qnm->N[s-1] == 0)
+				{
+					marginal_G[s-1] = 0;
+					for (k=0;k<M;k++) marginal_Gk[k][s-1] = 0;
+				}
 	}
 
 	if (ZP_SINGULAR) { rc = -1; goto cleanup; }

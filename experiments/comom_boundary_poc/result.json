@@ -1,0 +1,20 @@
+{
+  "status": "COUNTEREXAMPLE_FOUND_STOPPED",
+  "arithmetic": "exact rational, with one deliberate relative perturbation",
+  "epsilon": "1/281474976710656",
+  "relative_auxiliary_perturbation": "1/9007199254740992",
+  "populations": [
+    1,
+    2
+  ],
+  "reference_G": "267608942382368903805353876032108821676556289/22300745198530623141535718272648361505980416",
+  "integer_model_demand_scale": 281474976710656,
+  "reference_G_integer_model": "267608942382368903805353876032108821676556289",
+  "perturbed_G": "149865803932358068097162702319021898020161962446571802984449/12554203470773383828416777377038474367922983537289575006208",
+  "scalar_propagation_gain": 0.8333333333333334,
+  "auxiliary_to_output_gain": 46912496118442.664,
+  "relative_output_error": 0.005208333333333333,
+  "relative_output_error_percent": 0.5208333333333334,
+  "failure": "auxiliary forcing construction, not scalar backward propagation",
+  "repository_ca_exact_match": true
+}

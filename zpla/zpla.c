@@ -345,20 +345,18 @@ int zp_ratrecon(mpz_t num, mpz_t den, const mpz_t c, const mpz_t M)
 		mpz_mul(tmp, q, t1); mpz_sub(tmp, t0, tmp); mpz_set(t0, t1); mpz_set(t1, tmp);
 	}
 
-	if (mpz_sgn(t1) != 0)
+	/* Wang's conditions: |num| <= bound (the loop guarantees it) and
+	 * 0 < |den| <= bound.  The denominator bound is what makes the answer
+	 * unique and lets a too-small modulus report failure.  (The congruence
+	 * num == c*den (mod M) holds at every Euclid step by construction, so
+	 * checking it would accept anything.) */
+	if (mpz_sgn(t1) != 0 && mpz_cmpabs(t1, bound) <= 0)
 	{
 		mpz_set(num, r1);
 		mpz_set(den, t1);
 		if (mpz_sgn(den) < 0) { mpz_neg(num, num); mpz_neg(den, den); }
 		mpz_gcd(tmp, num, den);
-		if (mpz_cmp_ui(tmp, 1) == 0)
-		{
-			/* verify num = c*den (mod M) */
-			mpz_mul(chk, c, den);
-			mpz_sub(chk, chk, num);
-			mpz_mod(chk, chk, M);
-			if (mpz_sgn(chk) == 0) ok = 1;
-		}
+		if (mpz_cmp_ui(tmp, 1) == 0) ok = 1;
 	}
 
 	mpz_clears(r0,r1,t0,t1,q,tmp,bound,chk,NULL);

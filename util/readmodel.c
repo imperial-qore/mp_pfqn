@@ -88,6 +88,34 @@ qnmodel* readmodel(char* filename)
 	 }
 	}
 
+	/* sanity checks on the fixed part of the model */
+	if (qn->R < 1 || qn->M < 1) {
+		printf("Error: model needs R >= 1 and M >= 1 (got R=%d, M=%d)\n", qn->R, qn->M);
+		exit(1);
+	}
+	for (r = 0; r < qn->R; r++) {
+		if (qn->N[r] < -1) {
+			printf("Error: N[%d]=%d is invalid (use -1 for an open class)\n", r, qn->N[r]);
+			exit(1);
+		}
+		if (mpz_sgn(qn->Z[r]) < 0) {
+			printf("Error: think time Z[%d] is negative\n", r);
+			exit(1);
+		}
+	}
+	for (m = 0; m < qn->M; m++) {
+		if (qn->mi[m] < 1) {
+			printf("Error: multiplicity mi[%d]=%d must be >= 1\n", m, qn->mi[m]);
+			exit(1);
+		}
+		for (r = 0; r < qn->R; r++) {
+			if (mpz_sgn(qn->L[m][r]) < 0) {
+				printf("Error: service demand L[%d][%d] is negative\n", m, r);
+				exit(1);
+			}
+		}
+	}
+
 	/* compute total closed population */
 	qn->Nt = 0;
 	for (r = 0; r < qn->R; r++) {
@@ -107,6 +135,10 @@ qnmodel* readmodel(char* filename)
 					printf("Error reading lambda[%d] from file\n", r);
 					exit(1);
 				}
+				if (mpz_sgn(mpq_denref(qn->lambda[r])) == 0) {
+					printf("Error: lambda[%d] has a zero denominator\n", r);
+					exit(1);
+				}
 				mpq_canonicalize(qn->lambda[r]);
 			}
 		} else if (strcmp(keyword, "MU") == 0) {
@@ -124,9 +156,20 @@ qnmodel* readmodel(char* filename)
 						printf("Error reading mu[%d][%d] from file\n", m, k);
 						exit(1);
 					}
+					if (mpz_sgn(mpq_denref(qn->mu[m][k])) == 0) {
+						printf("Error: mu[%d][%d] has a zero denominator\n", m, k);
+						exit(1);
+					}
 					mpq_canonicalize(qn->mu[m][k]);
 				}
 			}
+		} else {
+			/* Anything else here is a malformed file: an extra station
+			 * line, an extra column on a station line, or a misspelled
+			 * section keyword.  Silently skipping it parses a different
+			 * model from the one the user wrote. */
+			printf("Error: unexpected token '%s' after the station block (check M, R and the LAMBDA/MU keywords)\n", keyword);
+			exit(1);
 		}
 	}
 

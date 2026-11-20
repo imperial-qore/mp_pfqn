@@ -296,6 +296,7 @@ int main(int argc, char**argv)
 	if (primebits < 8 || primebits > 62) { fprintf(stderr,"prime bit size must be in [8,62]\n"); return -1; }
 
 	qnm = (qnmodel*)readmodel(model_file);
+	qn_require_closed(qnm, "comommod", 0);
 	nckinit(qnm->M+qnm->R+1,qnm->M);
 	nres = NRES(qnm);
 

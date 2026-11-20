@@ -122,8 +122,7 @@ void gmom_measures(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM,
 	}
 
 	if (out_l) {
-		mpf_t f; mpf_init(f); mpf_set_q(f, G0s);
-		printf("%.15e\n", log(mpf_get_d(f))); mpf_clear(f);
+		printf("%.15e\n", mpq_log(G0s)); /* no overflow for G > 1e308 */
 	} else if (out_e) {
 		mpq_canonicalize(G0s);
 		mpz_t num, den; mpz_init(num); mpz_init(den);

@@ -14,7 +14,9 @@ make -C safe_comom          # produces bin/safe_comom
 ```
 
 Options are those of `comom`: `-e` (exact `G` num/den), `-g`, `-l`, `-t`,
-`-q`.
+`-q`, `-d`, or none for the full report. At most one may be given (comom
+prints only one, so several would be misread when un-permuting); any other
+option, including comom's inexact `-p`/`-s` perturbation, is refused.
 
 ## Tiers
 
@@ -35,8 +37,10 @@ tier is exact, so the result is always the exact answer.
   (which errors instantly on a singular system rather than running the slow
   perturbation fallback); only the winning order is solved with the
   requested flag. `G(N)` is invariant to
-  class order, so `-e`/`-g`/`-l` need no remapping; `-t` and `-q` are
-  mapped back to the original class order.
+  class order, so `-e`/`-g`/`-l` need no remapping; `-t`, `-q`, `-d` and
+  the default report are mapped back to the original class order (in the
+  report, the `X[r]` lines, the `Q[k]` values and the model echo; only the
+  transient progress lines still show the permuted populations).
 - **Tier 3** is the fully-peeled limit of the appendix's MVA-like
   recursion: every degenerate class swept by convolution. Always exact.
 
@@ -52,8 +56,10 @@ recursion-class (Tier 2): 08_multiclass
 genuine degeneracy (Tier 3): 05 07 test_singular test_singular2..5
 ```
 
-Open/mixed models (`LAMBDA`) are out of CoMoM's closed-network domain and
-are reported, not mis-solved by falling to convolution.
+Open/mixed models (`LAMBDA` or `N_r<0`) and load-dependent models (`MU`)
+are out of CoMoM's domain: safe_comom refuses them up front with exit
+status 1, rather than accepting a comom answer that ignored `MU` (Tier 1)
+or treating comom's refusal as a singularity and falling to convolution.
 
 ## Relation to the appendix, and what is left
 

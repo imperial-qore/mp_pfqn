@@ -41,7 +41,7 @@ void perfindices(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, bool verbose_output, b
 	}
 	
 	mpf_set_q(fval, G_scaled);
-	double logG = log(mpf_get_d(fval));
+	double logG = mpq_log(G_scaled); /* no overflow for G > 1e308 */
 	
 	if (log_output) {
 		printf("%.15e\n", logG);

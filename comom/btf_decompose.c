@@ -5,16 +5,21 @@
 #include <gmpla.h>
 #include "comom.h"
 
+/* Block pattern: bit s set when comb[s] > 0, s = 0..r-2.  64 bits cover
+ * r <= 65; btf_decompose returns NULL above that and the caller falls back
+ * to a direct LU of A11, which solves the same system. */
+typedef unsigned long long bmask_t;
+
 /**
  * Compute bitmask of non-zero positions in comb[0..r-2].
  * This determines the block pattern for a combination.
  */
-static int pattern_bitmask(int* comb, int r)
+static bmask_t pattern_bitmask(int* comb, int r)
 {
-    int mask = 0;
+    bmask_t mask = 0;
     for (int s = 0; s < r - 1; s++) {
         if (comb[s] > 0)
-            mask |= (1 << s);
+            mask |= (1ULL << s);
     }
     return mask;
 }
@@ -22,7 +27,7 @@ static int pattern_bitmask(int* comb, int r)
 /**
  * Population count (number of set bits) = level of a block.
  */
-static int popcount(int mask)
+static int popcount(bmask_t mask)
 {
     int count = 0;
     while (mask) {
@@ -36,7 +41,7 @@ static int popcount(int mask)
  * Find the index of a bitmask in the block_masks array.
  * Returns -1 if not found.
  */
-static int find_block_index(int* block_masks, int num_blocks, int mask)
+static int find_block_index(bmask_t* block_masks, int num_blocks, bmask_t mask)
 {
     for (int b = 0; b < num_blocks; b++) {
         if (block_masks[b] == mask)
@@ -59,6 +64,7 @@ static int find_block_index(int* block_masks, int num_blocks, int mask)
  */
 btf_info* btf_decompose(mpq_mat_t A11, combsrep* Dn, int r, int M, int cardGk)
 {
+    if (r - 1 > (int)(8 * sizeof(bmask_t))) return NULL; /* pattern does not fit */
     btf_info* btf = (btf_info*)calloc(1, sizeof(btf_info));
     if (!btf) return NULL;
     btf->total_size = cardGk;
@@ -100,7 +106,7 @@ btf_info* btf_decompose(mpq_mat_t A11, combsrep* Dn, int r, int M, int cardGk)
     /* Determine which combos are filtered and compute their bitmask.
      * Also assign ALL combos (filtered or not) to blocks by bitmask. */
     int total_combos = Dn->card;
-    int* combo_mask = (int*)calloc(total_combos, sizeof(int));
+    bmask_t* combo_mask = (bmask_t*)calloc(total_combos, sizeof(bmask_t));
     int* combo_filtered = (int*)calloc(total_combos, sizeof(int)); /* 1 if filtered */
 
     for (int d = 0; d < total_combos; d++) {
@@ -112,12 +118,14 @@ btf_info* btf_decompose(mpq_mat_t A11, combsrep* Dn, int r, int M, int cardGk)
     /* Collect distinct bitmasks in Dn order (they should already be
      * grouped by pattern since Dn is sorted by sortbynnzpos).
      * The maximum number of distinct patterns is 2^(r-1). */
-    int max_blocks = 1 << (r - 1);
-    int* block_masks = (int*)calloc(max_blocks, sizeof(int));
+    /* Every block holds at least one combo, so there are at most
+     * Dn->card of them (2^(r-1) is not allocatable for large r). */
+    int max_blocks = total_combos;
+    bmask_t* block_masks = (bmask_t*)calloc(max_blocks, sizeof(bmask_t));
     int num_blocks = 0;
 
     for (int d = 0; d < total_combos; d++) {
-        int mask = combo_mask[d];
+        bmask_t mask = combo_mask[d];
         if (find_block_index(block_masks, num_blocks, mask) < 0) {
             block_masks[num_blocks++] = mask;
         }
@@ -195,10 +203,10 @@ btf_info* btf_decompose(mpq_mat_t A11, combsrep* Dn, int r, int M, int cardGk)
                     block_nrows[b_src]++;
                 } else {
                     /* s not in P → goes to block P|{s} */
-                    int target_mask = combo_mask[d] | (1 << s);
+                    bmask_t target_mask = combo_mask[d] | (1ULL << s);
                     int b_target = find_block_index(block_masks, num_blocks, target_mask);
                     if (b_target < 0) {
-                        fprintf(stderr, "btf_decompose: cannot find block for mask 0x%x\n", target_mask);
+                        fprintf(stderr, "btf_decompose: cannot find block for mask 0x%llx\n", target_mask);
                         /* fallback */
                         block_nrows[b_src]++;
                     } else {
@@ -246,7 +254,7 @@ btf_info* btf_decompose(mpq_mat_t A11, combsrep* Dn, int r, int M, int cardGk)
                 if (Dn->combs[d][s] > 0) {
                     b_dest = b_src;
                 } else {
-                    int target_mask = combo_mask[d] | (1 << s);
+                    bmask_t target_mask = combo_mask[d] | (1ULL << s);
                     b_dest = find_block_index(block_masks, num_blocks, target_mask);
                     if (b_dest < 0) b_dest = b_src;
                 }
@@ -268,7 +276,7 @@ btf_info* btf_decompose(mpq_mat_t A11, combsrep* Dn, int r, int M, int cardGk)
     for (int b = 0; b < num_blocks; b++) {
         /* Diagonal blocks must be square: nrows == ncols */
         if (block_nrows[b] != block_ncols[b]) {
-            fprintf(stderr, "btf_decompose: block %d not square (rows=%d, cols=%d, mask=0x%x)\n",
+            fprintf(stderr, "btf_decompose: block %d not square (rows=%d, cols=%d, mask=0x%llx)\n",
                     b, block_nrows[b], block_ncols[b], block_masks[b]);
             /* Continue anyway; the solver will likely detect singularity */
         }
@@ -315,7 +323,7 @@ btf_info* btf_decompose(mpq_mat_t A11, combsrep* Dn, int r, int M, int cardGk)
         for (int b_col = b_row + 1; b_col < num_blocks; b_col++) {
             /* Check if b_col's mask is a superset of b_row's mask
              * differing by exactly one bit, OR any coupling exists */
-            int mask_diff = block_masks[b_col] & ~block_masks[b_row];
+            bmask_t mask_diff = block_masks[b_col] & ~block_masks[b_row];
             if (mask_diff == 0) continue; /* b_col not a superset of b_row */
             /* Any non-zero coupling? Check */
             int has_nonzero = 0;
@@ -340,7 +348,7 @@ btf_info* btf_decompose(mpq_mat_t A11, combsrep* Dn, int r, int M, int cardGk)
     int od_idx = 0;
     for (int b_row = 0; b_row < num_blocks; b_row++) {
         for (int b_col = b_row + 1; b_col < num_blocks; b_col++) {
-            int mask_diff = block_masks[b_col] & ~block_masks[b_row];
+            bmask_t mask_diff = block_masks[b_col] & ~block_masks[b_row];
             if (mask_diff == 0) continue;
 
             int r_start = block_row_offset[b_row];

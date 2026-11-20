@@ -248,7 +248,12 @@ void recal_multi_exact_internal(qnmodel* qn, mpq_t Gex, bool show_progress)
 		fprintf(stderr, "\r%*s\r", 80, "");
 	}
 	
-	mpq_set(Gex, G[0]);
+	// The empty network (total population 0) has G=1; the recursion above
+	// ran no step, so G[] was never filled.
+	if (n == 0)
+		mpq_set_ui(Gex, 1, 1);
+	else
+		mpq_set(Gex, G[0]);
 	
 	// Free memory
 	for (i=1;i<=nck(Ntot+Mz-1,Ntot);i++)

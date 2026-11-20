@@ -23,7 +23,7 @@ struct rusage ruse;
 qnmodel* qnm;
 bool INTERACTIVE,RANDGEN,CANON,ZSCALE,DEBUG,VERBOSE;
 
-void convolution_multi_exact(mpq_t *g, mpf_t *X, mpf_t **Q);
+void convolution_multi_exact(mpq_t *g, mpq_t *X, mpq_t **Q);
 
 void printcompact(int*n,int R)
 {
@@ -99,6 +99,7 @@ int main(int argc, char**argv)
 	}
 	
 	qnm=(qnmodel*)readmodel(model_file);
+	qn_require_closed(qnm, "ca", 0);
 	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output && !exact_output) {
 		printmodel(qnm);
 	}
@@ -114,14 +115,14 @@ int main(int argc, char**argv)
 		return -1;
 	}
 	
-	mpf_t* X=(mpf_t*) calloc((size_t)qnm->R,sizeof(mpf_t));
+	mpq_t* X=(mpq_t*) calloc((size_t)qnm->R,sizeof(mpq_t));
 	if (X == NULL) {
 		fprintf(stderr, "Error: Failed to allocate memory for X array (%d elements)\n", qnm->R);
 		free(G);
 		return -1;
 	}
 	
-	mpf_t** Q=(mpf_t**) calloc((size_t)qnm->M,sizeof(mpf_t*));
+	mpq_t** Q=(mpq_t**) calloc((size_t)qnm->M,sizeof(mpq_t*));
 	if (Q == NULL) {
 		fprintf(stderr, "Error: Failed to allocate memory for Q array (%d elements)\n", qnm->M);
 		free(G);
@@ -129,16 +130,16 @@ int main(int argc, char**argv)
 		return -1;
 	}
 	for (int i=0;i<=qnm->M;i++) mpq_init(G[i]);
-	for (int i=0;i<qnm->R;i++) mpf_init(X[i]);
+	for (int i=0;i<qnm->R;i++) mpq_init(X[i]);
 	for (int i=0;i<qnm->M;i++) {
-		Q[i] = (mpf_t*) calloc((size_t)qnm->R,sizeof(mpf_t));
+		Q[i] = (mpq_t*) calloc((size_t)qnm->R,sizeof(mpq_t));
 		if (Q[i] == NULL) {
 			fprintf(stderr, "Error: Failed to allocate memory for Q[%d] array (%d elements)\n", i, qnm->R);
 			// Clean up previously allocated memory
 			for (int j=0;j<=qnm->M;j++) mpq_clear(G[j]);
-			for (int j=0;j<qnm->R;j++) mpf_clear(X[j]);
+			for (int j=0;j<qnm->R;j++) mpq_clear(X[j]);
 			for (int j=0;j<i;j++) {
-				for (int r=0;r<qnm->R;r++) mpf_clear(Q[j][r]);
+				for (int r=0;r<qnm->R;r++) mpq_clear(Q[j][r]);
 				free(Q[j]);
 			}
 			free(G);
@@ -146,7 +147,7 @@ int main(int argc, char**argv)
 			free(Q);
 			return -1;
 		}
-		for (int r=0;r<qnm->R;r++) mpf_init(Q[i][r]);
+		for (int r=0;r<qnm->R;r++) mpq_init(Q[i][r]);
 	}
 	
 	convolution_multi_exact(G,X,Q);
@@ -156,9 +157,9 @@ int main(int argc, char**argv)
 	if (mpq_cmp_ui(G[0], 0, 1) == 0) {
 		// Clean up and exit gracefully
 		for (int i=0;i<=qnm->M;i++) mpq_clear(G[i]);
-		for (int i=0;i<qnm->R;i++) mpf_clear(X[i]);
+		for (int i=0;i<qnm->R;i++) mpq_clear(X[i]);
 		for (int i=0;i<qnm->M;i++) {
-			for (int r=0;r<qnm->R;r++) mpf_clear(Q[i][r]);
+			for (int r=0;r<qnm->R;r++) mpq_clear(Q[i][r]);
 			free(Q[i]);
 		}
 		free(G);
@@ -170,7 +171,11 @@ int main(int argc, char**argv)
 	mpf_t fval;
 	mpf_init(fval);
 	mpf_set_q(fval, G[0]);
-	double logG = log(mpf_get_d(fval));
+	double logG = mpq_log(G[0]); /* no overflow when G > DBL_MAX */
+	/* X and Q are exact; doubles are printed the way mva prints them */
+	mpf_t dval;
+	mpf_init(dval);
+#define QD(q) (mpf_set_q(dval, (q)), mpf_get_d(dval))
 	
 	if (log_output) {
 		printf("%.15e\n", logG);
@@ -192,13 +197,13 @@ int main(int argc, char**argv)
 	} else if (throughput_output) {
 		// Print only throughputs, one per row
 		for (int r = 0; r < qnm->R; r++) {
-			printf("%.15e\n", mpf_get_d(X[r]));
+			printf("%.15e\n", QD(X[r]));
 		}
 	} else if (queue_output) {
 		// Print queue lengths, all classes for same queue on same row
 		for (int i = 0; i < qnm->M; i++) {
 			for (int r = 0; r < qnm->R; r++) {
-				printf("%.15e", mpf_get_d(Q[i][r]));
+				printf("%.15e", QD(Q[i][r]));
 				if (r < qnm->R - 1) printf(" ");
 			}
 			printf("\n");
@@ -206,66 +211,67 @@ int main(int argc, char**argv)
 	} else if (exact_output) {
 		// Print all performance metrics in exact rational form
 		printf("========== Performance Metrics (Exact) ==========\n");
+		printf("Normalizing constant:\n");
 		gmp_printf("G = %Qd\n", G[0]);
 		printf("log(G) = %.15e\n", logG);
 		
 		printf("\nX (throughputs):\n");
-		mpq_t x_exact;
-		mpq_init(x_exact);
 		for (int r = 0; r < qnm->R; r++) {
-			mpq_set_f(x_exact, X[r]);
-			gmp_printf("X[%d] = %Qd\n", r, x_exact);
+			gmp_printf("X[%d] = %Qd\n", r+1, X[r]);
 		}
-		mpq_clear(x_exact);
 		
 		printf("\nQ (mean queue lengths):\n");
-		mpq_t q_exact, q_total;
-		mpq_init(q_exact);
+		mpq_t q_total;
 		mpq_init(q_total);
 		for (int i = 0; i < qnm->M; i++) {
 			printf("Q[%d] =", i+1);
 			mpq_set_ui(q_total, 0, 1);
 			for (int r = 0; r < qnm->R; r++) {
-				mpq_set_f(q_exact, Q[i][r]);
-				gmp_printf("\t%Qd", q_exact);
-				mpq_add(q_total, q_total, q_exact);
+				gmp_printf("\t%Qd", Q[i][r]);
+				mpq_add(q_total, q_total, Q[i][r]);
 			}
 			gmp_printf("\t(total: %Qd)\n", q_total);
 		}
-		mpq_clear(q_exact);
 		mpq_clear(q_total);
 		
 		printf("=========================================\n");
-		printf("Elapsed time (CA): %g s\n", t1-t0);
+		printf("Elapsed time (CA): %.6f s\n", t1-t0);
 	} else {
 		printf("========== Performance Metrics ==========\n");
+		printf("Normalizing constant:\n");
 		printf("G = %.15e\n", mpf_get_d(fval));
 		printf("log(G) = %.15e\n", logG);
 		
 		printf("\nX (throughputs):\n");
 		for (int r = 0; r < qnm->R; r++) {
-			printf("X[%d] = %.15e\n", r, mpf_get_d(X[r]));
+			printf("X[%d] = %.15e\n", r+1, QD(X[r]));
 		}
 		
 		printf("\nQ (mean queue lengths):\n");
+		mpq_t q_total;
+		mpq_init(q_total);
 		for (int i = 0; i < qnm->M; i++) {
 			printf("Q[%d] =", i+1);
+			mpq_set_ui(q_total, 0, 1);
 			for (int r = 0; r < qnm->R; r++) {
-				printf("\t%.15e", mpf_get_d(Q[i][r]));
+				printf("\t%.15e", QD(Q[i][r]));
+				mpq_add(q_total, q_total, Q[i][r]);
 			}
-			printf("\t(total: %.15e)\n", 
-				mpf_get_d(Q[i][0]) + mpf_get_d(Q[i][1]));
+			printf("\t(total: %.15e)\n", QD(q_total));
 		}
+		mpq_clear(q_total);
 		
 		printf("=========================================\n");
-		printf("Elapsed time (CA): %g s\n", t1-t0);
+		printf("Elapsed time (CA): %.6f s\n", t1-t0);
 	}
+#undef QD
+	mpf_clear(dval);
 	mpf_clear(fval);
 	
 	for (int i=0;i<=qnm->M;i++) mpq_clear(G[i]);
-	for (int i=0;i<qnm->R;i++) mpf_clear(X[i]);
+	for (int i=0;i<qnm->R;i++) mpq_clear(X[i]);
 	for (int i=0;i<qnm->M;i++) {
-		for (int r=0;r<qnm->R;r++) mpf_clear(Q[i][r]);
+		for (int r=0;r<qnm->R;r++) mpq_clear(Q[i][r]);
 		free(Q[i]);
 	}
 	free(G);

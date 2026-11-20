@@ -445,12 +445,8 @@ double lcfsmva_multi(qnmodel* qn, mpq_t *X, mpq_t **Q, mpq_t G, mpq_t **B_out)
 	/* G = G_ca[final_idx] */
 	mpq_set(G, G_ca[final_idx]);
 
-	/* Compute logG */
-	mpf_t G_mpf;
-	mpf_init(G_mpf);
-	mpf_set_q(G_mpf, G);
-	double logG_final = log(mpf_get_d(G_mpf));
-	mpf_clear(G_mpf);
+	/* Compute logG (mpq_log does not overflow when G > DBL_MAX) */
+	double logG_final = mpq_log(G);
 
 	/* Free all memory */
 	for (int i = 0; i < nstates; i++) {

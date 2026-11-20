@@ -19,13 +19,26 @@
 /* mixed-radix helpers over the box [0..pop[0]] x ... x [0..pop[r-1]] */
 static int box_size(int* pop, int r)
 {
-	int t, s = 1;
-	for (t = 0; t < r; t++) s *= (pop[t] + 1);
-	return s;
+	int t;
+	long long s = 1;
+	for (t = 0; t < r; t++) {
+		s *= (pop[t] + 1);
+		if (s > 0x7fffffffLL) {
+			fprintf(stderr, "gmom: population box too large for the base convolution (prod (N_c+1) > 2^31)\n");
+			exit(1);
+		}
+	}
+	return (int) s;
 }
 
 void gmva(mpq_t G, mpz_t** dem, int nq, int* pop, mpz_t* Z, int r)
 {
+	int c0;
+	/* G at a negative population is 0.  oner() hands us pop[s]=-1 when
+	 * class s has N_s=0; without this the box is empty and g[bs-1] reads
+	 * g[-1]. */
+	for (c0 = 0; c0 < r; c0++)
+		if (pop[c0] < 0) { mpq_set_si(G, 0, 1); return; }
 	int bs = box_size(pop, r);
 	int i, c, q, idx;
 	int* radix = (int*) malloc(r * sizeof(int));

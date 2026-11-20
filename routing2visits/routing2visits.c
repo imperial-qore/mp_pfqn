@@ -177,8 +177,11 @@ mpq_matrix_t* routing2visits(routing_matrices_t *routing) {
             
             for (int i = 0; i < num_queues; i++) {
                 mpq_set_ui(A->data[i][i], 1, 1);
+                /* traffic equations v_i = P[0][i] + sum_j v_j P[j][i]
+                 * (P[k][m] = probability of routing k -> m), i.e. the
+                 * system matrix is (I - P_sub)^T, not I - P_sub. */
                 for (int j = 0; j < num_queues; j++) {
-                    mpq_sub(A->data[i][j], A->data[i][j], routing->matrices[c].data[i + 1][j + 1]);
+                    mpq_sub(A->data[i][j], A->data[i][j], routing->matrices[c].data[j + 1][i + 1]);
                 }
                 mpq_set(b->data[i][0], routing->matrices[c].data[0][i + 1]);
             }

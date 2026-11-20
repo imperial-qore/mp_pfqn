@@ -5,6 +5,11 @@
 #include <zpla.h>
 #include "comommod.h"
 
+/* Block pattern: bit s set when comb[s] > 0, s = 0..r-2.  64 bits cover
+ * r <= 65; btf_decompose returns NULL above that and the caller falls back
+ * to a direct LU of A11, which solves the same system. */
+typedef unsigned long long bmask_t;
+
 /* Transliteration of comom/btf_decompose.c into Z/p.  The block structure
  * is combinatorial, derived from the non-zero pattern of the Dn
  * combinations, so it is identical in every modular image; only the
@@ -12,23 +17,23 @@
  * and an entry that vanishes mod p merely drops an off-diagonal block
  * that would have contributed nothing anyway. */
 
-static int pattern_bitmask(int* comb, int r)
+static bmask_t pattern_bitmask(int* comb, int r)
 {
-    int mask = 0;
+    bmask_t mask = 0;
     for (int s = 0; s < r - 1; s++)
         if (comb[s] > 0)
-            mask |= (1 << s);
+            mask |= (1ULL << s);
     return mask;
 }
 
-static int popcount(int mask)
+static int popcount(bmask_t mask)
 {
     int count = 0;
     while (mask) { count += mask & 1; mask >>= 1; }
     return count;
 }
 
-static int find_block_index(int* block_masks, int num_blocks, int mask)
+static int find_block_index(bmask_t* block_masks, int num_blocks, bmask_t mask)
 {
     for (int b = 0; b < num_blocks; b++)
         if (block_masks[b] == mask)
@@ -38,6 +43,7 @@ static int find_block_index(int* block_masks, int num_blocks, int mask)
 
 btf_info* btf_decompose(zp_mat_t A11, combsrep* Dn, int r, int M, int cardGk)
 {
+    if (r - 1 > (int)(8 * sizeof(bmask_t))) return NULL; /* pattern does not fit */
     btf_info* btf = (btf_info*)calloc(1, sizeof(btf_info));
     if (!btf) return NULL;
     btf->total_size = cardGk;
@@ -71,7 +77,7 @@ btf_info* btf_decompose(zp_mat_t A11, combsrep* Dn, int r, int M, int cardGk)
 
     /* Step 1: discover blocks from the Dn ordering */
     int total_combos = Dn->card;
-    int* combo_mask = (int*)calloc(total_combos, sizeof(int));
+    bmask_t* combo_mask = (bmask_t*)calloc(total_combos, sizeof(bmask_t));
     int* combo_filtered = (int*)calloc(total_combos, sizeof(int));
 
     for (int d = 0; d < total_combos; d++) {
@@ -79,12 +85,14 @@ btf_info* btf_decompose(zp_mat_t A11, combsrep* Dn, int r, int M, int cardGk)
         combo_filtered[d] = (int_vecsubsum(Dn->combs[d], 0, r - 1) < M) ? 1 : 0;
     }
 
-    int max_blocks = 1 << (r - 1);
-    int* block_masks = (int*)calloc(max_blocks, sizeof(int));
+    /* Every block holds at least one combo, so there are at most
+     * Dn->card of them (2^(r-1) is not allocatable for large r). */
+    int max_blocks = total_combos;
+    bmask_t* block_masks = (bmask_t*)calloc(max_blocks, sizeof(bmask_t));
     int num_blocks = 0;
 
     for (int d = 0; d < total_combos; d++) {
-        int mask = combo_mask[d];
+        bmask_t mask = combo_mask[d];
         if (find_block_index(block_masks, num_blocks, mask) < 0)
             block_masks[num_blocks++] = mask;
     }
@@ -124,10 +132,10 @@ btf_info* btf_decompose(zp_mat_t A11, combsrep* Dn, int r, int M, int cardGk)
                 if (Dn->combs[d][s] > 0) {
                     block_nrows[b_src]++;
                 } else {
-                    int target_mask = combo_mask[d] | (1 << s);
+                    bmask_t target_mask = combo_mask[d] | (1ULL << s);
                     int b_target = find_block_index(block_masks, num_blocks, target_mask);
                     if (b_target < 0) {
-                        fprintf(stderr, "btf_decompose: cannot find block for mask 0x%x\n", target_mask);
+                        fprintf(stderr, "btf_decompose: cannot find block for mask 0x%llx\n", target_mask);
                         block_nrows[b_src]++;
                     } else {
                         block_nrows[b_target]++;
@@ -163,7 +171,7 @@ btf_info* btf_decompose(zp_mat_t A11, combsrep* Dn, int r, int M, int cardGk)
                 if (Dn->combs[d][s] > 0) {
                     b_dest = b_src;
                 } else {
-                    int target_mask = combo_mask[d] | (1 << s);
+                    bmask_t target_mask = combo_mask[d] | (1ULL << s);
                     b_dest = find_block_index(block_masks, num_blocks, target_mask);
                     if (b_dest < 0) b_dest = b_src;
                 }
@@ -206,7 +214,7 @@ btf_info* btf_decompose(zp_mat_t A11, combsrep* Dn, int r, int M, int cardGk)
     int num_offdiag = 0;
     for (int b_row = 0; b_row < num_blocks; b_row++) {
         for (int b_col = b_row + 1; b_col < num_blocks; b_col++) {
-            int mask_diff = block_masks[b_col] & ~block_masks[b_row];
+            bmask_t mask_diff = block_masks[b_col] & ~block_masks[b_row];
             if (mask_diff == 0) continue;
             int has_nonzero = 0;
             int r_start = block_row_offset[b_row];
@@ -228,7 +236,7 @@ btf_info* btf_decompose(zp_mat_t A11, combsrep* Dn, int r, int M, int cardGk)
     int od_idx = 0;
     for (int b_row = 0; b_row < num_blocks; b_row++) {
         for (int b_col = b_row + 1; b_col < num_blocks; b_col++) {
-            int mask_diff = block_masks[b_col] & ~block_masks[b_row];
+            bmask_t mask_diff = block_masks[b_col] & ~block_masks[b_row];
             if (mask_diff == 0) continue;
 
             int r_start = block_row_offset[b_row];

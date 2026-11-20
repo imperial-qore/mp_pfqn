@@ -199,6 +199,12 @@ double mva_multi(qnmodel* qn, mpq_t *X, mpq_t **Q, mpq_t G)
 	// Compute final queue lengths for the full population using exact arithmetic
 	for (m=1;m<=M;m++) {
 		for (r=1;r<=R;r++) {
+			// A class with no jobs has X_r=0 and Q_{m,r}=0, and N-1_r is
+			// outside the population lattice.
+			if (qn->N[r-1] == 0) {
+				mpq_set_ui(Q[m-1][r-1], 0, 1);
+				continue;
+			}
 			// Get population N-1r (one less customer of class r)
 			int *n_minus_1r = (int*)malloc(R * sizeof(int));
 			for (int i=0; i<R; i++) {
@@ -233,12 +239,7 @@ double mva_multi(qnmodel* qn, mpq_t *X, mpq_t **Q, mpq_t G)
 	free(n);
 	free(planesizes);
 	
-	// Compute logG from the final G value for return
-	mpf_t G_mpf;
-	mpf_init(G_mpf);
-	mpf_set_q(G_mpf, G);
-	double logG_final = log(mpf_get_d(G_mpf));
-	mpf_clear(G_mpf);
-	
-	return logG_final;
+	// Compute logG from the final G value for return (mpq_log does not
+	// overflow when G > DBL_MAX)
+	return mpq_log(G);
 }

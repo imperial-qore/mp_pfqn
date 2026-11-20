@@ -152,11 +152,12 @@ PMatrices* genpmatrix(combsrep* Dn, qnmodel* qnm, int* Ncur, int r)
 							mpq_set_z(pm->DC[row][col_base], L[M-1][s-1]);
 						}
 
-						/* A: -L(k,s) for k=1..M-1 at station k+1 of shifted */
+						/* A: -mi(k)*L(k,s) for k=1..M-1 at station k+1 of shifted
+						 * (mi(k) identical replicas of station k, as in comom) */
 						for (k = 1; k <= M-1; k++) {
 							int col = phash(Dn, shifted, k+1);
 							if (col >= 0 && col < basisSize) {
-								mpz_neg(neg_val, L[k-1][s-1]);
+								mpz_mul_si(neg_val, L[k-1][s-1], -qnm->mi[k-1]);
 								mpq_set_z(pm->A[row][col], neg_val);
 							}
 						}
@@ -182,9 +183,10 @@ PMatrices* genpmatrix(combsrep* Dn, qnmodel* qnm, int* Ncur, int r)
 				/* B: Z(r) at base component of Dn[d] */
 				mpq_set_z(pm->B[row][d*M + 0], Z[r-1]);
 
-				/* B: L(k,r) for k=1..M-1 at station k+1 of Dn[d] */
+				/* B: mi(k)*L(k,r) for k=1..M-1 at station k+1 of Dn[d] */
 				for (k = 1; k <= M-1; k++) {
-					mpq_set_z(pm->B[row][d*M + k], L[k-1][r-1]);
+					mpz_mul_si(neg_val, L[k-1][r-1], qnm->mi[k-1]);
+					mpq_set_z(pm->B[row][d*M + k], neg_val);
 				}
 
 				/* DD: L(M,r) at base component of Dn[d] */

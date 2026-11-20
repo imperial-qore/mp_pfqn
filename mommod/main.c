@@ -92,7 +92,7 @@ static int solve_mod(qnmodel* qnm, zp_t p, zp_t* res)
 			b  = zp_vec(m,0,1);
 			b2 = zp_vec(m,0,1);
 			g  = zp_vec(m+1,1,1);
-			gr = zp_vec(m+1,1,1);
+			gr = zp_vec(m+1,0,1); /* G(n-1_1)=0 at n=0: stays 0 if N_1=0 */
 			Gk = zp_vec(m,1,1);
 			G  = zp_vec(1,1,1);
 		}
@@ -379,6 +379,7 @@ int main(int argc, char**argv)
 	if (primebits < 8 || primebits > 62) { fprintf(stderr,"prime bit size must be in [8,62]\n"); return -1; }
 
 	qnm = (qnmodel*)readmodel(model_file);
+	qn_require_closed(qnm, "mommod", 0);
 	nckinit(qnm->M+qnm->R-1,qnm->R);
 	nres = NRES(qnm);
 

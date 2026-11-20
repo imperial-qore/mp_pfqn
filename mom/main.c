@@ -146,7 +146,7 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 			b2=(mpq_vec_t)mpq_vec(m,0,1);
 			/* the norm.consts for n=(0,0,...,0) are equal to 1 */
 			g=(mpq_vec_t)mpq_vec(m+1,1,1); 
-			gr=(mpq_vec_t)mpq_vec(m+1,1,1);
+			gr=(mpq_vec_t)mpq_vec(m+1,0,1); /* G(n-1_1)=0 at n=0: stays 0 if N_1=0 */
 			Gk=(mpq_vec_t)mpq_vec(m,1,1);
 			G=(mpq_vec_t)mpq_vec(1,1,1);
 		}
@@ -378,6 +378,7 @@ int main(int argc, char**argv)
 	
 	USE_LINBOX = use_linbox;
 	qnm=(qnmodel*)readmodel(model_file);
+	qn_require_closed(qnm, "mom", 0);
 	
 	// Store original parameters for printing
 	mpz_t** original_L = NULL;
@@ -405,6 +406,8 @@ int main(int argc, char**argv)
 	mpz_set_ui(scale_factor, 1);  // Default to 1 when no scaling
 	if(perturbation_digit > 0) {
 		apply_perturbation_to_model(qnm, perturbation_digit, perturbation_seed, scale_factor);
+		if (normconst_output || debug_output)
+			fprintf(stderr, "Warning: -p %d perturbs the model; the rational printed is exact for the perturbed model only and is NOT the exact G of the input model (it changes with -s).\n", perturbation_digit);
 		
 		if (debug_output && !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
 			if (auto_perturbation) {

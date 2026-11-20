@@ -185,7 +185,7 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 			b2=(fp_vec_t)fp_vec(m,0,1);
 			/* the norm.consts for n=(0,0,...,0) are equal to 1 */
 			g=(fp_vec_t)fp_vec(m+1,1,1); 
-			gr=(fp_vec_t)fp_vec(m+1,1,1);
+			gr=(fp_vec_t)fp_vec(m+1,0,1); /* G(n-1_1)=0 at n=0: stays 0 if N_1=0 */
 			Gk=(fp_vec_t)fp_vec(m,1,1);
 			G=(fp_vec_t)fp_vec(1,1,1);
 		}
@@ -472,6 +472,7 @@ int main(int argc, char**argv)
 	REFINE_TOL   = refine_tol;
 
 	qnm=(qnmodel*)readmodel(model_file);
+	qn_require_closed(qnm, "momf", 0);
 	
 	// Store original parameters for printing
 	mpz_t** original_L = NULL;

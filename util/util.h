@@ -18,6 +18,9 @@
 #ifndef __cplusplus
   #include <stdbool.h>
 #endif
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 #define MIN(a,b) ((a<b) ? a : b)
 #define MAX(a,b) ((a>b) ? a : b)
 #define MAXNCKTABLE 100 /* maximum allowed factorial */
@@ -68,5 +71,55 @@ int nextpopinteractive(int* n, int* N, int R);
 int popindex(int* n,int R,int* planesizes);
 bool issingleclass(int* n, int R);
 int* getplanesizes(int *N, int R);
+
+/* log of a positive rational without converting it to a double first:
+ * mpq_get_d overflows to inf once the value exceeds ~1e308, which a
+ * normalizing constant does at modest populations.  mpz_get_d_2exp splits
+ * off the binary exponent of numerator and denominator separately. */
+static inline double mpq_log(const mpq_t q)
+{
+	/* When q fits in a double, log(mpq_get_d(q)) rounds once and gives
+	 * the same last digit as the other solvers' output; the two-term
+	 * split below rounds twice, so use it only when q over/underflows. */
+	double d = mpq_get_d(q);
+	if (isfinite(d) && d > 0.0 && isnormal(d)) return log(d);
+	signed long en, ed;
+	double dn = mpz_get_d_2exp(&en, mpq_numref(q));
+	double dd = mpz_get_d_2exp(&ed, mpq_denref(q));
+	return log(dn) - log(dd) + (double)(en - ed) * log(2.0);
+}
+
+/* Same for an mpf_t (log(mpf_get_d(x)) overflows the same way). */
+static inline double mpf_log(const mpf_t x)
+{
+	double v = mpf_get_d(x);
+	if (isfinite(v) && v > 0.0 && isnormal(v)) return log(v); /* single rounding */
+	signed long e;
+	double d = mpf_get_d_2exp(&e, x);
+	return log(d) + (double)e * log(2.0);
+}
+
+/* Solvers that only handle closed product-form models call this right
+ * after readmodel: an open class (N[r]<0) gives a population lattice of
+ * size zero and a load-dependent MU section is silently ignored, so
+ * either would otherwise print a wrong answer (or crash) with exit 0. */
+static inline void qn_require_closed(const qnmodel* qn, const char* solver, int allow_ld)
+{
+	int r;
+	for (r = 0; r < qn->R; r++) {
+		if (qn->N[r] < 0) {
+			fprintf(stderr, "%s: class %d is open (N=%d); this solver supports closed models only\n", solver, r+1, qn->N[r]);
+			exit(1);
+		}
+	}
+	if (qn->hasOpen) {
+		fprintf(stderr, "%s: LAMBDA section present; this solver supports closed models only\n", solver);
+		exit(1);
+	}
+	if (qn->isLD && !allow_ld) {
+		fprintf(stderr, "%s: MU (load-dependent) section present; this solver does not support load-dependent stations\n", solver);
+		exit(1);
+	}
+}
 
 #endif
