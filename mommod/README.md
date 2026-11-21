@@ -80,9 +80,9 @@ made deliberately by the caller rather than silently.
   serves.
 - **Unlucky primes** (some diagonal block singular mod `p`) are detected
   and discarded. A matrix that is singular over `Q` is singular modulo
-  every prime, and is reported after 40 consecutive failures. This is
-  strictly better behaviour than `mom`, which silently substitutes a
-  perturbed model.
+  every prime and shows up as 40 consecutive failures; such a model is
+  then solved exactly by the fallbacks in **Singular models** below,
+  where `mom` instead substitutes a perturbed model.
 - **Termination** is not by an a priori height bound. Primes are added
   until `G` reconstructs to the same rational twice, then the full set of
   constants is reconstructed and must reproduce itself at a later prime
@@ -169,8 +169,49 @@ itself:
 Bit-for-bit identical to `bin/mom` on `-e`, `-t` and `-q` for every
 non-singular model in `models/`, plus the paper's Table 1 model at
 several populations. On the singular models the two differ by design:
-`mom` auto-perturbs and returns an approximation, `mommod` reports the
-singularity.
+`mom` auto-perturbs and returns an approximation, `mommod` returns the
+exact answer through the fallbacks below.
+
+## Singular models
+
+When the MoM system is singular over `Q`, `mommod` tries the following,
+cheapest first. Every tier is exact; the route taken is noted on stderr
+(and in the default report, and in `-v`).
+
+1. **Other class orders.** The system can be singular for one class
+   processed last and not for another. Up to 24 orders are tried and the
+   results are mapped back.
+2. **Merged stations.** Stations with identical demand rows are folded
+   into one station with the summed multiplicity (a multiplicity-`m`
+   station is `m` identical queues). `G` and `G(N-1_r)` are unchanged and
+   `G^{+k}(N-1_r)` is that of the folded station.
+3. **Merged classes.** Classes with `L_kr = c L_ks` at every station and
+   `Z_r = c Z_s` enter the generating function only through
+   `x_s + c x_r`, so the group is solved as one class at the summed
+   population and expanded by `G(N) = G'(n) prod (sum N_i)!/prod N_i! prod c_i^{N_i}`
+   (same factor at `N-1_i` for the other constants).
+   Tiers 1 to 3 are applied again to each reduced model.
+4. **Interpolation.** Every exported constant is a homogeneous polynomial
+   of degree at most `Ntot` in `(L, Z)` jointly, so along
+   `(L, Z) + t (DL, DZ)` it is a polynomial in `t` whose value at `t = 0`
+   is the original constant. Each prime solves the perturbed model at
+   `t = 1, 2, ...`, skipping the finitely many singular `t`, and
+   evaluates the Lagrange interpolant through `Ntot+1` points at `t = 0`
+   in `Z/p`; the CRT then reconstructs the exact value. Both `L` and `Z`
+   must move (with `Z = 0` the system can be singular for every demand
+   matrix), and the direction is drawn from `1..10^6`, since small
+   integers create coincidences that are themselves degeneracies. Cost
+   is `Ntot+1` solves per prime.
+
+A model none of these solve has an undefined normalizing constant (for
+example a class with population, no think time and zero demand
+everywhere), and `mommod` reports an error.
+
+Validated against `bin/ca` on every model in `models/` (all singular
+ones included: `08` and `11` via class order, the others via
+interpolation; `06_large` with `Ntot = 75` takes 16 s on one thread, 6.6 s
+on four), on the merge examples, and on 600 random models covering every
+tier, all exact.
 
 ## A latent bug in `mom` that this exposed
 

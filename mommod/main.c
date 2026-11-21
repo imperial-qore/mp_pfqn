@@ -22,8 +22,9 @@
  *     recursion is invertible;
  *   - a prime for which some diagonal block of C is singular ("unlucky
  *     prime") is discarded and another is drawn.  A genuinely singular C
- *     is singular modulo every prime, and is reported after a run of
- *     consecutive failures;
+ *     is singular modulo every prime and shows up as a run of consecutive
+ *     failures; the model is then solved exactly by solve_tiered()
+ *     (other class orders, merged stations or classes, interpolation);
  *   - the number of primes is not fixed in advance.  Primes are added
  *     until rational reconstruction of every exported quantity succeeds
  *     and repeats unchanged, which is the standard early-termination
@@ -399,6 +400,546 @@ static double ratio_double(int idx, int station, mpz_t* num, mpz_t* den)
 	return d;
 }
 
+/* ================================================================== */
+/* Exact solution of models whose MoM system is singular.             */
+/*                                                                    */
+/* crt_solve() runs the prime/CRT/reconstruction loop for any model    */
+/* and any per-prime "image" function.  solve_tiered() tries, cheapest */
+/* first and every tier exact:                                         */
+/*   1 the model as given;                                             */
+/*   2 other class orders (the system can be singular for one class    */
+/*     processed last and not for another);                            */
+/*   3 structural reductions, each solved again by tiers 1-3:          */
+/*     stations with identical demand rows folded into one station     */
+/*     with summed multiplicity, and classes with proportional demands */
+/*     and think times aggregated into one class;                      */
+/*   4 the exact limit of a perturbation, by interpolation in Z/p.     */
+/* ================================================================== */
+
+static int  S_NTHREADS = 1, S_PRIMEBITS = 61, S_NWITNESS = 0;
+static long S_TOTPRIMES = 0, S_TOTUNLUCKY = 0;
+static unsigned long S_MODBITS = 0;
+
+typedef int (*image_fn)(qnmodel* q, zp_t p, zp_t* res, void* ctx);
+
+static int img_direct(qnmodel* q, zp_t p, zp_t* res, void* ctx)
+{
+	(void)ctx;
+	return solve_mod(q, p, res);
+}
+
+/* Reconstruct the NRES(q) exported constants of q as exact rationals in
+ * out[].  minprime is a lower bound on the primes (besides max N_r).
+ * Returns 0 on success, 1 if the image failed modulo more than 40
+ * consecutive primes (the system is singular over Q), 2 if the primes of
+ * the requested size ran out (reported here). */
+static int crt_solve(qnmodel* q, image_fn image, void* ctx, unsigned long minprime, mpq_t* out)
+{
+	int i, w, rc = 0, nres = NRES(q), nthreads = S_NTHREADS;
+	unsigned long primefloor;
+	mpz_t M, cand, pz, *acc, *num, *den, *pnum, *pden, *cnum, *cden;
+
+	{
+		int maxN = 0;
+		for (i=0;i<q->R;i++) if (q->N[i] > maxN) maxN = q->N[i];
+		primefloor = (unsigned long)(maxN > 2 ? maxN + 1 : 3);
+		if (minprime > primefloor) primefloor = minprime;
+	}
+	mpz_init(cand);
+	mpz_ui_pow_ui(cand, 2, (unsigned long)S_PRIMEBITS);
+	if (mpz_cmp_ui(cand, primefloor) <= 0)
+	{
+		fprintf(stderr,"Error: -b %d gives no prime above %lu; raise -b\n", S_PRIMEBITS, primefloor);
+		mpz_clear(cand);
+		return 2;
+	}
+
+	acc  = (mpz_t*) malloc(nres*sizeof(mpz_t));
+	cnum = (mpz_t*) malloc(nres*sizeof(mpz_t));
+	cden = (mpz_t*) malloc(nres*sizeof(mpz_t));
+	num  = (mpz_t*) malloc(nres*sizeof(mpz_t));
+	den  = (mpz_t*) malloc(nres*sizeof(mpz_t));
+	pnum = (mpz_t*) malloc(nres*sizeof(mpz_t));
+	pden = (mpz_t*) malloc(nres*sizeof(mpz_t));
+	mpz_init_set_ui(M,0); mpz_init(pz);
+	for (i=0;i<nres;i++) { mpz_init(acc[i]); mpz_init(num[i]); mpz_init(den[i]); mpz_init(pnum[i]); mpz_init(pden[i]); mpz_init(cnum[i]); mpz_init(cden[i]); }
+
+	/* Witness primes: solved like any other image but never folded into
+	 * the CRT accumulator, so their residues remain independent evidence
+	 * against which a bounded reconstruction can be checked.  Drawn first
+	 * from the same descending sequence, hence disjoint from the CRT
+	 * primes. */
+	NWITNESS = 0;
+	for (w=0; w<S_NWITNESS; w++) WRES[w] = (zp_t*) malloc((size_t)nres*sizeof(zp_t));
+	for (w=0; w<S_NWITNESS; w++)
+	{
+		int fails = 0;
+		for (;;)
+		{
+			if (!next_prime_below(cand, primefloor, &WPRIME[w]))
+			{
+				fprintf(stderr,"Error: exhausted the primes of %d bits while drawing"
+				               " witnesses; raise -b\n", S_PRIMEBITS);
+				rc = 2; goto finish;
+			}
+			if (image(q, WPRIME[w], WRES[w], ctx) == 0) break;
+			if (++fails > 40) { rc = 1; goto finish; }
+		}
+	}
+	NWITNESS = S_NWITNESS;
+
+	{
+	int nprimes=0, unlucky=0, consec_fail=0, done=0;
+	int next_try=4, gstable=0, confirmed=0;
+	int batch = nthreads>1 ? nthreads : 1;
+	zp_t* plist = (zp_t*) malloc(batch*sizeof(zp_t));
+	zp_t* rbuf  = (zp_t*) malloc((size_t)batch*nres*sizeof(zp_t));
+	int*  ok    = (int*)  malloc(batch*sizeof(int));
+
+	while (!done && rc == 0)
+	{
+		int nb, bi;
+		/* draw a batch of distinct primes, descending */
+		for (nb=0; nb<batch; nb++)
+			if (!next_prime_below(cand, primefloor, &plist[nb]))
+			{
+				fprintf(stderr,
+				        "Error: exhausted the primes of %d bits after %d of them"
+				        " (%lu bits of modulus).\n"
+				        "The reconstruction needs a larger modulus than this prime size"
+				        " can supply; rerun with a larger -b\n"
+				        "(the default -b 61 supplies on the order of 1e18 bits and is"
+				        " never exhausted in practice).\n",
+				        S_PRIMEBITS, nprimes, (unsigned long)mpz_sizeinbase(M,2));
+				rc = 2; break;
+			}
+		if (rc) break;
+
+		/* the first batch runs sequentially: nck() memoizes lazily and is
+		 * not thread-safe until its cache is warm */
+#ifdef _OPENMP
+		#pragma omp parallel for num_threads(nthreads) schedule(dynamic,1) if(batch>1 && nprimes>0)
+#endif
+		for (bi=0; bi<batch; bi++)
+			ok[bi] = (image(q, plist[bi], rbuf + (size_t)bi*nres, ctx) == 0);
+
+		for (bi=0; bi<batch && !done; bi++)
+		{
+			if (!ok[bi]) { unlucky++; consec_fail++;
+				if (consec_fail > 40) { rc = 1; break; }
+				continue;
+			}
+			consec_fail = 0;
+			nprimes++;
+			for (i=0;i<nres;i++) zp_crt_step(acc[i], M, rbuf[(size_t)bi*nres+i], plist[bi]);
+			mpz_set_ui(pz, (unsigned long) plist[bi]);
+			if (mpz_sgn(M)==0) mpz_set(M, pz); else mpz_mul(M, M, pz);
+
+			/* Reconstruction is O(d^2) in the size of the modulus, so
+			 * attempting it after every prime would dominate the run.  Use
+			 * a geometric schedule and probe G alone; only once G has
+			 * settled is the full set reconstructed, and it must then
+			 * reproduce itself at a later prime count to be accepted. */
+			if (nprimes < next_try) continue;
+			next_try = (int)(nprimes * 1.12) + 1;
+
+			if (!reconstruct(num[0], den[0], acc[0], M, 0)) { gstable = 0; continue; }
+			if (mpz_cmp(num[0],pnum[0])==0 && mpz_cmp(den[0],pden[0])==0) gstable++;
+			else { gstable = 0; mpz_set(pnum[0],num[0]); mpz_set(pden[0],den[0]); }
+			if (gstable < STABLE_ROUNDS) continue;
+
+			{
+				int allok = 1, same = 1;
+				for (i=0;i<nres;i++)
+				{
+					if (!reconstruct(num[i], den[i], acc[i], M, i)) { allok = 0; break; }
+					if (mpz_cmp(num[i],cnum[i])!=0 || mpz_cmp(den[i],cden[i])!=0) same = 0;
+				}
+				if (!allok) { gstable = 0; confirmed = 0; continue; }
+				if (confirmed && same) { done = 1; break; }
+				for (i=0;i<nres;i++) { mpz_set(cnum[i],num[i]); mpz_set(cden[i],den[i]); }
+				confirmed = 1;
+			}
+		}
+	}
+	S_TOTPRIMES += nprimes; S_TOTUNLUCKY += unlucky;
+	if (done)
+	{
+		S_MODBITS = (unsigned long) mpz_sizeinbase(M,2);
+		for (i=0;i<nres;i++)
+		{
+			mpz_set(mpq_numref(out[i]), num[i]);
+			mpz_set(mpq_denref(out[i]), den[i]);
+			mpq_canonicalize(out[i]);
+		}
+	}
+	free(plist); free(rbuf); free(ok);
+	}
+
+finish:
+	for (w=0; w<S_NWITNESS; w++) free(WRES[w]);
+	NWITNESS = 0;
+	for (i=0;i<nres;i++) { mpz_clear(acc[i]); mpz_clear(num[i]); mpz_clear(den[i]); mpz_clear(pnum[i]); mpz_clear(pden[i]); mpz_clear(cnum[i]); mpz_clear(cden[i]); }
+	free(acc); free(num); free(den); free(pnum); free(pden); free(cnum); free(cden);
+	mpz_clear(M); mpz_clear(pz); mpz_clear(cand);
+	return rc;
+}
+
+/* ---- derived models ---- */
+static qnmodel* qn_new(int R, int M)
+{
+	int r, k;
+	qnmodel* q = (qnmodel*) calloc(1, sizeof(qnmodel));
+	q->R = R; q->M = M;
+	q->N  = (int*) calloc(R, sizeof(int));
+	q->mi = (int*) calloc(M, sizeof(int));
+	q->Z  = (mpz_t*) malloc(R*sizeof(mpz_t));
+	for (r=0;r<R;r++) mpz_init(q->Z[r]);
+	q->L  = (mpz_t**) malloc(M*sizeof(mpz_t*));
+	for (k=0;k<M;k++) { q->L[k] = (mpz_t*) malloc(R*sizeof(mpz_t)); for (r=0;r<R;r++) mpz_init(q->L[k][r]); }
+	return q;
+}
+
+static void qn_del(qnmodel* q)
+{
+	int r, k;
+	if (!q) return;
+	for (k=0;k<q->M;k++) { for (r=0;r<q->R;r++) mpz_clear(q->L[k][r]); free(q->L[k]); }
+	for (r=0;r<q->R;r++) mpz_clear(q->Z[r]);
+	free(q->L); free(q->Z); free(q->N); free(q->mi); free(q);
+}
+
+static void qn_fix_nt(qnmodel* q) { int r; q->Nt = 0; for (r=0;r<q->R;r++) q->Nt += q->N[r]; }
+
+static mpq_t* mpq_arr(int n) { int i; mpq_t* a = (mpq_t*) malloc(n*sizeof(mpq_t)); for (i=0;i<n;i++) mpq_init(a[i]); return a; }
+static void mpq_arr_free(mpq_t* a, int n) { int i; if (!a) return; for (i=0;i<n;i++) mpq_clear(a[i]); free(a); }
+
+/* index of G^{+k}(N-1_r) in the exported vector (k, r 0-based) */
+#define IDX_GK(R,k,r) (1 + (R) + (k)*(R) + (r))
+
+/* lexicographic next permutation; 0 when the last one was reached */
+static int next_perm(int* a, int n)
+{
+	int i = n-2, j, t;
+	while (i >= 0 && a[i] >= a[i+1]) i--;
+	if (i < 0) return 0;
+	j = n-1; while (a[j] <= a[i]) j--;
+	t = a[i]; a[i] = a[j]; a[j] = t;
+	for (i++, j=n-1; i<j; i++, j--) { t = a[i]; a[i] = a[j]; a[j] = t; }
+	return 1;
+}
+
+#define MAX_CLASS_ORDERS 24
+
+/* Tiers 1-2: the model as given, then other class orders. */
+static int solve_order(qnmodel* q, mpq_t* out, int* reordered)
+{
+	int R = q->R, M = q->M, nres = NRES(q), i, j, k, tries = 1, rc;
+	*reordered = 0;
+	rc = crt_solve(q, img_direct, NULL, 0, out);
+	if (rc != 1 || R < 2) return rc;
+	int* perm = (int*) malloc(R*sizeof(int));
+	for (i=0;i<R;i++) perm[i] = i;
+	while (rc == 1 && tries < MAX_CLASS_ORDERS && next_perm(perm, R))
+	{
+		tries++;
+		qnmodel* p = qn_new(R, M);
+		for (j=0;j<R;j++) {               /* position j holds class perm[j] */
+			p->N[j] = q->N[perm[j]];
+			mpz_set(p->Z[j], q->Z[perm[j]]);
+			for (k=0;k<M;k++) mpz_set(p->L[k][j], q->L[k][perm[j]]);
+		}
+		for (k=0;k<M;k++) p->mi[k] = q->mi[k];
+		qn_fix_nt(p);
+		mpq_t* o = mpq_arr(nres);
+		rc = crt_solve(p, img_direct, NULL, 0, o);
+		if (rc == 0) {
+			mpq_set(out[0], o[0]);
+			for (j=0;j<R;j++) {
+				mpq_set(out[1+perm[j]], o[1+j]);
+				for (k=0;k<M;k++) mpq_set(out[IDX_GK(R,k,perm[j])], o[IDX_GK(R,k,j)]);
+			}
+			*reordered = 1;
+		}
+		mpq_arr_free(o, nres);
+		qn_del(p);
+	}
+	free(perm);
+	return rc;
+}
+
+/* Fold stations with identical demand rows.  A station of multiplicity m
+ * is m identical queues, so the folded station has the summed
+ * multiplicity; G and G(N-1_r) are unchanged, and an extra replica of any
+ * member station is an extra replica of the folded one, so
+ * G^{+k}(N-1_r) = G'^{+g(k)}(N-1_r).  Returns NULL if nothing folds. */
+static qnmodel* merge_stations(qnmodel* q, int* grp)
+{
+	int M = q->M, R = q->R, k, h, r, nm = 0;
+	int* rep = (int*) malloc(M*sizeof(int));
+	for (k=0;k<M;k++)
+	{
+		grp[k] = -1;
+		for (h=0;h<nm && grp[k]<0;h++)
+		{
+			for (r=0;r<R;r++) if (mpz_cmp(q->L[k][r], q->L[rep[h]][r]) != 0) break;
+			if (r == R) grp[k] = h;
+		}
+		if (grp[k] < 0) { rep[nm] = k; grp[k] = nm++; }
+	}
+	if (nm == M) { free(rep); return NULL; }
+	qnmodel* m = qn_new(R, nm);
+	for (r=0;r<R;r++) { m->N[r] = q->N[r]; mpz_set(m->Z[r], q->Z[r]); }
+	for (h=0;h<nm;h++) for (r=0;r<R;r++) mpz_set(m->L[h][r], q->L[rep[h]][r]);
+	for (k=0;k<M;k++) m->mi[grp[k]] += q->mi[k];
+	qn_fix_nt(m);
+	free(rep);
+	return m;
+}
+
+/* c with L_kr = c L_ks at every station and Z_r = c Z_s; 0 if none. */
+static int class_scale(qnmodel* q, int s, int r, mpq_t c)
+{
+	int k, have = 0;
+	mpq_t t; mpq_init(t);
+	for (k=0;k<=q->M;k++)
+	{
+		mpz_srcptr a = (k < q->M) ? q->L[k][s] : q->Z[s];
+		mpz_srcptr b = (k < q->M) ? q->L[k][r] : q->Z[r];
+		if (mpz_sgn(a) == 0 && mpz_sgn(b) == 0) continue;
+		if (mpz_sgn(a) == 0 || mpz_sgn(b) == 0) { have = 0; break; }
+		mpz_set(mpq_numref(t), b); mpz_set(mpq_denref(t), a); mpq_canonicalize(t);
+		if (!have) { mpq_set(c, t); have = 1; }
+		else if (!mpq_equal(c, t)) { have = 0; break; }
+	}
+	mpq_clear(t);
+	return have;
+}
+
+/* Aggregate classes with proportional demands and think times.  With the
+ * 1/n! convention the generating function of G,
+ *   exp(sum_r Z_r x_r) prod_k (1 - sum_r L_kr x_r)^(-m_k),
+ * depends on such a group only through x_s + sum_i c_i x_i, so
+ *   G(N) = G'(n) F(N),  F(N) = prod_groups (sum N_i)!/prod N_i! prod c_i^{N_i},
+ * and likewise G(N-1_i) = G'(n-1_g) F(N-1_i) and G^{+k}(N-1_i) =
+ * G'^{+k}(n-1_g) F(N-1_i), where ' is the model with each group replaced
+ * by its first class at the summed population.  Returns NULL if nothing
+ * aggregates; otherwise grp[i] is the merged class of i and c[i] its
+ * scale factor. */
+static qnmodel* merge_classes(qnmodel* q, int* grp, mpq_t* c)
+{
+	int R = q->R, M = q->M, s, r, k, ng = 0;
+	int* rep = (int*) malloc(R*sizeof(int));
+	for (r=0;r<R;r++) grp[r] = -1;
+	for (s=0;s<R;s++)
+	{
+		if (grp[s] >= 0) continue;
+		rep[ng] = s; grp[s] = ng; mpq_set_ui(c[s], 1, 1);
+		for (r=s+1;r<R;r++)
+			if (grp[r] < 0 && class_scale(q, s, r, c[r])) grp[r] = ng;
+		ng++;
+	}
+	if (ng == R) { free(rep); return NULL; }
+	qnmodel* m = qn_new(ng, M);
+	for (s=0;s<ng;s++) {
+		mpz_set(m->Z[s], q->Z[rep[s]]);
+		for (k=0;k<M;k++) mpz_set(m->L[k][s], q->L[k][rep[s]]);
+	}
+	for (r=0;r<R;r++) m->N[grp[r]] += q->N[r];
+	for (k=0;k<M;k++) m->mi[k] = q->mi[k];
+	qn_fix_nt(m);
+	free(rep);
+	return m;
+}
+
+/* F(Nv) of merge_classes, for the group structure grp/c over R classes */
+static void class_factor(mpq_t F, int* Nv, int R, int ng, int* grp, mpq_t* c)
+{
+	int g, i;
+	mpz_t f; mpz_init(f);
+	mpq_t t; mpq_init(t);
+	mpq_set_ui(F, 1, 1);
+	for (g=0; g<ng; g++)
+	{
+		unsigned long n = 0;
+		for (i=0;i<R;i++) if (grp[i] == g) n += Nv[i];
+		mpz_fac_ui(f, n); mpq_set_z(t, f); mpq_mul(F, F, t);
+		for (i=0;i<R;i++) if (grp[i] == g)
+		{
+			mpz_fac_ui(f, Nv[i]); mpq_set_z(t, f); mpq_div(F, F, t);
+			mpz_pow_ui(mpq_numref(t), mpq_numref(c[i]), Nv[i]);
+			mpz_pow_ui(mpq_denref(t), mpq_denref(c[i]), Nv[i]);
+			mpq_canonicalize(t);
+			mpq_mul(F, F, t);
+		}
+	}
+	mpz_clear(f); mpq_clear(t);
+}
+
+/* Tiers 1-3.  tier receives a short description of the route taken. */
+static int solve_reduce(qnmodel* q, mpq_t* out, char* tier, size_t tsz)
+{
+	int R = q->R, M = q->M, rc, reordered, i, k;
+	rc = solve_order(q, out, &reordered);
+	if (rc == 0) { if (reordered) snprintf(tier, tsz, "class order"); return 0; }
+	if (rc != 1) return rc;
+
+	/* identical stations */
+	{
+		int* grp = (int*) malloc(M*sizeof(int));
+		qnmodel* ms = merge_stations(q, grp);
+		if (ms)
+		{
+			int nres2 = NRES(ms);
+			mpq_t* o = mpq_arr(nres2);
+			char sub[96] = "";
+			rc = solve_reduce(ms, o, sub, sizeof sub);
+			if (rc == 0)
+			{
+				mpq_set(out[0], o[0]);
+				for (i=0;i<R;i++) mpq_set(out[1+i], o[1+i]);
+				for (k=0;k<M;k++) for (i=0;i<R;i++) mpq_set(out[IDX_GK(R,k,i)], o[IDX_GK(R,grp[k],i)]);
+				snprintf(tier, tsz, "merged stations (M=%d->%d)%s%s", M, ms->M, sub[0] ? ", " : "", sub);
+			}
+			mpq_arr_free(o, nres2);
+			qn_del(ms);
+			if (rc != 1) { free(grp); return rc; }
+		}
+		free(grp);
+	}
+
+	/* proportional classes */
+	{
+		int* grp = (int*) malloc(R*sizeof(int));
+		mpq_t* c = mpq_arr(R);
+		qnmodel* mc = merge_classes(q, grp, c);
+		if (mc)
+		{
+			int ng = mc->R, nres2 = NRES(mc);
+			mpq_t* o = mpq_arr(nres2);
+			char sub[96] = "";
+			rc = solve_reduce(mc, o, sub, sizeof sub);
+			if (rc == 0)
+			{
+				int* Nv = (int*) malloc(R*sizeof(int));
+				mpq_t F; mpq_init(F);
+				for (i=0;i<R;i++) Nv[i] = q->N[i];
+				class_factor(F, Nv, R, ng, grp, c);
+				mpq_mul(out[0], o[0], F);
+				for (i=0;i<R;i++)
+				{
+					if (q->N[i] == 0) {
+						mpq_set_ui(out[1+i], 0, 1);
+						for (k=0;k<M;k++) mpq_set_ui(out[IDX_GK(R,k,i)], 0, 1);
+						continue;
+					}
+					Nv[i]--;
+					class_factor(F, Nv, R, ng, grp, c);
+					Nv[i]++;
+					mpq_mul(out[1+i], o[1+grp[i]], F);
+					for (k=0;k<M;k++) mpq_mul(out[IDX_GK(R,k,i)], o[IDX_GK(ng,k,grp[i])], F);
+				}
+				mpq_clear(F); free(Nv);
+				snprintf(tier, tsz, "merged classes (R=%d->%d)%s%s", R, ng, sub[0] ? ", " : "", sub);
+			}
+			mpq_arr_free(o, nres2);
+			qn_del(mc);
+		}
+		mpq_arr_free(c, R); free(grp);
+	}
+	return rc;
+}
+
+/* ---- tier 4: exact limit of a perturbation ----
+ * Every exported constant is a homogeneous polynomial in (L, Z) jointly,
+ * of degree at most Ntot, so along (L, Z) + t (DL, DZ) it is a polynomial
+ * g(t) of degree <= Ntot whose value at t=0 is the constant of the
+ * original model.  Both L and Z must move: with Z=0 the system can stay
+ * singular for every demand matrix.  For a generic direction the system
+ * is singular at finitely many t only, so each prime solves the perturbed
+ * model at t=1,2,..., skips the t that fail, and evaluates the Lagrange
+ * interpolant through Ntot+1 points at t=0 in Z/p.  The CRT then
+ * reconstructs g(0) exactly.  The direction is drawn from 1..1e6: small
+ * integers create coincidences (equal demands) that are themselves MoM
+ * degeneracies. */
+typedef struct { int D, T; qnmodel** qt; } interp_ctx;
+
+static zp_t mulm(zp_t a, zp_t b, zp_t p) { return (zp_t)(((__uint128_t)a * b) % p); }
+static zp_t powm(zp_t a, zp_t e, zp_t p) { zp_t r = 1; while (e) { if (e & 1) r = mulm(r, a, p); a = mulm(a, a, p); e >>= 1; } return r; }
+
+static int img_interp(qnmodel* q, zp_t p, zp_t* res, void* vctx)
+{
+	interp_ctx* c = (interp_ctx*) vctx;
+	int nres = NRES(q), D = c->D, got = 0, t, i, j, u;
+	zp_t* buf = (zp_t*) malloc((size_t)(D+1)*nres*sizeof(zp_t));
+	int* ts = (int*) malloc((D+1)*sizeof(int));
+	for (t=1; t<=c->T && got<D+1; t++)
+		if (solve_mod(c->qt[t-1], p, buf + (size_t)got*nres) == 0) ts[got++] = t;
+	if (got < D+1) { free(buf); free(ts); return -1; }
+	for (u=0;u<nres;u++) res[u] = 0;
+	for (i=0;i<=D;i++)
+	{
+		zp_t numw = 1, denw = 1;
+		for (j=0;j<=D;j++) if (j != i)
+		{
+			numw = mulm(numw, p - (zp_t)ts[j], p);                         /* (0 - t_j) */
+			denw = mulm(denw, ((zp_t)ts[i] + p - (zp_t)ts[j]) % p, p);     /* (t_i - t_j) */
+		}
+		zp_t wgt = mulm(numw, powm(denw, p-2, p), p);
+		for (u=0;u<nres;u++) res[u] = (res[u] + mulm(wgt, buf[(size_t)i*nres+u], p)) % p;
+	}
+	free(buf); free(ts);
+	return 0;
+}
+
+static int solve_interp(qnmodel* q, mpq_t* out)
+{
+	int R = q->R, M = q->M, r, k, t, rc;
+	interp_ctx c;
+	unsigned long long seed = 0x9E3779B97F4A7C15ULL;
+	mpz_t *dz = (mpz_t*) malloc(R*sizeof(mpz_t)), **dl = (mpz_t**) malloc(M*sizeof(mpz_t*));
+#define NEXTRAND() (seed = seed*6364136223846793005ULL + 1442695040888963407ULL, 1 + (unsigned long)((seed >> 33) % 1000000))
+	for (k=0;k<M;k++) { dl[k] = (mpz_t*) malloc(R*sizeof(mpz_t)); for (r=0;r<R;r++) mpz_init_set_ui(dl[k][r], NEXTRAND()); }
+	for (r=0;r<R;r++) mpz_init_set_ui(dz[r], NEXTRAND());
+#undef NEXTRAND
+	c.D = 0; for (r=0;r<R;r++) c.D += q->N[r];
+	c.T = 4*(c.D+1) + 8;
+	c.qt = (qnmodel**) malloc(c.T*sizeof(qnmodel*));
+	for (t=1;t<=c.T;t++)
+	{
+		qnmodel* m = qn_new(R, M);
+		for (r=0;r<R;r++) { m->N[r] = q->N[r]; mpz_set(m->Z[r], dz[r]); mpz_mul_ui(m->Z[r], m->Z[r], t); mpz_add(m->Z[r], m->Z[r], q->Z[r]); }
+		for (k=0;k<M;k++) { m->mi[k] = q->mi[k];
+			for (r=0;r<R;r++) { mpz_set(m->L[k][r], dl[k][r]); mpz_mul_ui(m->L[k][r], m->L[k][r], t); mpz_add(m->L[k][r], m->L[k][r], q->L[k][r]); } }
+		qn_fix_nt(m);
+		c.qt[t-1] = m;
+	}
+	rc = crt_solve(q, img_interp, &c, (unsigned long)c.T + 1, out);
+	for (t=0;t<c.T;t++) qn_del(c.qt[t]);
+	free(c.qt);
+	for (k=0;k<M;k++) { for (r=0;r<R;r++) mpz_clear(dl[k][r]); free(dl[k]); }
+	for (r=0;r<R;r++) mpz_clear(dz[r]);
+	free(dl); free(dz);
+	return rc;
+}
+
+/* All tiers.  Returns 0 and the exact exported constants of q in out[],
+ * or 1 if every tier failed, or 2 on a hard error already reported. */
+static int solve_tiered(qnmodel* q, mpq_t* out, char* tier, size_t tsz)
+{
+	int rc;
+	snprintf(tier, tsz, "direct");
+	rc = solve_reduce(q, out, tier, tsz);
+	if (rc != 1) return rc;
+	rc = solve_interp(q, out);
+	if (rc == 0) {
+		int r, D = 0;
+		for (r=0;r<q->R;r++) D += q->N[r];
+		snprintf(tier, tsz, "interpolation (%d+1 perturbed solves per prime)", D);
+	}
+	return rc;
+}
+
 static void usage(const char* prog)
 {
 	printf("USAGE: %s [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen]\n", prog);
@@ -428,7 +969,6 @@ int main(int argc, char**argv)
 {
 	int i, r, k, nres, nthreads = 1, primebits = 61;
 	int nwitness = 0, denbits = 64;
-	unsigned long primefloor = 3;
 	bool log_output=false, normconst_output=false, normconst_g_output=false;
 	bool throughput_output=false, queue_output=false;
 	char* model_file=NULL;
@@ -471,149 +1011,37 @@ int main(int argc, char**argv)
 	if (nwitness > 4) nwitness = 4;
 	if (!USE_BOUNDED) nwitness = 0;
 
-	/* Warm the shared nchoosek cache with a single sequential image before
-	 * any concurrency: nck() memoizes lazily and is not otherwise
-	 * thread-safe, but is read-only once populated. */
+	S_NTHREADS = nthreads; S_PRIMEBITS = primebits; S_NWITNESS = nwitness;
 
-	mpz_t M, *acc, *num, *den, *pnum, *pden, pz;
-	mpz_t *cnum, *cden;
-	acc  = (mpz_t*) malloc(nres*sizeof(mpz_t));
-	cnum = (mpz_t*) malloc(nres*sizeof(mpz_t));
-	cden = (mpz_t*) malloc(nres*sizeof(mpz_t));
-	num  = (mpz_t*) malloc(nres*sizeof(mpz_t));
-	den  = (mpz_t*) malloc(nres*sizeof(mpz_t));
-	pnum = (mpz_t*) malloc(nres*sizeof(mpz_t));
-	pden = (mpz_t*) malloc(nres*sizeof(mpz_t));
-	/* per-value stability tracking is folded into the probe on G */
-	mpz_init_set_ui(M,0); mpz_init(pz);
-	for (i=0;i<nres;i++) { mpz_init(acc[i]); mpz_init(num[i]); mpz_init(den[i]); mpz_init(pnum[i]); mpz_init(pden[i]); mpz_init(cnum[i]); mpz_init(cden[i]); }
-
-	/* Primes are drawn downwards from 2^primebits so that they are
-	 * distinct and comfortably larger than any N_r. */
-	mpz_t cand; mpz_init(cand);
-	mpz_ui_pow_ui(cand, 2, (unsigned long)primebits);
-	/* Lowest usable modulus.  A prime must exceed every class population,
-	 * otherwise the division by n_r in the recursion is not invertible and
-	 * the image is discarded as unlucky; and it must be odd, because the
-	 * Montgomery reduction inverts p modulo 2^64. */
-	{
-		int maxN = 0;
-		for (i=0;i<qnm->R;i++) if (qnm->N[i] > maxN) maxN = qnm->N[i];
-		primefloor = (unsigned long)(maxN > 2 ? maxN + 1 : 3);
-		if (mpz_cmp_ui(cand, primefloor) <= 0)
-		{
-			fprintf(stderr,"Error: -b %d gives no prime above the largest class population %d;"
-			               " raise -b\n", primebits, maxN);
-			return 1;
-		}
-	}
-
-	/* Witness primes: solved like any other image but never folded into
-	 * the CRT accumulator, so their residues remain independent evidence
-	 * against which a bounded reconstruction can be checked.  Drawn first
-	 * from the same descending sequence, hence disjoint from the CRT
-	 * primes. */
-	{
-		int w;
-		for (w=0; w<nwitness; w++)
-		{
-			WRES[w] = (zp_t*) malloc((size_t)nres*sizeof(zp_t));
-			for (;;)
-			{
-				if (!next_prime_below(cand, primefloor, &WPRIME[w]))
-				{
-					fprintf(stderr,"Error: exhausted the primes of %d bits while drawing"
-					               " witnesses; raise -b\n", primebits);
-					return 1;
-				}
-				if (solve_mod(qnm, WPRIME[w], WRES[w]) == 0) break;
-			}
-		}
-		NWITNESS = nwitness;
-	}
-
-	int nprimes=0, unlucky=0, consec_fail=0, done=0;
-	int next_try=4, gstable=0, confirmed=0;
-	int batch = nthreads>1 ? nthreads : 1;
-	zp_t* plist = (zp_t*) malloc(batch*sizeof(zp_t));
-	zp_t* rbuf  = (zp_t*) malloc((size_t)batch*nres*sizeof(zp_t));
-	int*  ok    = (int*)  malloc(batch*sizeof(int));
-
+	mpz_t *num = (mpz_t*) malloc(nres*sizeof(mpz_t));
+	mpz_t *den = (mpz_t*) malloc(nres*sizeof(mpz_t));
+	mpq_t *exact = mpq_arr(nres);
+	char tier[256];
 	double tstart = CPUTIME;
-
-	while (!done)
+	int rc = solve_tiered(qnm, exact, tier, sizeof tier);
+	if (rc == 1)
 	{
-		int nb, bi;
-		/* draw a batch of distinct primes, descending */
-		for (nb=0; nb<batch; nb++)
-			if (!next_prime_below(cand, primefloor, &plist[nb]))
-			{
-				fprintf(stderr,
-				        "Error: exhausted the primes of %d bits after %d of them"
-				        " (%lu bits of modulus).\n"
-				        "The reconstruction needs a larger modulus than this prime size"
-				        " can supply; rerun with a larger -b\n"
-				        "(the default -b 61 supplies on the order of 1e18 bits and is"
-				        " never exhausted in practice).\n",
-				        primebits, nprimes, (unsigned long)mpz_sizeinbase(M,2));
-				return 1;
-			}
-
-#ifdef _OPENMP
-		#pragma omp parallel for num_threads(nthreads) schedule(dynamic,1) if(batch>1 && nprimes>0)
-#endif
-		for (bi=0; bi<batch; bi++)
-			ok[bi] = (solve_mod(qnm, plist[bi], rbuf + (size_t)bi*nres) == 0);
-
-		for (bi=0; bi<batch && !done; bi++)
-		{
-			if (!ok[bi]) { unlucky++; consec_fail++;
-				if (consec_fail > 40) {
-					fprintf(stderr,"Error: the linear system is singular modulo %d consecutive primes;\n"
-					               "the coefficient matrix is singular over the rationals.\n", consec_fail);
-					return 1;
-				}
-				continue;
-			}
-			consec_fail = 0;
-			nprimes++;
-			for (i=0;i<nres;i++) zp_crt_step(acc[i], M, rbuf[(size_t)bi*nres+i], plist[bi]);
-			mpz_set_ui(pz, (unsigned long) plist[bi]);
-			if (mpz_sgn(M)==0) mpz_set(M, pz); else mpz_mul(M, M, pz);
-
-			/* Reconstruction is O(d^2) in the size of the modulus, so
-			 * attempting it after every prime would dominate the run.  Use
-			 * a geometric schedule and probe G alone; only once G has
-			 * settled is the full set reconstructed, and it must then
-			 * reproduce itself at a later prime count to be accepted. */
-			if (nprimes < next_try) continue;
-			next_try = (int)(nprimes * 1.12) + 1;
-
-			if (!reconstruct(num[0], den[0], acc[0], M, 0)) { gstable = 0; continue; }
-			if (mpz_cmp(num[0],pnum[0])==0 && mpz_cmp(den[0],pden[0])==0) gstable++;
-			else { gstable = 0; mpz_set(pnum[0],num[0]); mpz_set(pden[0],den[0]); }
-			if (gstable < STABLE_ROUNDS) continue;
-
-			{
-				int allok = 1, same = 1;
-				for (i=0;i<nres;i++)
-				{
-					if (!reconstruct(num[i], den[i], acc[i], M, i)) { allok = 0; break; }
-					if (mpz_cmp(num[i],cnum[i])!=0 || mpz_cmp(den[i],cden[i])!=0) same = 0;
-				}
-				if (!allok) { gstable = 0; confirmed = 0; continue; }
-				if (confirmed && same) { done = 1; break; }
-				for (i=0;i<nres;i++) { mpz_set(cnum[i],num[i]); mpz_set(cden[i],den[i]); }
-				confirmed = 1;
-			}
-		}
+		fprintf(stderr,"Error: the MoM system is singular for this model, and every exact fallback\n"
+		               "failed (other class orders, merged stations or classes, interpolation).\n"
+		               "The normalizing constant may be zero or undefined; bin/ca solves any\n"
+		               "well-posed model by convolution.\n");
+		return 1;
 	}
+	if (rc != 0) return 1;
+	for (i=0;i<nres;i++)
+	{
+		mpz_init_set(num[i], mpq_numref(exact[i]));
+		mpz_init_set(den[i], mpq_denref(exact[i]));
+	}
+	mpq_arr_free(exact, nres);
 
 	double telapsed = CPUTIME - tstart;
 	if (VERBOSE_MOD)
-		fprintf(stderr,"mommod: %d primes of %d bits (%d unlucky discarded), modulus %lu bits, %.6f s, %d thread(s)%s\n",
-		        nprimes, primebits, unlucky, (unsigned long)mpz_sizeinbase(M,2), telapsed, nthreads,
-		        USE_BOUNDED ? " [bounded reconstruction, witness-verified]" : "");
+		fprintf(stderr,"mommod: %ld primes of %d bits (%ld unlucky discarded), modulus %lu bits, %.6f s, %d thread(s)%s; route: %s\n",
+		        S_TOTPRIMES, primebits, S_TOTUNLUCKY, S_MODBITS, telapsed, nthreads,
+		        USE_BOUNDED ? " [bounded reconstruction, witness-verified]" : "", tier);
+	else if (strcmp(tier, "direct") != 0)
+		fprintf(stderr,"mommod: singular MoM system, solved exactly via %s\n", tier);
 
 	/* ---- report, in the same formats as bin/mom ---- */
 	if (log_output)
@@ -663,8 +1091,9 @@ int main(int argc, char**argv)
 			printf("\t(total: %.15e)\n", tot);
 		}
 		printf("=========================================\n");
-		printf("Primes: %d of %d bits (%d unlucky), modulus %lu bits, %d thread(s)\n",
-		       nprimes, primebits, unlucky, (unsigned long)mpz_sizeinbase(M,2), nthreads);
+		printf("Primes: %ld of %d bits (%ld unlucky), modulus %lu bits, %d thread(s)\n",
+		       S_TOTPRIMES, primebits, S_TOTUNLUCKY, S_MODBITS, nthreads);
+		if (strcmp(tier, "direct") != 0) printf("Singular MoM system, solved exactly via %s\n", tier);
 		t1 = CPUTIME;
 		printf("Elapsed time (MoM-mod): %.6f s\n", t1-t0);
 	}
