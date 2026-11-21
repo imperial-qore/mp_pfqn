@@ -1,6 +1,7 @@
 #include "fpla.h"
 
 mpfr_prec_t FP_WPREC = 53;
+int FP_PIVTOL_BITS = 0;
 mpfr_prec_t FP_RPREC = 106;
 
 void fp_set_si(fp_t x, long num, long den)
@@ -248,6 +249,17 @@ int* fp_ludcmp(fp_mat_t A, int N)
 			fp_set(vv[imax-1], vv[j-1]);
 		}
 		indx[j-1]=imax;
+		/* Optional rank threshold: max is the pivot relative to the
+		 * largest entry of its row; below 2^-FP_PIVTOL_BITS the block is
+		 * treated as singular instead of being inverted through a pivot
+		 * that is mostly rounding error. */
+		if (FP_PIVTOL_BITS > 0 && mpfr_cmp_ui_2exp(max, 1, -FP_PIVTOL_BITS) < 0)
+		{
+			for (i=0;i<N+1;i++) mpfr_clear(vv[i]);
+			free(vv); free(indx);
+			mpfr_clear(max); mpfr_clear(sum); mpfr_clear(t); mpfr_clear(w);
+			return NULL;
+		}
 		if (j != N)
 		{
 			fp_set_d(t,1.0);

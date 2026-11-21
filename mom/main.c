@@ -7,6 +7,7 @@
 #include <gmpla.h>
 #include "mom.h"
 #include "lvtab.h"
+#include "singular.h"
 
 /* Define global variables from profiling.h */
 int AORSCTR;
@@ -22,6 +23,7 @@ struct rusage ruse;
 qnmodel* qnm;
 bool INTERACTIVE,RANDGEN,CANON,ZSCALE,DEBUG,VERBOSE;
 bool USE_LINBOX;
+mpq_t* MOM_CAPTURE = NULL;
 
 
 void printcompact(int*n,int R, double elapsed_time)
@@ -347,6 +349,38 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 	return 0; // Success
 }
 
+/* Exact solve of a derived model for the tiered fallback (util/singular.h):
+ * the constants are captured in out[] instead of printed.  0 on success,
+ * 1 if the MoM system of q is singular. */
+static int sg_direct(qnmodel* q, mpq_t* out, void* ctx)
+{
+	mpz_t one; int rc;
+	(void)ctx;
+	mpz_init_set_ui(one, 1);
+	MOM_CAPTURE = out;
+	rc = solve_model(q, 0, NULL, false, false, false, false, false, true, false, false,
+	                 0, 0, false, one, NULL, NULL);
+	MOM_CAPTURE = NULL;
+	mpz_clear(one);
+	return rc == 0 ? 0 : 1;
+}
+
+/* Print the reconstructed constants through perfindices, in the layout it
+ * expects: G = [G(N), G(N-1_1..R)], Gk[k] = [G^{+k}(N), G^{+k}(N-1_1..R)]
+ * (G^{+k}(N) is not read). */
+static void report_exact(qnmodel* q, mpq_t* ex, bool verbose_output, bool log_output,
+                         bool normconst_output, bool normconst_g_output, bool throughput_output,
+                         bool queue_output, bool debug_output, mpz_t scale_factor)
+{
+	int R = q->R, M = q->M, i, k;
+	mpq_vec_t G0 = (mpq_vec_t)mpq_vec(R+1,0,1);
+	mpq_vec_t G1 = (mpq_vec_t)mpq_vec(M*(R+1),0,1);
+	for (i=0;i<=R;i++) mpq_set(G0[i], ex[i]);
+	for (k=0;k<M;k++) for (i=0;i<R;i++) mpq_set(G1[k*(R+1)+1+i], ex[SG_IDX_GK(R,k,i)]);
+	perfindices(q,G0,G1,verbose_output,log_output,normconst_output,normconst_g_output,throughput_output,queue_output,debug_output,false,scale_factor);
+	lv_free(G0,R+1); lv_free(G1,M*(R+1));
+}
+
 int main(int argc, char**argv)
 {
 	t0=CPUTIME;
@@ -524,74 +558,29 @@ int main(int argc, char**argv)
 
 	// If singular and no perturbation yet, apply automatic perturbation
 	if (result == -1 && !auto_perturbation && perturbation_digit == 0) {
-		// If exact normalizing constant was requested, don't auto-perturb
-		// since the perturbed result won't match the exact answer
-		if (normconst_output) {
-			fprintf(stderr, "\nError: Model cannot be solved exactly by the MoM solver.\n");
-			fprintf(stderr, "The system of equations is singular. No exact normalizing constant available.\n");
+		/* Singular MoM system: solve it exactly through other class
+		 * orders, merged stations or classes, or interpolation of the
+		 * exact limit of a perturbation (util/singular.h).  This replaces
+		 * the earlier automatic perturbation at digit 20, which gave an
+		 * approximation and no exact G. */
+		bool report = !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output;
+		int nres = SG_NRES(qnm);
+		mpq_t* exact = sg_mpq_arr(nres);
+		char tier[256];
+		sg_ops ops = { sg_direct, NULL, NULL, NULL };
+		int rc = sg_solve_tiered(qnm, exact, tier, sizeof tier, &ops, 1);
+		if (rc != 0) {
+			fprintf(stderr, "\nError: the MoM system is singular for this model, and every exact fallback\n"
+			                "failed (other class orders, merged stations or classes, interpolation).\n"
+			                "The normalizing constant may be zero or undefined; bin/ca solves any\n"
+			                "well-posed model by convolution.  -p digit gives a perturbed approximation.\n");
 			return 1;
 		}
-		fprintf(stderr, "\nWarning: Model cannot be solved exactly by the MoM solver.\n");
-		fprintf(stderr, "The system of equations is singular. Automatically applying perturbation at digit 20.\n\n");
-		perturbation_digit = 20;
-		auto_perturbation = true;
-
-		// Store original parameters if not already stored
-		if (original_L == NULL) {
-			original_L = (mpz_t**)malloc(qnm->M * sizeof(mpz_t*));
-			for(int i = 0; i < qnm->M; i++) {
-				original_L[i] = (mpz_t*)malloc(qnm->R * sizeof(mpz_t));
-				for(int j = 0; j < qnm->R; j++) {
-					mpz_init(original_L[i][j]);
-					mpz_set(original_L[i][j], qnm->L[i][j]);
-				}
-			}
-			original_Z = (mpz_t*)malloc(qnm->R * sizeof(mpz_t));
-			for(int j = 0; j < qnm->R; j++) {
-				mpz_init(original_Z[j]);
-				mpz_set(original_Z[j], qnm->Z[j]);
-			}
-		}
-
-		// Apply perturbation
-		mpz_clear(scale_factor);
-		mpz_init(scale_factor);
-		mpz_set_ui(scale_factor, 1);  // Reset to 1 before applying perturbation
-		apply_perturbation_to_model(qnm, perturbation_digit, perturbation_seed, scale_factor);
-
-		// Print model with perturbation info
-		if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
-			printmodel_with_perturbation(qnm, perturbation_digit, scale_factor, perturbation_seed, original_L, original_Z);
-		}
-
-		// Retry with perturbation
-		result = solve_model(qnm, argc, argv, verbose_output, log_output,
-		                    normconst_output, normconst_g_output, throughput_output,
-		                    queue_output, debug_output, bounds_output,
-		                    perturbation_digit, perturbation_seed, auto_perturbation,
-		                    scale_factor, original_L, original_Z);
-		if (result == -1) {
-			fprintf(stderr, "\nError: Model is still singular even with automatic perturbation at digit 20.\n");
-			fprintf(stderr, "Please try running manually with a different perturbation digit.\n");
-			fprintf(stderr, "\nExample invocations:\n");
-			fprintf(stderr, "  %s %s -p 25     # Apply perturbation at 25th digit\n", argv[0], model_file);
-			fprintf(stderr, "  %s %s -p 30     # Apply perturbation at 30th digit\n", argv[0], model_file);
-			fprintf(stderr, "  %s %s -p 15 -s 12345  # Different perturbation at 15th digit with custom seed\n\n", argv[0], model_file);
-			return 1;
-		}
-
-		// After successful solve with automatic perturbation, restore original model parameters
-		// so that the output is computed relative to the original (unperturbed) model
-		if (auto_perturbation && original_L != NULL) {
-			for(int i = 0; i < qnm->M; i++) {
-				for(int j = 0; j < qnm->R; j++) {
-					mpz_set(qnm->L[i][j], original_L[i][j]);
-				}
-			}
-			for(int j = 0; j < qnm->R; j++) {
-				mpz_set(qnm->Z[j], original_Z[j]);
-			}
-		}
+		fprintf(stderr, "mom: singular MoM system, solved exactly via %s\n", tier);
+		if (report) printf("\nSingular MoM system, solved exactly via %s\n", tier);
+		report_exact(qnm, exact, verbose_output, log_output, normconst_output, normconst_g_output,
+		             throughput_output, queue_output, debug_output, scale_factor);
+		sg_mpq_arr_free(exact, nres);
 	} else if (result == -1) {
 		fprintf(stderr, "\nError: Model cannot be solved even with perturbation.\n");
 		return 1;

@@ -205,7 +205,7 @@ CoMoM supports the same command-line options as MoM (see table above). The Class
 ```
 **Notes**: 
 - The `-d`/`--exact` option is available in all solvers and prints performance metrics (throughputs, queue lengths, normalizing constants) in full exact precision as rational numbers (e.g., `1/3` instead of `0.333333`). This is useful for verification and when exact values are required.
-- The perturbation option (`-p`) is available in both the MoM and CoMoM solvers and is useful when the exact solution fails due to singular systems. It introduces small randomized numerical perturbations to enable approximate solutions. When perturbation is applied, model parameters are displayed as original integer values with separate perturbation annotations (e.g., `50 eps=1.0e-05`). The `-s` option allows you to specify a random seed for reproducible perturbations.
+- `mom`, `momf`, `mommod` and `comommod` solve models with a singular MoM/CoMoM system exactly, through other class orders, merged stations or classes, or interpolation of the exact limit of a perturbation (`util/singular.h`); the route is noted on stderr. The perturbation option (`-p`) remains available in the MoM and CoMoM solvers for an approximate solution. It introduces small randomized numerical perturbations to enable approximate solutions. When perturbation is applied, model parameters are displayed as original integer values with separate perturbation annotations (e.g., `50 eps=1.0e-05`). The `-s` option allows you to specify a random seed for reproducible perturbations.
 
 ## References
 

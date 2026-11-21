@@ -8,6 +8,7 @@
 #include <fpla.h>
 #include "momf.h"
 #include "lvtab.h"
+#include "singular.h"
 
 /* Define global variables from profiling.h */
 int AORSCTR;
@@ -22,6 +23,8 @@ struct rusage ruse;
 /* Define global variables from mom.h */
 qnmodel* qnm;
 bool INTERACTIVE,RANDGEN,CANON,ZSCALE,DEBUG,VERBOSE;
+mpq_t* MOM_CAPTURE = NULL;
+int MOM_CAPTURE_BAD = 0;
 
 /* Wilkinson/Moler refinement controls (declared in momf.h) */
 int    REFINE_ITERS  = 0;
@@ -389,6 +392,150 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 	return 0; // Success
 }
 
+/* Solve of a derived model for the tiered fallback (util/singular.h): the
+ * constants are captured in out[], converted exactly from the working
+ * precision, instead of printed.  0 on success, 1 if the MoM system of q
+ * is singular or the result is not finite. */
+static int sg_direct(qnmodel* q, mpq_t* out, void* ctx)
+{
+	mpz_t one; int rc;
+	(void)ctx;
+	mpz_init_set_ui(one, 1);
+	MOM_CAPTURE = out; MOM_CAPTURE_BAD = 0;
+	rc = solve_model(q, 0, NULL, false, false, false, false, false, true, false, false,
+	                 0, 0, false, one, NULL, NULL);
+	MOM_CAPTURE = NULL;
+	mpz_clear(one);
+	return (rc == 0 && !MOM_CAPTURE_BAD) ? 0 : 1;
+}
+
+/* A singular system is singular in floating point only when a pivot
+ * rounds to exactly zero, which rounding usually prevents: the solve then
+ * "succeeds" with garbage scaled by the reciprocal of a rounding error.
+ * Tiers 1-3 therefore reject relative LU pivots below 2^-(P/2), and accept
+ * a solve only if a second solve at about twice the working precision
+ * (same pivot threshold) agrees with it to half the working precision;
+ * otherwise it counts as singular and the next tier is tried.  Entries
+ * that vanish identically (N_r = 0) are set to zero exactly. */
+static int sg_direct_checked(qnmodel* q, mpq_t* out, void* ctx)
+{
+	int nres = SG_NRES(q), u, k, rc;
+	mpfr_prec_t w0 = FP_WPREC, r0 = FP_RPREC;
+	mpq_t* hi = sg_mpq_arr(nres);
+	int piv0 = FP_PIVTOL_BITS;
+	if (FP_PIVTOL_BITS < (int)(w0/2)) FP_PIVTOL_BITS = (int)(w0/2);
+	rc = sg_direct(q, out, ctx);
+	if (rc == 0)
+	{
+		FP_WPREC = 2*w0 + 64;
+		FP_RPREC = 2*r0 + 64;
+		if (FP_RPREC < FP_WPREC) FP_RPREC = FP_WPREC;
+		mpfr_set_default_prec(FP_WPREC);
+		rc = sg_direct(q, hi, ctx);
+		FP_WPREC = w0; FP_RPREC = r0;
+		mpfr_set_default_prec(w0);
+	}
+	FP_PIVTOL_BITS = piv0;
+	for (u=0; rc==0 && u<q->R; u++) if (q->N[u] == 0)
+	{
+		mpq_set_ui(out[1+u], 0, 1); mpq_set_ui(hi[1+u], 0, 1);
+		for (k=0;k<q->M;k++) { mpq_set_ui(out[SG_IDX_GK(q->R,k,u)], 0, 1); mpq_set_ui(hi[SG_IDX_GK(q->R,k,u)], 0, 1); }
+	}
+	if (rc == 0)
+	{
+		mpq_t d, lim; mpq_init(d); mpq_init(lim);
+		for (u=0; u<nres; u++)
+		{
+			mpq_sub(d, out[u], hi[u]); mpq_abs(d, d);
+			mpq_abs(lim, hi[u]);
+			mpq_div_2exp(lim, lim, (mp_bitcnt_t)(w0/2));
+			if (mpq_cmp(d, lim) > 0) { rc = 1; break; }
+		}
+		mpq_clear(d); mpq_clear(lim);
+	}
+	sg_mpq_arr_free(hi, nres);
+	return rc;
+}
+
+/* Tier 4 in floating point.  Two errors reach the extrapolated value:
+ * the cancellation of the Lagrange sum at t=0, which amplifies the error
+ * of the perturbed solves by 2^amp (amp from sg_interp_exact_amp), and
+ * the fixed-precision drift of the MoM recursion itself.  The perturbed
+ * models are therefore solved at the working precision P plus extra bits,
+ * and the result is accepted only once a run at more extra bits agrees
+ * with the previous one to P bits and amp is covered by the extra, so
+ * the value returned is accurate to about the working precision. */
+static int SG_EXTRA_BITS = 0;
+static int sg_interp_round(qnmodel* q, mpq_t* out, long extra, double* amp)
+{
+	mpfr_prec_t w0 = FP_WPREC, r0 = FP_RPREC;
+	sg_ops inner = { sg_direct, NULL, NULL, NULL };
+	int rc, piv0 = FP_PIVTOL_BITS;
+	if (piv0 > 0) FP_PIVTOL_BITS = (int)((w0 + extra)/2);   /* the threshold follows the precision */
+	FP_WPREC = w0 + extra;
+	FP_RPREC = r0 + extra;
+	if (FP_RPREC < FP_WPREC) FP_RPREC = FP_WPREC;
+	mpfr_set_default_prec(FP_WPREC);
+	rc = sg_interp_exact_amp(q, out, &inner, amp);
+	FP_PIVTOL_BITS = piv0;
+	FP_WPREC = w0; FP_RPREC = r0;
+	mpfr_set_default_prec(w0);
+	return rc;
+}
+
+static int sg_agree(const mpq_t* a, const mpq_t* b, int n, long bits)
+{
+	int u, ok = 1;
+	mpq_t d, lim; mpq_init(d); mpq_init(lim);
+	for (u=0; u<n && ok; u++)
+	{
+		mpq_sub(d, a[u], b[u]); mpq_abs(d, d);
+		mpq_abs(lim, b[u]); mpq_div_2exp(lim, lim, (mp_bitcnt_t)bits);
+		if (mpq_cmp(d, lim) > 0) ok = 0;
+	}
+	mpq_clear(d); mpq_clear(lim);
+	return ok;
+}
+
+static int sg_interp_fp(qnmodel* q, mpq_t* out, void* ctx)
+{
+	long P = (long)FP_WPREC, extra = 64;
+	int nres = SG_NRES(q), it, rc;
+	double amp = 0.0, amp2 = 0.0;
+	mpq_t* prev = sg_mpq_arr(nres);
+	(void)ctx;
+	rc = sg_interp_round(q, prev, extra, &amp);
+	for (it = 0; rc == 0 && it < 8; it++)
+	{
+		long next = 2*extra + P;
+		if (next < (long)amp + 64) next = (long)amp + 64;
+		rc = sg_interp_round(q, out, next, &amp2);
+		if (rc != 0) break;
+		if (amp2 + 16 <= (double)next && sg_agree(prev, out, nres, P)) { extra = next; break; }
+		extra = next; amp = amp2;
+		{ int u; for (u=0;u<nres;u++) mpq_set(prev[u], out[u]); }
+		if (it == 7) rc = 1;
+	}
+	SG_EXTRA_BITS = (int)extra;
+	sg_mpq_arr_free(prev, nres);
+	return rc;
+}
+
+/* Print the reconstructed constants through perfindices, in the layout it
+ * expects (see mom/main.c). */
+static void report_exact(qnmodel* q, mpq_t* ex, bool verbose_output, bool log_output,
+                         bool normconst_output, bool normconst_g_output, bool throughput_output,
+                         bool queue_output, bool debug_output, mpz_t scale_factor)
+{
+	int R = q->R, M = q->M, i, k;
+	fp_vec_t G0 = (fp_vec_t)fp_vec(R+1,0,1);
+	fp_vec_t G1 = (fp_vec_t)fp_vec(M*(R+1),0,1);
+	for (i=0;i<=R;i++) mpfr_set_q(G0[i], ex[i], MPFR_RNDN);
+	for (k=0;k<M;k++) for (i=0;i<R;i++) mpfr_set_q(G1[k*(R+1)+1+i], ex[SG_IDX_GK(R,k,i)], MPFR_RNDN);
+	perfindices(q,G0,G1,verbose_output,log_output,normconst_output,normconst_g_output,throughput_output,queue_output,debug_output,false,scale_factor);
+	lv_free(G0,R+1); lv_free(G1,M*(R+1));
+}
+
 int main(int argc, char**argv)
 {
 	t0=CPUTIME;
@@ -412,6 +559,7 @@ int main(int argc, char**argv)
 	long residual_prec = 0;    /* 0 -> twice the working precision */
 	int  refine_iters = 0;     /* 0 -> plain fixed-precision MoM */
 	double refine_tol = 0.0;   /* 0 -> always run the full sweep budget */
+	long pivtol_bits = -1;     /* -1 -> half the working precision, 0 -> off */
 
 	if(argc < 2)
 	{
@@ -429,6 +577,8 @@ int main(int argc, char**argv)
 		printf("  -P bits          : Working floating-point precision (default: 53, i.e. IEEE double)\n");
 		printf("  -W bits          : Residual precision for iterative refinement (default: 2*P)\n");
 		printf("  -I n             : Wilkinson/Moler refinement sweeps per block solve (default: 0 = off)\n");
+		printf("  --pivtol bits    : Treat LU pivots below 2^-bits (relative to their row) as singular\n");
+		printf("                     (default: P/2; 0 = exact zero only, the earlier behavior)\n");
 		printf("  -T tol           : Stop refining when the relative correction falls below tol (default: 0)\n");
 		return -1;
 	}
@@ -463,6 +613,8 @@ int main(int argc, char**argv)
 			printf("  -P bits          : Working floating-point precision (default: 53, i.e. IEEE double)\n");
 			printf("  -W bits          : Residual precision for iterative refinement (default: 2*P)\n");
 			printf("  -I n             : Wilkinson/Moler refinement sweeps per block solve (default: 0 = off)\n");
+		printf("  --pivtol bits    : Treat LU pivots below 2^-bits (relative to their row) as singular\n");
+		printf("                     (default: P/2; 0 = exact zero only, the earlier behavior)\n");
 			printf("  -T tol           : Stop refining when the relative correction falls below tol (default: 0)\n");
 				return 0;
 		} else if(strcmp(argv[i], "-p") == 0) {
@@ -481,6 +633,13 @@ int main(int argc, char**argv)
 				perturbation_seed = atoi(argv[++i]);
 			} else {
 				printf("Error: -s option requires a seed argument\n");
+				return -1;
+			}
+		} else if(strcmp(argv[i], "--pivtol") == 0) {
+			if(i + 1 < argc) {
+				pivtol_bits = atol(argv[++i]);
+			} else {
+				printf("Error: --pivtol option requires a bit count\n");
 				return -1;
 			}
 		} else if(strcmp(argv[i], "-D") == 0 || strcmp(argv[i], "--diag") == 0) {
@@ -539,6 +698,8 @@ int main(int argc, char**argv)
 		printf("  -P bits          : Working floating-point precision (default: 53, i.e. IEEE double)\n");
 		printf("  -W bits          : Residual precision for iterative refinement (default: 2*P)\n");
 		printf("  -I n             : Wilkinson/Moler refinement sweeps per block solve (default: 0 = off)\n");
+		printf("  --pivtol bits    : Treat LU pivots below 2^-bits (relative to their row) as singular\n");
+		printf("                     (default: P/2; 0 = exact zero only, the earlier behavior)\n");
 		printf("  -T tol           : Stop refining when the relative correction falls below tol (default: 0)\n");
 		return -1;
 	}
@@ -552,6 +713,11 @@ int main(int argc, char**argv)
 	/* Install the arithmetic precision before anything allocates an
 	 * mpfr_t: fp_init sizes every value from FP_WPREC. */
 	FP_WPREC = (mpfr_prec_t) working_prec;
+	/* A singular system shows up in floating point as a pivot made of
+	 * rounding error rather than an exact zero; reject relative pivots
+	 * below 2^-(P/2) so that such a model reaches the singular-model
+	 * fallback instead of returning garbage. */
+	FP_PIVTOL_BITS = (int)(pivtol_bits < 0 ? working_prec/2 : pivtol_bits);
 	FP_RPREC = (mpfr_prec_t) (residual_prec > 0 ? residual_prec : 2*working_prec);
 	if (FP_RPREC < FP_WPREC) FP_RPREC = FP_WPREC;
 	mpfr_set_default_prec(FP_WPREC);
@@ -616,74 +782,32 @@ int main(int argc, char**argv)
 
 	// If singular and no perturbation yet, apply automatic perturbation
 	if (result == -1 && !auto_perturbation && perturbation_digit == 0) {
-		// If exact normalizing constant was requested, don't auto-perturb
-		// since the perturbed result won't match the exact answer
-		if (normconst_output) {
-			fprintf(stderr, "\nError: Model cannot be solved exactly by the MoM solver.\n");
-			fprintf(stderr, "The system of equations is singular. No exact normalizing constant available.\n");
+		/* Singular MoM system: other class orders, merged stations or
+		 * classes, or interpolation of the limit of a perturbation
+		 * (util/singular.h), in place of the earlier automatic
+		 * perturbation at digit 20.  Tiers 1-3 are exact transformations;
+		 * tier 4 runs at raised precision (sg_interp_fp). */
+		bool report = !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output;
+		int nres = SG_NRES(qnm);
+		mpq_t* exact = sg_mpq_arr(nres);
+		char tier[256];
+		sg_ops ops = { sg_direct_checked, sg_interp_fp, NULL, NULL };
+		int rc = sg_solve_tiered(qnm, exact, tier, sizeof tier, &ops, 1);
+		if (rc != 0) {
+			fprintf(stderr, "\nError: the MoM system is singular for this model, and every fallback\n"
+			                "failed (other class orders, merged stations or classes, interpolation).\n"
+			                "The normalizing constant may be zero or undefined; bin/ca solves any\n"
+			                "well-posed model by convolution.  -p digit gives a perturbed approximation.\n");
 			return 1;
 		}
-		fprintf(stderr, "\nWarning: Model cannot be solved exactly by the MoM solver.\n");
-		fprintf(stderr, "The system of equations is singular. Automatically applying perturbation at digit 20.\n\n");
-		perturbation_digit = 20;
-		auto_perturbation = true;
-
-		// Store original parameters if not already stored
-		if (original_L == NULL) {
-			original_L = (mpz_t**)malloc(qnm->M * sizeof(mpz_t*));
-			for(int i = 0; i < qnm->M; i++) {
-				original_L[i] = (mpz_t*)malloc(qnm->R * sizeof(mpz_t));
-				for(int j = 0; j < qnm->R; j++) {
-					mpz_init(original_L[i][j]);
-					mpz_set(original_L[i][j], qnm->L[i][j]);
-				}
-			}
-			original_Z = (mpz_t*)malloc(qnm->R * sizeof(mpz_t));
-			for(int j = 0; j < qnm->R; j++) {
-				mpz_init(original_Z[j]);
-				mpz_set(original_Z[j], qnm->Z[j]);
-			}
-		}
-
-		// Apply perturbation
-		mpz_clear(scale_factor);
-		mpz_init(scale_factor);
-		mpz_set_ui(scale_factor, 1);  // Reset to 1 before applying perturbation
-		apply_perturbation_to_model(qnm, perturbation_digit, perturbation_seed, scale_factor);
-
-		// Print model with perturbation info
-		if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
-			printmodel_with_perturbation(qnm, perturbation_digit, scale_factor, perturbation_seed, original_L, original_Z);
-		}
-
-		// Retry with perturbation
-		result = solve_model(qnm, argc, argv, verbose_output, log_output,
-		                    normconst_output, normconst_g_output, throughput_output,
-		                    queue_output, debug_output, bounds_output,
-		                    perturbation_digit, perturbation_seed, auto_perturbation,
-		                    scale_factor, original_L, original_Z);
-		if (result == -1) {
-			fprintf(stderr, "\nError: Model is still singular even with automatic perturbation at digit 20.\n");
-			fprintf(stderr, "Please try running manually with a different perturbation digit.\n");
-			fprintf(stderr, "\nExample invocations:\n");
-			fprintf(stderr, "  %s %s -p 25     # Apply perturbation at 25th digit\n", argv[0], model_file);
-			fprintf(stderr, "  %s %s -p 30     # Apply perturbation at 30th digit\n", argv[0], model_file);
-			fprintf(stderr, "  %s %s -p 15 -s 12345  # Different perturbation at 15th digit with custom seed\n\n", argv[0], model_file);
-			return 1;
-		}
-
-		// After successful solve with automatic perturbation, restore original model parameters
-		// so that the output is computed relative to the original (unperturbed) model
-		if (auto_perturbation && original_L != NULL) {
-			for(int i = 0; i < qnm->M; i++) {
-				for(int j = 0; j < qnm->R; j++) {
-					mpz_set(qnm->L[i][j], original_L[i][j]);
-				}
-			}
-			for(int j = 0; j < qnm->R; j++) {
-				mpz_set(qnm->Z[j], original_Z[j]);
-			}
-		}
+		if (SG_EXTRA_BITS && strncmp(tier, "interpolation", 13) == 0)
+			fprintf(stderr, "momf: singular MoM system, solved via %s at %ld+%d bits\n", tier, (long)FP_WPREC, SG_EXTRA_BITS);
+		else
+			fprintf(stderr, "momf: singular MoM system, solved via %s\n", tier);
+		if (report) printf("\nSingular MoM system, solved via %s\n", tier);
+		report_exact(qnm, exact, verbose_output, log_output, normconst_output, normconst_g_output,
+		             throughput_output, queue_output, debug_output, scale_factor);
+		sg_mpq_arr_free(exact, nres);
 	} else if (result == -1) {
 		fprintf(stderr, "\nError: Model cannot be solved even with perturbation.\n");
 		return 1;

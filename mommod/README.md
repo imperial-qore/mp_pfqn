@@ -81,8 +81,7 @@ made deliberately by the caller rather than silently.
 - **Unlucky primes** (some diagonal block singular mod `p`) are detected
   and discarded. A matrix that is singular over `Q` is singular modulo
   every prime and shows up as 40 consecutive failures; such a model is
-  then solved exactly by the fallbacks in **Singular models** below,
-  where `mom` instead substitutes a perturbed model.
+  then solved exactly by the fallbacks in **Singular models** below.
 - **Termination** is not by an a priori height bound. Primes are added
   until `G` reconstructs to the same rational twice, then the full set of
   constants is reconstructed and must reproduce itself at a later prime
@@ -168,14 +167,15 @@ itself:
 
 Bit-for-bit identical to `bin/mom` on `-e`, `-t` and `-q` for every
 non-singular model in `models/`, plus the paper's Table 1 model at
-several populations. On the singular models the two differ by design:
-`mom` auto-perturbs and returns an approximation, `mommod` returns the
-exact answer through the fallbacks below.
+several populations. On the singular models both now go through the
+fallbacks below and agree there too.
 
 ## Singular models
 
 When the MoM system is singular over `Q`, `mommod` tries the following,
-cheapest first. Every tier is exact; the route taken is noted on stderr
+cheapest first. Tiers 1 to 3 and the driver live in `util/singular.h` and
+are shared with `comommod`, `mom` and `momf`; each solver supplies only
+its own solve and, optionally, its own tier 4. Every tier is exact; the route taken is noted on stderr
 (and in the default report, and in `-v`).
 
 1. **Other class orders.** The system can be singular for one class

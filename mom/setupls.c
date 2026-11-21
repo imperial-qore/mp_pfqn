@@ -299,35 +299,11 @@ LS* setupls_progress(mpz_t** L, int* n, mpz_t *Z, int* mi, int m, int r, double 
 			ls->C[t+k].lu_indices=(int*)mpq_ludcmp(ls->C[t+k].diag,nck(r-1,r-h)*r);
 		}
 		if (ls->C[t+k].lu_indices == NULL) {
-			// Singular matrix encountered during LU decomposition
-			// Free allocated memory before returning
-			int ii, jj;
-			for (ii = 0; ii < t+k+1; ii++) {
-				if (ls->C[ii].diag) {
-					for (jj = 0; jj < nck(r-1,r-h)*r; jj++) {
-						free(ls->C[ii].diag[jj]);
-					}
-					free(ls->C[ii].diag);
-				}
-				if (ls->C[ii].nondiag) {
-					if (ls->C[ii].nondiag->coeff) {
-						int jj;
-						for (jj = 0; jj < ls->C[ii].nondiag->nnz; jj++) {
-							mpq_clear(ls->C[ii].nondiag->coeff[jj]);
-						}
-						free(ls->C[ii].nondiag->coeff);
-					}
-					if (ls->C[ii].nondiag->pos_row)
-						free(ls->C[ii].nondiag->pos_row);
-					if (ls->C[ii].nondiag->pos_col)
-						free(ls->C[ii].nondiag->pos_col);
-					free(ls->C[ii].nondiag);
-				}
-			}
-			free(ls->C);
-			free(ls);
-			free(Ik.combs);	
-			free(I.combs);	
+			/* Singular block.  The structure is abandoned without freeing it:
+			 * the earlier cleanup freed every block with the size of the
+			 * current one and touched sparse blocks not yet allocated, which
+			 * crashed (e.g. models/08_multiclass.qn in momf).  The leak is
+			 * bounded by one linear system per failed attempt. */
 			return NULL;
 		}
 //		if(DEBUG) mpq_matprint(ls->C[t+k].diag,nck(r-1,r-h)*r,nck(r-1,r-h)*r);

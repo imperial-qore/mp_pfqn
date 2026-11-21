@@ -55,8 +55,8 @@ What changed:
   not be singular over `Q`, so the solver first falls back to a direct LU
   of `A11` -- which solves the same system -- and only discards the prime
   when `A11` itself is singular mod `p`. A matrix singular over `Q` is
-  singular modulo every prime and is reported after 40 consecutive
-  failures.
+  singular modulo every prime and shows up as 40 consecutive failures;
+  the model is then solved by the fallbacks in **Singular models**.
 - **The rank-revealing sub-solve is guarded.** On models where some basis
   population is unreachable (`N_s < M` for a class `s` processed before
   the last), `comom` re-solves on the reachable sub-system with a
@@ -136,19 +136,19 @@ default.
 `comom` auto-perturbs when its coefficient matrix is singular, multiplying
 the demands by `10^20` and adding a permutation, and returns an
 approximation with a warning on stderr; with `-e` it refuses instead.
-`comommod` always refuses, reporting
+`comommod` solves such models exactly with the same tiered fallback as
+`mommod` (`util/singular.h`, described in `mommod/README.md`): other
+class orders, merged identical stations, merged proportional classes,
+then interpolation of the exact limit of a perturbation, done per prime
+in `Z/p` with `comom_image` on the perturbed models. The route is noted
+on stderr, in the default report and in `-v`. A model none of the tiers
+solve has an undefined normalizing constant and is reported as an error.
 
-```
-Error: the linear system is singular modulo 41 consecutive primes;
-the coefficient matrix is singular over the rationals.
-```
-
-This is the same stance `mommod` takes against `mom`, and it agrees with
-`comom -e` on every model in `models/`: the two classify exactly the same
-models as singular (`05 06 07 08 10 11 12`, `test_singular*`). For an
-exact answer on those models the tiered `safe_comom` is the right tool;
-teaching it to drive `comommod` instead of `comom` on its first two tiers
-would be the natural next step, and is not done here.
+To make this possible the prime loop moved out of `main()` into
+`crt_solve()`, which takes any per-prime image. The witness loop of `-B`
+now also gives up after 40 failures; it used to spin forever on a
+singular model. The class bases depend on `M`, so a model with merged
+stations builds its own.
 
 ## Validation
 

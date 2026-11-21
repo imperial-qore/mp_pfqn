@@ -13,6 +13,18 @@
  * falls back to the double form with a note on stderr. */
 void perfindices(qnmodel* qnm, fp_vec_t G, fp_vec_t Gk, bool verbose_output, bool log_output, bool normconst_output, bool normconst_g_output, bool throughput_output, bool queue_output, bool debug_output, bool bounds_output, mpz_t scale_factor)
 {
+	if (MOM_CAPTURE) {
+		int i, k, R = qnm->R;
+		for (i=0;i<=R;i++) {
+			if (!mpfr_number_p(G[i])) MOM_CAPTURE_BAD = 1;
+			else mpfr_get_q(MOM_CAPTURE[i], G[i]);
+		}
+		for (k=1;k<=qnm->M;k++) for (i=1;i<=R;i++) {
+			if (!mpfr_number_p(Gk[(k-1)*(R+1)+i])) MOM_CAPTURE_BAD = 1;
+			else mpfr_get_q(MOM_CAPTURE[1+R+(k-1)*R+(i-1)], Gk[(k-1)*(R+1)+i]);
+		}
+		return;
+	}
 	int r;
 	fp_t tmp; fp_init(tmp);
 	fp_t tmp2; fp_init(tmp2);

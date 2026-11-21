@@ -26,6 +26,7 @@ make -C fpla && make -C momf     # produces bin/momf
 | `-I n` | max Wilkinson/Moler sweeps per block solve | 0 (refinement off) |
 | `-T tol` | stop refining below this relative correction | 0 (run full budget) |
 | `-D` | per-step recursion diagnostics and block condition numbers, on stderr | off |
+| `--pivtol bits` | treat LU pivots below `2^-bits` (relative to their row) as singular | `P/2`; 0 = exact zero only |
 
 `-e` (exact numerator/denominator) has no meaning in floating point and
 falls back to printing `G` as a double.
@@ -165,6 +166,49 @@ $ ./bin/mom  tab1_n3.qn -t                    # exact
    elimination. The coefficient matrix does not depend on the population
    of the recursion class, so a single factorization or lifting setup
    serves all of its populations.
+
+## Singular models
+
+A model whose MoM system is singular over `Q` goes through the tiered
+fallback shared with `mom`, `mommod` and `comommod` (`util/singular.h`,
+described in `mommod/README.md`): other class orders, merged identical
+stations, merged proportional classes, then interpolation of the limit
+of a perturbation. It replaces the earlier automatic perturbation at
+digit 20. Floating point needs three adjustments on top of the shared
+code:
+
+- **Detecting singularity.** A singular system is singular in floating
+  point only when a pivot rounds to exactly zero, which rounding usually
+  prevents; the solve then returned garbage scaled by the reciprocal of a
+  rounding error (for example `08_multiclass` crashed and several random
+  models printed wrong throughputs with exit 0). `fp_ludcmp` therefore
+  rejects relative pivots below `2^-(P/2)` (`--pivtol`, default on). The
+  solves of tiers 1 to 3 must in addition agree with a second solve at
+  `2P+64` bits to `P/2` bits; one model with two proportional classes
+  passed the pivot test at 53 and 170 bits with the same wrong answer.
+- **Tier 4 precision.** Extrapolating to `t = 0` cancels, and the
+  recursion drifts on its own (Result 1). The perturbed models are solved
+  at `P` plus extra bits, and a result is accepted once a round at more
+  extra bits agrees with the previous one to `P` bits and the extra
+  covers the measured cancellation. The bits used are noted on stderr;
+  `07_mixed` and `12_expanded` need about 1800 extra bits at `P = 53`.
+- **Structural zeros.** `G(N-1_r)` and `G^{+k}(N-1_r)` vanish when
+  `N_r = 0`; the fallback sets them to zero instead of keeping rounding
+  noise.
+
+The constants are converted exactly to rationals (`mpfr_get_q`) for the
+tier arithmetic and printed through the usual output path. Unlike in
+`mom`, the result is not exact: tiers 1 to 3 return the working-precision
+solve once it has passed the checks above (so it is good to at least
+`P/2` bits), and tier 4 is accurate to about `P` bits.
+
+Checked against `bin/ca` on every model in `models/`, the merge demos and
+600 random models: at `-P 128` every fallback route agrees to `1e-12`; at
+the default 53 bits to `5e-9`, with `06_large` (`Ntot = 75`) solved by
+interpolation in 20 s. The remaining differences are on the direct path
+and predate the fallback: rounding noise left in place of the exact zero
+throughputs of `N_r = 0` classes, and the drift of Result 1 (e.g.
+`09_asymmetric` at 53 bits).
 
 ## Note on an output-path defect in `mom`
 

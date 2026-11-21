@@ -41,6 +41,7 @@
 #include <zpla.h>
 #include "mommod.h"
 #include "lvtab.h"
+#include "singular.h"
 
 /* Number of consecutive primes that must reproduce the same reconstructed
  * rational before it is accepted.  One extra prime is the textbook
@@ -585,283 +586,18 @@ finish:
 	return rc;
 }
 
-/* ---- derived models ---- */
-static qnmodel* qn_new(int R, int M)
+/* ---- singular models: see util/singular.h ---- */
+static int sg_direct(qnmodel* q, mpq_t* out, void* ctx)
 {
-	int r, k;
-	qnmodel* q = (qnmodel*) calloc(1, sizeof(qnmodel));
-	q->R = R; q->M = M;
-	q->N  = (int*) calloc(R, sizeof(int));
-	q->mi = (int*) calloc(M, sizeof(int));
-	q->Z  = (mpz_t*) malloc(R*sizeof(mpz_t));
-	for (r=0;r<R;r++) mpz_init(q->Z[r]);
-	q->L  = (mpz_t**) malloc(M*sizeof(mpz_t*));
-	for (k=0;k<M;k++) { q->L[k] = (mpz_t*) malloc(R*sizeof(mpz_t)); for (r=0;r<R;r++) mpz_init(q->L[k][r]); }
-	return q;
+	(void)ctx;
+	return crt_solve(q, img_direct, NULL, 0, out);
 }
 
-static void qn_del(qnmodel* q)
-{
-	int r, k;
-	if (!q) return;
-	for (k=0;k<q->M;k++) { for (r=0;r<q->R;r++) mpz_clear(q->L[k][r]); free(q->L[k]); }
-	for (r=0;r<q->R;r++) mpz_clear(q->Z[r]);
-	free(q->L); free(q->Z); free(q->N); free(q->mi); free(q);
-}
-
-static void qn_fix_nt(qnmodel* q) { int r; q->Nt = 0; for (r=0;r<q->R;r++) q->Nt += q->N[r]; }
-
-static mpq_t* mpq_arr(int n) { int i; mpq_t* a = (mpq_t*) malloc(n*sizeof(mpq_t)); for (i=0;i<n;i++) mpq_init(a[i]); return a; }
-static void mpq_arr_free(mpq_t* a, int n) { int i; if (!a) return; for (i=0;i<n;i++) mpq_clear(a[i]); free(a); }
-
-/* index of G^{+k}(N-1_r) in the exported vector (k, r 0-based) */
-#define IDX_GK(R,k,r) (1 + (R) + (k)*(R) + (r))
-
-/* lexicographic next permutation; 0 when the last one was reached */
-static int next_perm(int* a, int n)
-{
-	int i = n-2, j, t;
-	while (i >= 0 && a[i] >= a[i+1]) i--;
-	if (i < 0) return 0;
-	j = n-1; while (a[j] <= a[i]) j--;
-	t = a[i]; a[i] = a[j]; a[j] = t;
-	for (i++, j=n-1; i<j; i++, j--) { t = a[i]; a[i] = a[j]; a[j] = t; }
-	return 1;
-}
-
-#define MAX_CLASS_ORDERS 24
-
-/* Tiers 1-2: the model as given, then other class orders. */
-static int solve_order(qnmodel* q, mpq_t* out, int* reordered)
-{
-	int R = q->R, M = q->M, nres = NRES(q), i, j, k, tries = 1, rc;
-	*reordered = 0;
-	rc = crt_solve(q, img_direct, NULL, 0, out);
-	if (rc != 1 || R < 2) return rc;
-	int* perm = (int*) malloc(R*sizeof(int));
-	for (i=0;i<R;i++) perm[i] = i;
-	while (rc == 1 && tries < MAX_CLASS_ORDERS && next_perm(perm, R))
-	{
-		tries++;
-		qnmodel* p = qn_new(R, M);
-		for (j=0;j<R;j++) {               /* position j holds class perm[j] */
-			p->N[j] = q->N[perm[j]];
-			mpz_set(p->Z[j], q->Z[perm[j]]);
-			for (k=0;k<M;k++) mpz_set(p->L[k][j], q->L[k][perm[j]]);
-		}
-		for (k=0;k<M;k++) p->mi[k] = q->mi[k];
-		qn_fix_nt(p);
-		mpq_t* o = mpq_arr(nres);
-		rc = crt_solve(p, img_direct, NULL, 0, o);
-		if (rc == 0) {
-			mpq_set(out[0], o[0]);
-			for (j=0;j<R;j++) {
-				mpq_set(out[1+perm[j]], o[1+j]);
-				for (k=0;k<M;k++) mpq_set(out[IDX_GK(R,k,perm[j])], o[IDX_GK(R,k,j)]);
-			}
-			*reordered = 1;
-		}
-		mpq_arr_free(o, nres);
-		qn_del(p);
-	}
-	free(perm);
-	return rc;
-}
-
-/* Fold stations with identical demand rows.  A station of multiplicity m
- * is m identical queues, so the folded station has the summed
- * multiplicity; G and G(N-1_r) are unchanged, and an extra replica of any
- * member station is an extra replica of the folded one, so
- * G^{+k}(N-1_r) = G'^{+g(k)}(N-1_r).  Returns NULL if nothing folds. */
-static qnmodel* merge_stations(qnmodel* q, int* grp)
-{
-	int M = q->M, R = q->R, k, h, r, nm = 0;
-	int* rep = (int*) malloc(M*sizeof(int));
-	for (k=0;k<M;k++)
-	{
-		grp[k] = -1;
-		for (h=0;h<nm && grp[k]<0;h++)
-		{
-			for (r=0;r<R;r++) if (mpz_cmp(q->L[k][r], q->L[rep[h]][r]) != 0) break;
-			if (r == R) grp[k] = h;
-		}
-		if (grp[k] < 0) { rep[nm] = k; grp[k] = nm++; }
-	}
-	if (nm == M) { free(rep); return NULL; }
-	qnmodel* m = qn_new(R, nm);
-	for (r=0;r<R;r++) { m->N[r] = q->N[r]; mpz_set(m->Z[r], q->Z[r]); }
-	for (h=0;h<nm;h++) for (r=0;r<R;r++) mpz_set(m->L[h][r], q->L[rep[h]][r]);
-	for (k=0;k<M;k++) m->mi[grp[k]] += q->mi[k];
-	qn_fix_nt(m);
-	free(rep);
-	return m;
-}
-
-/* c with L_kr = c L_ks at every station and Z_r = c Z_s; 0 if none. */
-static int class_scale(qnmodel* q, int s, int r, mpq_t c)
-{
-	int k, have = 0;
-	mpq_t t; mpq_init(t);
-	for (k=0;k<=q->M;k++)
-	{
-		mpz_srcptr a = (k < q->M) ? q->L[k][s] : q->Z[s];
-		mpz_srcptr b = (k < q->M) ? q->L[k][r] : q->Z[r];
-		if (mpz_sgn(a) == 0 && mpz_sgn(b) == 0) continue;
-		if (mpz_sgn(a) == 0 || mpz_sgn(b) == 0) { have = 0; break; }
-		mpz_set(mpq_numref(t), b); mpz_set(mpq_denref(t), a); mpq_canonicalize(t);
-		if (!have) { mpq_set(c, t); have = 1; }
-		else if (!mpq_equal(c, t)) { have = 0; break; }
-	}
-	mpq_clear(t);
-	return have;
-}
-
-/* Aggregate classes with proportional demands and think times.  With the
- * 1/n! convention the generating function of G,
- *   exp(sum_r Z_r x_r) prod_k (1 - sum_r L_kr x_r)^(-m_k),
- * depends on such a group only through x_s + sum_i c_i x_i, so
- *   G(N) = G'(n) F(N),  F(N) = prod_groups (sum N_i)!/prod N_i! prod c_i^{N_i},
- * and likewise G(N-1_i) = G'(n-1_g) F(N-1_i) and G^{+k}(N-1_i) =
- * G'^{+k}(n-1_g) F(N-1_i), where ' is the model with each group replaced
- * by its first class at the summed population.  Returns NULL if nothing
- * aggregates; otherwise grp[i] is the merged class of i and c[i] its
- * scale factor. */
-static qnmodel* merge_classes(qnmodel* q, int* grp, mpq_t* c)
-{
-	int R = q->R, M = q->M, s, r, k, ng = 0;
-	int* rep = (int*) malloc(R*sizeof(int));
-	for (r=0;r<R;r++) grp[r] = -1;
-	for (s=0;s<R;s++)
-	{
-		if (grp[s] >= 0) continue;
-		rep[ng] = s; grp[s] = ng; mpq_set_ui(c[s], 1, 1);
-		for (r=s+1;r<R;r++)
-			if (grp[r] < 0 && class_scale(q, s, r, c[r])) grp[r] = ng;
-		ng++;
-	}
-	if (ng == R) { free(rep); return NULL; }
-	qnmodel* m = qn_new(ng, M);
-	for (s=0;s<ng;s++) {
-		mpz_set(m->Z[s], q->Z[rep[s]]);
-		for (k=0;k<M;k++) mpz_set(m->L[k][s], q->L[k][rep[s]]);
-	}
-	for (r=0;r<R;r++) m->N[grp[r]] += q->N[r];
-	for (k=0;k<M;k++) m->mi[k] = q->mi[k];
-	qn_fix_nt(m);
-	free(rep);
-	return m;
-}
-
-/* F(Nv) of merge_classes, for the group structure grp/c over R classes */
-static void class_factor(mpq_t F, int* Nv, int R, int ng, int* grp, mpq_t* c)
-{
-	int g, i;
-	mpz_t f; mpz_init(f);
-	mpq_t t; mpq_init(t);
-	mpq_set_ui(F, 1, 1);
-	for (g=0; g<ng; g++)
-	{
-		unsigned long n = 0;
-		for (i=0;i<R;i++) if (grp[i] == g) n += Nv[i];
-		mpz_fac_ui(f, n); mpq_set_z(t, f); mpq_mul(F, F, t);
-		for (i=0;i<R;i++) if (grp[i] == g)
-		{
-			mpz_fac_ui(f, Nv[i]); mpq_set_z(t, f); mpq_div(F, F, t);
-			mpz_pow_ui(mpq_numref(t), mpq_numref(c[i]), Nv[i]);
-			mpz_pow_ui(mpq_denref(t), mpq_denref(c[i]), Nv[i]);
-			mpq_canonicalize(t);
-			mpq_mul(F, F, t);
-		}
-	}
-	mpz_clear(f); mpq_clear(t);
-}
-
-/* Tiers 1-3.  tier receives a short description of the route taken. */
-static int solve_reduce(qnmodel* q, mpq_t* out, char* tier, size_t tsz)
-{
-	int R = q->R, M = q->M, rc, reordered, i, k;
-	rc = solve_order(q, out, &reordered);
-	if (rc == 0) { if (reordered) snprintf(tier, tsz, "class order"); return 0; }
-	if (rc != 1) return rc;
-
-	/* identical stations */
-	{
-		int* grp = (int*) malloc(M*sizeof(int));
-		qnmodel* ms = merge_stations(q, grp);
-		if (ms)
-		{
-			int nres2 = NRES(ms);
-			mpq_t* o = mpq_arr(nres2);
-			char sub[96] = "";
-			rc = solve_reduce(ms, o, sub, sizeof sub);
-			if (rc == 0)
-			{
-				mpq_set(out[0], o[0]);
-				for (i=0;i<R;i++) mpq_set(out[1+i], o[1+i]);
-				for (k=0;k<M;k++) for (i=0;i<R;i++) mpq_set(out[IDX_GK(R,k,i)], o[IDX_GK(R,grp[k],i)]);
-				snprintf(tier, tsz, "merged stations (M=%d->%d)%s%s", M, ms->M, sub[0] ? ", " : "", sub);
-			}
-			mpq_arr_free(o, nres2);
-			qn_del(ms);
-			if (rc != 1) { free(grp); return rc; }
-		}
-		free(grp);
-	}
-
-	/* proportional classes */
-	{
-		int* grp = (int*) malloc(R*sizeof(int));
-		mpq_t* c = mpq_arr(R);
-		qnmodel* mc = merge_classes(q, grp, c);
-		if (mc)
-		{
-			int ng = mc->R, nres2 = NRES(mc);
-			mpq_t* o = mpq_arr(nres2);
-			char sub[96] = "";
-			rc = solve_reduce(mc, o, sub, sizeof sub);
-			if (rc == 0)
-			{
-				int* Nv = (int*) malloc(R*sizeof(int));
-				mpq_t F; mpq_init(F);
-				for (i=0;i<R;i++) Nv[i] = q->N[i];
-				class_factor(F, Nv, R, ng, grp, c);
-				mpq_mul(out[0], o[0], F);
-				for (i=0;i<R;i++)
-				{
-					if (q->N[i] == 0) {
-						mpq_set_ui(out[1+i], 0, 1);
-						for (k=0;k<M;k++) mpq_set_ui(out[IDX_GK(R,k,i)], 0, 1);
-						continue;
-					}
-					Nv[i]--;
-					class_factor(F, Nv, R, ng, grp, c);
-					Nv[i]++;
-					mpq_mul(out[1+i], o[1+grp[i]], F);
-					for (k=0;k<M;k++) mpq_mul(out[IDX_GK(R,k,i)], o[IDX_GK(ng,k,grp[i])], F);
-				}
-				mpq_clear(F); free(Nv);
-				snprintf(tier, tsz, "merged classes (R=%d->%d)%s%s", R, ng, sub[0] ? ", " : "", sub);
-			}
-			mpq_arr_free(o, nres2);
-			qn_del(mc);
-		}
-		mpq_arr_free(c, R); free(grp);
-	}
-	return rc;
-}
-
-/* ---- tier 4: exact limit of a perturbation ----
- * Every exported constant is a homogeneous polynomial in (L, Z) jointly,
- * of degree at most Ntot, so along (L, Z) + t (DL, DZ) it is a polynomial
- * g(t) of degree <= Ntot whose value at t=0 is the constant of the
- * original model.  Both L and Z must move: with Z=0 the system can stay
- * singular for every demand matrix.  For a generic direction the system
- * is singular at finitely many t only, so each prime solves the perturbed
- * model at t=1,2,..., skips the t that fail, and evaluates the Lagrange
- * interpolant through Ntot+1 points at t=0 in Z/p.  The CRT then
- * reconstructs g(0) exactly.  The direction is drawn from 1..1e6: small
- * integers create coincidences (equal demands) that are themselves MoM
- * degeneracies. */
+/* Tier 4 per prime: each prime solves the perturbed models at t=1,2,...,
+ * skips the t that fail, and evaluates the Lagrange interpolant at t=0 in
+ * Z/p; the CRT then reconstructs g(0) exactly.  This avoids the large
+ * rationals of the perturbed models that interpolation over Q would
+ * reconstruct one by one. */
 typedef struct { int D, T; qnmodel** qt; } interp_ctx;
 
 static zp_t mulm(zp_t a, zp_t b, zp_t p) { return (zp_t)(((__uint128_t)a * b) % p); }
@@ -892,52 +628,23 @@ static int img_interp(qnmodel* q, zp_t p, zp_t* res, void* vctx)
 	return 0;
 }
 
-static int solve_interp(qnmodel* q, mpq_t* out)
+static int sg_interp_mod(qnmodel* q, mpq_t* out, void* vctx)
 {
-	int R = q->R, M = q->M, r, k, t, rc;
 	interp_ctx c;
-	unsigned long long seed = 0x9E3779B97F4A7C15ULL;
-	mpz_t *dz = (mpz_t*) malloc(R*sizeof(mpz_t)), **dl = (mpz_t**) malloc(M*sizeof(mpz_t*));
-#define NEXTRAND() (seed = seed*6364136223846793005ULL + 1442695040888963407ULL, 1 + (unsigned long)((seed >> 33) % 1000000))
-	for (k=0;k<M;k++) { dl[k] = (mpz_t*) malloc(R*sizeof(mpz_t)); for (r=0;r<R;r++) mpz_init_set_ui(dl[k][r], NEXTRAND()); }
-	for (r=0;r<R;r++) mpz_init_set_ui(dz[r], NEXTRAND());
-#undef NEXTRAND
-	c.D = 0; for (r=0;r<R;r++) c.D += q->N[r];
-	c.T = 4*(c.D+1) + 8;
-	c.qt = (qnmodel**) malloc(c.T*sizeof(qnmodel*));
-	for (t=1;t<=c.T;t++)
-	{
-		qnmodel* m = qn_new(R, M);
-		for (r=0;r<R;r++) { m->N[r] = q->N[r]; mpz_set(m->Z[r], dz[r]); mpz_mul_ui(m->Z[r], m->Z[r], t); mpz_add(m->Z[r], m->Z[r], q->Z[r]); }
-		for (k=0;k<M;k++) { m->mi[k] = q->mi[k];
-			for (r=0;r<R;r++) { mpz_set(m->L[k][r], dl[k][r]); mpz_mul_ui(m->L[k][r], m->L[k][r], t); mpz_add(m->L[k][r], m->L[k][r], q->L[k][r]); } }
-		qn_fix_nt(m);
-		c.qt[t-1] = m;
-	}
+	int rc;
+	(void)vctx;
+	c.D = sg_interp_degree(q);
+	c.T = sg_interp_points(q);
+	c.qt = sg_perturb_build(q, c.T);
 	rc = crt_solve(q, img_interp, &c, (unsigned long)c.T + 1, out);
-	for (t=0;t<c.T;t++) qn_del(c.qt[t]);
-	free(c.qt);
-	for (k=0;k<M;k++) { for (r=0;r<R;r++) mpz_clear(dl[k][r]); free(dl[k]); }
-	for (r=0;r<R;r++) mpz_clear(dz[r]);
-	free(dl); free(dz);
+	sg_perturb_free(c.qt, c.T);
 	return rc;
 }
 
-/* All tiers.  Returns 0 and the exact exported constants of q in out[],
- * or 1 if every tier failed, or 2 on a hard error already reported. */
 static int solve_tiered(qnmodel* q, mpq_t* out, char* tier, size_t tsz)
 {
-	int rc;
-	snprintf(tier, tsz, "direct");
-	rc = solve_reduce(q, out, tier, tsz);
-	if (rc != 1) return rc;
-	rc = solve_interp(q, out);
-	if (rc == 0) {
-		int r, D = 0;
-		for (r=0;r<q->R;r++) D += q->N[r];
-		snprintf(tier, tsz, "interpolation (%d+1 perturbed solves per prime)", D);
-	}
-	return rc;
+	sg_ops ops = { sg_direct, sg_interp_mod, NULL, " per prime" };
+	return sg_solve_tiered(q, out, tier, tsz, &ops, 0);
 }
 
 static void usage(const char* prog)
@@ -1015,7 +722,7 @@ int main(int argc, char**argv)
 
 	mpz_t *num = (mpz_t*) malloc(nres*sizeof(mpz_t));
 	mpz_t *den = (mpz_t*) malloc(nres*sizeof(mpz_t));
-	mpq_t *exact = mpq_arr(nres);
+	mpq_t *exact = sg_mpq_arr(nres);
 	char tier[256];
 	double tstart = CPUTIME;
 	int rc = solve_tiered(qnm, exact, tier, sizeof tier);
@@ -1033,7 +740,7 @@ int main(int argc, char**argv)
 		mpz_init_set(num[i], mpq_numref(exact[i]));
 		mpz_init_set(den[i], mpq_denref(exact[i]));
 	}
-	mpq_arr_free(exact, nres);
+	sg_mpq_arr_free(exact, nres);
 
 	double telapsed = CPUTIME - tstart;
 	if (VERBOSE_MOD)

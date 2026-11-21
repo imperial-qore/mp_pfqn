@@ -36,6 +36,12 @@ typedef struct
 #include "util.h"
 extern qnmodel* qnm;
 
+/* When non-NULL, perfindices stores the exported constants here (exact
+ * rationals, layout of util/singular.h) instead of printing; the tiered
+ * fallback for singular models solves derived models this way. */
+extern mpq_t* MOM_CAPTURE;
+extern int MOM_CAPTURE_BAD;   /* set when a captured value is not finite */
+
 extern bool INTERACTIVE,RANDGEN,CANON,ZSCALE,DEBUG,VERBOSE;
 
 /* Wilkinson/Moler iterative refinement controls.
