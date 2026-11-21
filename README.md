@@ -85,7 +85,10 @@ Examples are available under the models/ folder.
 ./bin/ca model.qn       # Convolution Algorithm
 ./bin/recal model.qn    # Recursion by Chain Algorithm
 ./bin/mom model.qn      # Method of Moments
+./bin/momf model.qn     # Method of Moments in fixed-precision floating point (MPFR)
+./bin/mommod model.qn   # Multi-modular Method of Moments (Z/p images, CRT, OpenMP -j)
 ./bin/comom model.qn    # Class-Oriented Method of Moments
+./bin/comommod model.qn # Multi-modular Class-Oriented Method of Moments
 ./bin/gmom model.qn     # Generalized (divide-and-conquer) Method of Moments
 ./bin/safe_comom model.qn # CoMoM, exact even on singular (degenerate) models
 
@@ -153,7 +156,11 @@ RECAL supports the same command-line options as MVA (see table above).
 | `-d` | `--exact` | Print all performance metrics in full exact precision (integer or rational) |
 | `-p digit` | | Apply perturbation at the specified digit (e.g., `-p 5`) |
 | `-s seed` | `--seed` | Random seed for perturbation (default: 23000) |
+| `-j n` | | Threads for the modular interpolation of singular models (default 1) |
+| `--linbox` | | Use the LinBox Dixon p-adic lifting solver |
 | `-h` | `--help` | Print help message |
+
+When the MoM system is singular, `mom` solves the model exactly through other class orders, merged identical stations, merged proportional classes, or interpolation of the exact limit of a perturbation, the last on `mommod`'s modular engine; the route is noted on stderr. See `mommod/README.md`, **Singular models**.
 
 #### CoMoM Solver Options
 
@@ -161,7 +168,17 @@ RECAL supports the same command-line options as MVA (see table above).
 ./bin/comom [options] models/02_bottleneck_study.qn
 ```
 
-CoMoM supports the same command-line options as MoM (see table above). The Class-Oriented Method of Moments provides an efficient algorithm specifically designed for multiclass models with large population sizes.
+CoMoM supports the same command-line options as MoM (see table above), except `-j` and `--linbox`. The Class-Oriented Method of Moments provides an efficient algorithm specifically designed for multiclass models with large population sizes.
+
+#### mommod, comommod and momf Solver Options
+
+```bash
+./bin/mommod   [ -e | -g | -l | -t | -q ] [-j n] [-b bits] [-B] [-W n] models/08_multiclass.qn
+./bin/comommod [ -e | -g | -l | -t | -q | -d ] [-j n] [-b bits] [-B] [-W n] models/08_multiclass.qn
+./bin/momf     [ MoM options ] [-P bits] [-I n] [--pivtol bits] models/02_bottleneck.qn
+```
+
+`mommod` and `comommod` replay the MoM and CoMoM recursions in `Z/p` for many word-size primes and recover the exact rationals by CRT, with `-j` primes solved concurrently. `momf` runs MoM in MPFR floating point at a settable precision. All three, like `mom`, solve singular models through the shared tiered fallback (`momf` to its working precision). See `mommod/README.md`, `comommod/README.md` and `momf/README.md`.
 
 #### gmom Solver Options
 

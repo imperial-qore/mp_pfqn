@@ -71,7 +71,7 @@ The test script runs all 5 solvers (mva, ca, recal, mom, comom) with options `-e
 - **`gmpla/`** — GMP linear algebra: dense matrices (`mpq_mat_t`), sparse matrices (`mpq_msp_t`), LU decomposition (`mpq_ludcmp`/`mpq_lubksb`), LinBox interface
 - **`fpla/`** — the same API over MPFR floats at a run-time settable precision (`fp_*`), plus iterative refinement
 - **`zpla/`** — the same API over `Z/p` in machine words (`zp_*`), Montgomery arithmetic, CRT and rational reconstruction
-- **`util/`** — Model I/O (`readmodel`), population enumeration (`nextpop`, `popindex`), combinatorics (`nck`)
+- **`util/`** — Model I/O (`readmodel`), population enumeration (`nextpop`, `popindex`), combinatorics (`nck`); header-only `lvtab.h` (replica-level tables of the full MoM basis, `mom_mixed_think`) and `singular.h` (tiered exact fallback for singular MoM/CoMoM systems, shared by `mom`, `momf`, `mommod`, `comommod`)
 
 ### Core Data Structure (`util/util.h`)
 
@@ -112,6 +112,7 @@ MoM/CoMoM additionally support: `-p digit` (perturbation), `-s seed` (perturbati
 - Top-level `Makefile` orchestrates builds of all subdirectories sequentially
 - Each subdirectory has its own `Makefile` that compiles `.c` files and links against shared `util/` and `gmpla/` objects
 - `mom/` links with `g++` (for LinBox C++ integration); all others use `gcc`
+- `mom/` also links `mmengine.o`, built by its Makefile from `mommod/` objects (`make -C ../mommod <objs>`) plus `zpla.o` via `ld -r` and `objcopy --keep-global-symbol` (only the `mommod/mmengine.h` API stays global, since both solvers define `setupls`, `blocksolve`, `mdecrease`, ...); plain C, no extra C++ compile
 - Compiler flags: `-g -Wall -O4` plus GMP/MPFR include/link paths
 - Dependencies can live in `deps/local/` (manual build) or system paths
 

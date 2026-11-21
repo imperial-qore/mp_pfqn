@@ -88,8 +88,10 @@ lcfs_3class   R=3   all 12 basis entries match
 - **Singular models.** Models whose MoM coefficient matrix is singular
   (equal-loading / demand relations: `05_sparse`, `06_large`,
   `08_multiclass`, the `test_singular*` family, ...) make the normal
-  equations singular, exactly as they make `bin/mom` auto-perturb. `gmom`
-  reports the singularity. This is the demand-related singularity of the
+  equations singular, exactly as they make the `bin/mom` system singular.
+  `gmom` reports the singularity; `mom`, `momf`, `mommod` and `comommod`
+  solve such models through the tiered fallback of `util/singular.h`,
+  which `gmom` does not use. This is the demand-related singularity of the
   MoM system, not a defect of the port. (Confirmed by construction: 09's
   demands validate; only specific demand relations are singular.)
 - **The reference's new-class shift is Z=0-only.** Between classes the
