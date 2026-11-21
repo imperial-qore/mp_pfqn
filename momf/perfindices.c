@@ -13,6 +13,18 @@
  * falls back to the double form with a note on stderr. */
 void perfindices(qnmodel* qnm, fp_vec_t G, fp_vec_t Gk, bool verbose_output, bool log_output, bool normconst_output, bool normconst_g_output, bool throughput_output, bool queue_output, bool debug_output, bool bounds_output, mpz_t scale_factor)
 {
+	/* G(N-1_r) and G^{+k}(N-1_r) vanish identically when N_r = 0, but the
+	 * floating-point recursion leaves rounding noise there (around 1e-40
+	 * at 128 bits, 1e-13 at 53), printed as tiny nonzero, even negative,
+	 * throughputs and queue lengths.  Set them to their exact value. */
+	{
+		int z, kz;
+		for (z=1; z<=qnm->R; z++) if (qnm->N[z-1] == 0)
+		{
+			mpfr_set_zero(G[z], 1);
+			for (kz=0; kz<qnm->M; kz++) mpfr_set_zero(Gk[kz*(qnm->R+1)+z], 1);
+		}
+	}
 	if (MOM_CAPTURE) {
 		int i, k, R = qnm->R;
 		for (i=0;i<=R;i++) {

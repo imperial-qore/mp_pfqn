@@ -205,10 +205,15 @@ solve once it has passed the checks above (so it is good to at least
 Checked against `bin/ca` on every model in `models/`, the merge demos and
 600 random models: at `-P 128` every fallback route agrees to `1e-12`; at
 the default 53 bits to `5e-9`, with `06_large` (`Ntot = 75`) solved by
-interpolation in 20 s. The remaining differences are on the direct path
-and predate the fallback: rounding noise left in place of the exact zero
-throughputs of `N_r = 0` classes, and the drift of Result 1 (e.g.
-`09_asymmetric` at 53 bits).
+interpolation in 20 s. Over all 640 models every value agrees to
+`1.1e-15` at `-P 128`; at 53 bits the remaining differences are the drift
+of Result 1 on the direct path (e.g. `09_asymmetric`).
+
+The constants `G(N-1_r)` and `G^{+k}(N-1_r)` of a class with `N_r = 0`
+vanish identically, but the floating-point recursion used to leave
+rounding noise there (about `1e-40` at 128 bits, `1e-13` at 53), printed
+as tiny nonzero or negative throughputs and queue lengths. `perfindices`
+now sets them to zero exactly, on every path.
 
 ## Note on an output-path defect in `mom`
 
