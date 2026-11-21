@@ -164,7 +164,8 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 	int m=qnm->M;
 	Ntot=0;
 	int R=qnm->R, l;
-	lvtab* T = lvtab_new(m,R);
+	int full = mom_mixed_think(qnm); /* else the mdecrease descent is exact */
+	lvtab* T = full ? lvtab_new(m,R) : NULL;
 	mpq_vec_t *low  = (mpq_vec_t*)calloc(R>1?R-1:1,sizeof(mpq_vec_t)); /* levels 0..r-2 */
 	mpq_vec_t *lowr = (mpq_vec_t*)calloc(R>1?R-1:1,sizeof(mpq_vec_t)); /* their snapshot at N-1_r */
 	
@@ -216,7 +217,7 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 			 * taken from the snapshot at N-1_{r-1} */
 			{
 				int cardGk_old = nck(m+r-2,r-1)*(r-1);
-				for (l=0;l<=r-2;l++) {
+				for (l=0;full && l<=r-2;l++) {
 					mpq_t* old  = (l == r-2) ? g  + cardGk_old : low[l];
 					mpq_t* snap = (l == r-2) ? gr + cardGk_old : lowr[l];
 					mpq_vec_t nw = (mpq_vec_t)mpq_vec(T->card[l]*r,0,1);
@@ -277,7 +278,7 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 			/* if this is the last iteration, save gr */
 			if(n[r-1]==qnm->N[r-1]) {
 				mpq_vecdup(gr,g,cardGk+cardG);
-				for (l=0;l<=r-2;l++) mpq_vecdup(lowr[l],low[l],T->card[l]*r);
+				for (l=0;full && l<=r-2;l++) mpq_vecdup(lowr[l],low[l],T->card[l]*r);
 			}
 
 			/* compute G=B2r*gr/nr */
@@ -285,7 +286,7 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 			mpq_mspvecmul(G,A->B2r,g);
 			mpq_t ninv; mpq_init(ninv); mpq_set_si(ninv,1,n[r-1]); 
 			for(t=0;t<cardG;t++) mpq_mul(G[t],ninv,G[t]);
-			lower_step(qnm,T,r,low,g+cardGk,n[r-1]);
+			if (full) lower_step(qnm,T,r,low,g+cardGk,n[r-1]);
 
 			/* compute b=B1r*gr - A12*G */
 			mpq_mspvecmul(b,A->B1r,g);
@@ -315,6 +316,8 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output && !bounds_output) {
 		printf("\n");
 	}
+	if (!full) mdecrease(qnm,G,Gk,g,gr,verbose_output,log_output,normconst_output,normconst_g_output,throughput_output,queue_output,debug_output,bounds_output,scale_factor);
+	else
 	/* read levels 0 and 1 at N into the layout perfindices expects:
 	 * G = [G(N), G(N-1_1..R)], Gk[k] = [G^{+k}(N), G^{+k}(N-1_1..R)] */
 	{
@@ -335,7 +338,7 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 		perfindices(qnm,G0,G1,verbose_output,log_output,normconst_output,normconst_g_output,throughput_output,queue_output,debug_output,bounds_output,scale_factor);
 		lv_free(G0,R+1); lv_free(G1,m*(R+1));
 	}
-	for (l=0;l<R-1;l++) { lv_free(low[l],T->card[l]*R); lv_free(lowr[l],T->card[l]*R); }
+	if (full) for (l=0;l<R-1;l++) { lv_free(low[l],T->card[l]*R); lv_free(lowr[l],T->card[l]*R); }
 	free(low); free(lowr);
 	lvtab_free(T);
 	mpq_clear(tmp);

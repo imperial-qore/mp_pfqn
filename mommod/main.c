@@ -104,10 +104,12 @@ static int solve_mod(qnmodel* qnm, zp_t p, zp_t* res)
 	int rc = 0;
 	int R=qnm->R, l;
 	lvtab* T=NULL;
+	int full;
 	zp_vec_t *low=NULL, *lowr=NULL; /* levels 0..r-2 and their snapshot at N-1_r */
 
 	zp_setmod(p);
-	T = lvtab_new(m,R);
+	full = mom_mixed_think(qnm); /* else the mdecrease descent is exact */
+	T = full ? lvtab_new(m,R) : NULL;
 	low  = (zp_vec_t*)calloc(R>1?R-1:1,sizeof(zp_vec_t));
 	lowr = (zp_vec_t*)calloc(R>1?R-1:1,sizeof(zp_vec_t));
 
@@ -139,7 +141,7 @@ static int solve_mod(qnmodel* qnm, zp_t p, zp_t* res)
 			 * taken from the snapshot at N-1_{r-1} */
 			{
 				int cardGk_old = nck(m+r-2,r-1)*(r-1);
-				for (l=0;l<=r-2;l++) {
+				for (l=0;full && l<=r-2;l++) {
 					zp_t* old  = (l == r-2) ? g  + cardGk_old : low[l];
 					zp_t* snap = (l == r-2) ? gr + cardGk_old : lowr[l];
 					zp_vec_t nw = zp_vec(T->card[l]*r,0,1);
@@ -177,14 +179,14 @@ static int solve_mod(qnmodel* qnm, zp_t p, zp_t* res)
 		{
 			if(n[r-1]==qnm->N[r-1]) {
 				zp_vecdup(gr,g,cardGk+cardG);
-				for (l=0;l<=r-2;l++) zp_vecdup(lowr[l],low[l],T->card[l]*r);
+				for (l=0;full && l<=r-2;l++) zp_vecdup(lowr[l],low[l],T->card[l]*r);
 			}
 
 			zp_mspvecmul(G,A->B2r,g);
 			{
 				zp_t ninv = zp_invv(zp_from_si(n[r-1]));
 				for(t=0;t<cardG;t++) G[t] = zp_mulv(ninv, G[t]);
-				lower_step(qnm,T,r,low,g+cardGk,ninv);
+				if (full) lower_step(qnm,T,r,low,g+cardGk,ninv);
 			}
 
 			zp_mspvecmul(b,A->B1r,g);
@@ -202,6 +204,8 @@ static int solve_mod(qnmodel* qnm, zp_t p, zp_t* res)
 	}
 
 	if (ZP_SINGULAR) { rc = -1; goto cleanup; }
+	if (!full) mdecrease(qnm,G,Gk,g,gr,res);
+	else
 	/* read levels 0 and 1 at N into the layout exportres expects:
 	 * G = [G(N), G(N-1_1..R)], Gk[k] = [G^{+k}(N), G^{+k}(N-1_1..R)] */
 	{

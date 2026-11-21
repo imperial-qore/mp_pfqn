@@ -59,6 +59,24 @@ static inline lvtab* lvtab_new(int m, int R)
 	return T;
 }
 
+/* The full basis is only needed when think times are mixed.  The
+ * mdecrease downward pass is exact otherwise: with every Z_s > 0 it uses
+ * the class-s population constraint divided by Z_s, and with every
+ * Z_s = 0 its identity (|n|+sum m')G(n) = sum_j m'_j G^{+1_j}(n) holds
+ * because there is no delay term.  It only fails when a Z_s = 0 class
+ * coexists with a Z > 0 class, where that identity gains a term at N-2.
+ * The descent avoids carrying levels 0..r-2 on every population step
+ * (measured 0-15% of the run, growing with R/M), so solvers use it
+ * whenever this returns 0. */
+static inline int mom_mixed_think(const qnmodel* qn)
+{
+	int r, zero = 0, pos = 0;
+	for (r = 0; r < qn->R; r++) {
+		if (mpz_sgn(qn->Z[r]) == 0) zero = 1; else pos = 1;
+	}
+	return zero && pos;
+}
+
 static inline void lvtab_free(lvtab* T)
 {
 	int l, i;

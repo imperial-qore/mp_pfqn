@@ -12,6 +12,7 @@ struct rusage ruse;
 double t0, t1;
 
 extern void gmva(mpq_t G, mpz_t** dem, int nq, int* pop, mpz_t* Z, int r);
+extern void gmom_descend(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM, mpq_vec_t* Gout, mpq_vec_t* Gkout);
 extern void gmom_measures(qnmodel* qn, mpq_vec_t G, mpq_vec_t Gk, int oe, int og, int ol, int ot, int oq, int* cperm, mpz_t scale_factor);
 
 /* ---- small dense helpers over rectangular mpq matrices ---------------- */
@@ -311,7 +312,8 @@ int main(int argc, char** argv)
 	int* lenl1 = (int*) calloc(M+1, sizeof(int));
 	mpq_vec_t grM = NULL; int lengrM = 0;   /* vl[M] at N-1_R */
 	mpq_vec_t gr1M = NULL; int lengr1M = 0; /* vl1[M] at N-1_R */
-	lvtab* T = lvtab_new(M, R);
+	int full = mom_mixed_think(qn); /* else the descent (gmom_descend) is exact */
+	lvtab* T = full ? lvtab_new(M, R) : NULL;
 	mpq_vec_t* low  = (mpq_vec_t*) calloc(R, sizeof(mpq_vec_t)); /* levels 0..r-3, m=M */
 	mpq_vec_t* lowr = (mpq_vec_t*) calloc(R, sizeof(mpq_vec_t)); /* same at N-1_R */
 
@@ -355,12 +357,14 @@ int main(int argc, char** argv)
 			 * errors on Z<>0); the exact fill is correct for all Z and
 			 * costs only R-1 convolutions, off the population sweep. */
 			for (m = 1; m <= M; m++) fill_level_all(vl, vl1, lenl, lenl1, L, m, r, nvec, Z);
-			int ll;
-			for (ll = 0; ll <= r-3; ll++) {
-				vfree(low[ll], T->card[ll]*(r-1));
-				low[ll] = vnew(T->card[ll]*r);
+			if (full) {
+				int ll;
+				for (ll = 0; ll <= r-3; ll++) {
+					vfree(low[ll], T->card[ll]*(r-1));
+					low[ll] = vnew(T->card[ll]*r);
+				}
+				fill_low(T, low, L, r, nvec, Z);
 			}
-			fill_low(T, low, L, r, nvec, Z);
 		}
 
 		/* population sweep of class r */
@@ -373,12 +377,12 @@ int main(int argc, char** argv)
 				vfree(gr1M, lengr1M); lengr1M = lenl1[M]; gr1M = vnew(lenl1[M]);
 				fp_copy_vec(gr1M, vl1[M], lenl1[M]);
 				int ll;
-				for (ll = 0; ll <= R-3; ll++) {
+				for (ll = 0; full && ll <= R-3; ll++) {
 					lowr[ll] = vnew(T->card[ll]*R);
 					fp_copy_vec(lowr[ll], low[ll], T->card[ll]*R);
 				}
 			}
-			lower_step(T, qn->mi, L, Z, r, low, vl1[M], nr);
+			if (full) lower_step(T, qn->mi, L, Z, r, low, vl1[M], nr);
 			fill_level1(vl, vl1, lenl, lenl1, L, r, nvec, Z);
 			for (m = 2; m <= M; m++) {
 				int colA = LS[m]->colA, colC = LS[m]->colC, colD = LS[m]->colD, nrows = LS[m]->nrows;
@@ -439,10 +443,15 @@ int main(int argc, char** argv)
 		int ll;
 		if (!grM)  { lengrM  = lenl[M];  grM  = vnew(lenl[M]); }
 		if (!gr1M) { lengr1M = lenl1[M]; gr1M = vnew(lenl1[M]); }
-		for (ll = 0; ll <= R-3; ll++) if (!lowr[ll]) lowr[ll] = vnew(T->card[ll]*R);
+		for (ll = 0; full && ll <= R-3; ll++) if (!lowr[ll]) lowr[ll] = vnew(T->card[ll]*R);
 	}
 	if (!grM || !gr1M) { fprintf(stderr, "gmom: internal error, N-1_R basis not captured\n"); return 2; }
-	{
+	if (!full) {
+		mpq_vec_t G0, G1;
+		gmom_descend(qn, vl[M], grM, &G0, &G1);
+		gmom_measures(qn, G0, G1, out_e, out_g, out_l, out_t, out_q, cperm, scale_factor);
+		vfree(G0, R+1); vfree(G1, M*(R+1));
+	} else {
 		/* level l lives in vl[M] (l=R-1), vl1[M] (l=R-2) or low[l] */
 		mpq_vec_t L0 = (R == 2) ? vl1[M] : low[0];
 		mpq_vec_t S0 = (R == 2) ? gr1M   : lowr[0];
@@ -461,7 +470,7 @@ int main(int argc, char** argv)
 	}
 	{
 		int ll;
-		for (ll = 0; ll <= R-3; ll++) { vfree(low[ll], T->card[ll]*R); vfree(lowr[ll], T->card[ll]*R); }
+		for (ll = 0; full && ll <= R-3; ll++) { vfree(low[ll], T->card[ll]*R); vfree(lowr[ll], T->card[ll]*R); }
 		free(low); free(lowr);
 		vfree(gr1M, lengr1M);
 		lvtab_free(T);

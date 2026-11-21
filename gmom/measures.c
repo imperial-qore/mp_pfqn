@@ -5,13 +5,107 @@
 #include <gmpla.h>
 #include "gmom.h"
 
+/* Downward replica pass of the original MoM (mom/mdecrease.c), started at
+ * level R-1 because gmom's basis is one level more compact.  vlM is the
+ * level-(R-1) basis of the full model, vlM[t*R+s] = G(M+delta_t, N-1_s),
+ * and grM the same one population step back, so grM[t*R] = G(M+delta_t,
+ * N-1_R).  Returns level 0 in *Gout and level 1 in *Gkout, in the layout
+ * gmom_measures takes.  Exact only when think times are not mixed (see
+ * mom_mixed_think in util/lvtab.h); main.c uses the full basis otherwise. */
+void gmom_descend(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM, mpq_vec_t* Gout, mpq_vec_t* Gkout)
+{
+	int M = qn->M, R = qn->R;
+	mpz_t** L = qn->L; mpz_t* Z = qn->Z; int* N = qn->N; int* mi = qn->mi;
+	int t, i, s, l, j;
+	mpq_t tmp, tmp2; mpq_init(tmp); mpq_init(tmp2);
+
+	int Ntot = 0; for (s = 0; s < R; s++) Ntot += N[s];
+
+
+	/* level-(R-1) Gk with R+1 components */
+	int L1 = R - 1;
+	int nc = nck(M + L1 - 1, L1);
+	mpq_vec_t Gk = mpq_vec(nc * (R+1), 0, 1);
+	for (t = 0; t < nc; t++) {
+		mpq_set(Gk[t*(R+1) + R], grM[t*R]);
+		for (s = 0; s < R; s++) mpq_set(Gk[t*(R+1) + s], vlM[t*R + s]);
+	}
+
+	mpq_vec_t G = NULL;
+	for (l = L1; l >= 1; l--) {
+		int ncl  = nck(M + l - 1, l);      /* combos at level l   */
+		int ncl1 = nck(M + l - 2, l - 1);  /* combos at level l-1 */
+		G = mpq_vec(ncl1 * (R+1), 0, 1);
+		int** Ik = sortbynnzpos(multichoose(M, l),   ncl,  M);
+		int** I  = sortbynnzpos(multichoose(M, l-1), ncl1, M);
+		for (i = 0; i < ncl1; i++) {
+			/* CE: peel a replica off queue 0 */
+			I[i][0]++;
+			t = (int) int_matmatchrow(Ik, ncl, M, I[i]);
+			I[i][0]--;
+			mpq_set(G[i*(R+1)], Gk[t*(R+1)]);
+			for (s = 0; s < R; s++) {
+				mpq_set_z(tmp, L[0][s]);
+				mpq_mul(tmp, tmp, Gk[t*(R+1) + 1 + s]);
+				mpq_sub(G[i*(R+1)], G[i*(R+1)], tmp);
+			}
+			/* PC: class decrements */
+			for (s = 1; s <= R; s++) {
+				if (mpz_cmp_ui(Z[s-1], 0) == 0) {
+					mpq_set_si(G[i*(R+1) + s], 0, 1);
+					int msum = 0;
+					for (j = 0; j < M; j++) {
+						I[i][j]++;
+						t = (int) int_matmatchrow(Ik, ncl, M, I[i]);
+						I[i][j]--;
+						mpq_set_si(tmp, mi[j] + I[i][j], 1);
+						mpq_mul(tmp, tmp, Gk[t*(R+1) + s]);
+						mpq_add(G[i*(R+1) + s], G[i*(R+1) + s], tmp);
+						msum += mi[j];
+					}
+					for (j = 0; j < M; j++) msum += I[i][j];
+					mpq_set_si(tmp, Ntot + msum - 1, 1);
+					mpq_div(G[i*(R+1) + s], G[i*(R+1) + s], tmp);
+				} else {
+					mpq_set_si(G[i*(R+1) + s], N[s-1], 1);
+					mpq_set_z(tmp, Z[s-1]);
+					mpq_div(G[i*(R+1) + s], G[i*(R+1) + s], tmp);
+					mpq_mul(G[i*(R+1) + s], G[i*(R+1) + s], G[i*(R+1)]);
+					for (j = 0; j < M; j++) {
+						I[i][j]++;
+						t = (int) int_matmatchrow(Ik, ncl, M, I[i]);
+						I[i][j]--;
+						mpq_set_z(tmp, L[j][s-1]);
+						mpq_set_si(tmp2, mi[j] + I[i][j], 1);
+						mpq_mul(tmp2, tmp2, tmp);
+						mpq_set_z(tmp, Z[s-1]);
+						mpq_div(tmp2, tmp2, tmp);
+						mpq_mul(tmp2, tmp2, Gk[t*(R+1) + s]);
+						mpq_sub(G[i*(R+1) + s], G[i*(R+1) + s], tmp2);
+					}
+				}
+			}
+		}
+		free(Ik); free(I);
+		if (l > 1) {
+			mpq_vecdup(Gk, G, ncl1 * (R+1));
+			for (i = 0; i < ncl1*(R+1)+1; i++) mpq_clear(G[i]);
+			free(G);
+		}
+	}
+	/* G is level-0: G[0]=G(N), G[s]=G(N-1_s).  Gk is level-1 (single
+	 * replica per queue): Gk[(k-1)*(R+1)+r] = G(M+1_k, N-1_r). */
+
+	mpq_clear(tmp); mpq_clear(tmp2);
+	*Gout = G; *Gkout = Gk;
+}
+
 /* Print G(N), throughputs X_r and queue lengths Q_kr from levels 0 and 1
  * of the full gmom basis at N, in the layout
  *   G[0] = G(N), G[s] = G(N-1_s),
  *   Gk[(k-1)*(R+1)+s] = G(M+1_k, N-1_s)   (s=0 is N).
- * main.c carries the lower levels through the recursion (util/lvtab.h);
- * the replica descent that used to rebuild them here used, for Z_s=0, an
- * identity that fails when other classes have positive think times. */
+ * main.c gets them from gmom_descend, or, when think times are mixed,
+ * from the lower levels carried through the recursion (util/lvtab.h). */
 void gmom_measures(qnmodel* qn, mpq_vec_t G, mpq_vec_t Gk,
                    int out_e, int out_g, int out_l, int out_t, int out_q, int* cperm, mpz_t scale_factor)
 {
