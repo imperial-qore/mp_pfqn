@@ -7,6 +7,7 @@
 #include <time.h>
 #include <fpla.h>
 #include "momf.h"
+#include "lvtab.h"
 
 /* Define global variables from profiling.h */
 int AORSCTR;
@@ -138,6 +139,45 @@ void apply_perturbation_to_model(qnmodel* qnm, int perturbation_digit, int pertu
 	free(perm);
 }
 
+/* Lower replica levels 0..r-2 of the full MoM basis: see util/lvtab.h. */
+static void lv_free(fp_vec_t v, long n)
+{
+	long t;
+	if (!v) return;
+	for (t=0;t<=n;t++) fp_clear(v[t]);
+	free(v);
+}
+
+/* Advance levels 0..r-2 from population n-1_r to n by the class-r
+ * population constraint.  glow points at the old level r-1 (second part
+ * of g), which must not yet be overwritten. */
+static void lower_step(qnmodel* qnm, lvtab* T, int r, fp_vec_t* low, fp_t* glow, long nr)
+{
+	int l, i, j, s, m = T->m;
+	fp_t acc, c, w, zr;
+	fp_init(acc); fp_init(c); fp_init(w); fp_init(zr);
+	fp_set_z(zr, qnm->Z[r-1]);
+	for (l=0;l<=r-2;l++) {
+		fp_t* above = (l+1 == r-1) ? glow : low[l+1];
+		for (i=0;i<T->card[l];i++) {
+			for (s=0;s<r;s++) {
+				fp_mul(acc, zr, low[l][i*r+s]);
+				for (j=0;j<m;j++) {
+					if (mpz_sgn(qnm->L[j][r-1]) == 0) continue;
+					fp_set_z(c, qnm->L[j][r-1]);
+					fp_set_si(w, qnm->mi[j] + T->cb[l][i][j], 1);
+					fp_mul(c, c, w);
+					fp_mul(w, c, above[T->up[l][i*m+j]*r+s]);
+					fp_add(acc, acc, w);
+				}
+				fp_set_si(w, nr, 1);
+				fp_div(low[l][i*r+s], acc, w);
+			}
+		}
+	}
+	fp_clear(acc); fp_clear(c); fp_clear(w); fp_clear(zr);
+}
+
 int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool log_output, 
                 bool normconst_output, bool normconst_g_output, bool throughput_output, 
                 bool queue_output, bool debug_output, bool bounds_output, 
@@ -162,6 +202,10 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 	n=(int*)int_vec(qnm->R,0); /* current population vector */
 	int m=qnm->M;
 	Ntot=0;
+	int R=qnm->R, l;
+	lvtab* T = lvtab_new(m,R);
+	fp_vec_t *low  = (fp_vec_t*)calloc(R>1?R-1:1,sizeof(fp_vec_t)); /* levels 0..r-2 */
+	fp_vec_t *lowr = (fp_vec_t*)calloc(R>1?R-1:1,sizeof(fp_vec_t)); /* their snapshot at N-1_r */
 	
 	/* solve the linear system for all classes */
 	for(r=1;r<=qnm->R;r++)
@@ -199,6 +243,24 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 				return -1; // Signal singular matrix
 			}
 			setup_elapsed = CPUTIME - setup_start;
+			/* seed levels 0..r-2 for class r: entries for classes
+			 * 1..r-2 carry over, the class r-1 entry is G(n-1_{r-1})
+			 * taken from the snapshot at N-1_{r-1} */
+			{
+				int cardGk_old = nck(m+r-2,r-1)*(r-1);
+				for (l=0;l<=r-2;l++) {
+					fp_t* old  = (l == r-2) ? g  + cardGk_old : low[l];
+					fp_t* snap = (l == r-2) ? gr + cardGk_old : lowr[l];
+					fp_vec_t nw = (fp_vec_t)fp_vec(T->card[l]*r,0,1);
+					for (i=0;i<T->card[l];i++) {
+						for (s=0;s<=r-2;s++) fp_set(nw[i*r+s], old[i*(r-1)+s]);
+						fp_set(nw[i*r+r-1], snap[i*(r-1)]);
+					}
+					if (l < r-2) { lv_free(low[l],T->card[l]*(r-1)); lv_free(lowr[l],T->card[l]*(r-1)); }
+					low[l]  = nw;
+					lowr[l] = (fp_vec_t)fp_vec(T->card[l]*r,0,1); /* stays 0 if N_r=0 */
+				}
+			}
 			for (t=0;t<nck(m+r-2,r-1)*(r-1);t++)
 			{
 				fp_clear(b[t]);
@@ -234,8 +296,6 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 			gr=(fp_vec_t)fp_vec(cardGk+cardG,0,1);
 			copy_Gk_in_g(Gk,g);
 			copy_G_in_g(G,g);
-			/* annihilate unused normalizing constants (classes 0..r-2 only; class r-1 has no G component) */
-			for(s=0;s<r-1;s++) if(mpz_cmp_ui(qnm->Z[s], 0) == 0) for(t=0;t<nck(m+r-2,r-1);t++) fp_set_si(g[cardGk+t*r+1+s],0,1);
 		}
 		/* start solving the sequence of linear systems */
 		for (n[r-1]=1;n[r-1]<=qnm->N[r-1];n[r-1]++) /* for all population of class r */ 
@@ -247,13 +307,17 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 			}
 			/** at this point g is equal to gr **/
 			/* if this is the last iteration, save gr */
-			if(n[r-1]==qnm->N[r-1]) fp_vecdup(gr,g,cardGk+cardG);
+			if(n[r-1]==qnm->N[r-1]) {
+				fp_vecdup(gr,g,cardGk+cardG);
+				for (l=0;l<=r-2;l++) fp_vecdup(lowr[l],low[l],T->card[l]*r);
+			}
 
 			/* compute G=B2r*gr/nr */
 
 			fp_mspvecmul(G,A->B2r,g);
 			fp_t ninv; fp_init(ninv); fp_set_si(ninv,1,n[r-1]); 
 			for(t=0;t<cardG;t++) fp_mul(G[t],ninv,G[t]);
+			lower_step(qnm,T,r,low,g+cardGk,n[r-1]);
 
 			/* compute b=B1r*gr - A12*G */
 			fp_mspvecmul(b,A->B1r,g);
@@ -280,8 +344,6 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 			copy_Gk_in_g(Gk,g);
 			copy_G_in_g(G,g);
 			free_Gk();
-			/* annihilate unused normalizing constants (classes 0..r-2 only; class r-1 has no G component) */
-			for(s=0;s<r-1;s++) if(mpz_cmp_ui(qnm->Z[s], 0) == 0) for(t=0;t<nck(m+r-2,r-1);t++) fp_set_si(g[cardGk+t*r+1+s],0,1);
 			/* G,g and gr are not freed because we need them at the next cycle */	
 		}
 		n[r-1]=qnm->N[r-1];
@@ -295,7 +357,29 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output && !bounds_output) {
 		printf("\n");
 	}
-	mdecrease(qnm,G,Gk,g,gr,verbose_output,log_output,normconst_output,normconst_g_output,throughput_output,queue_output,debug_output,bounds_output,scale_factor);
+	/* read levels 0 and 1 at N into the layout perfindices expects:
+	 * G = [G(N), G(N-1_1..R)], Gk[k] = [G^{+k}(N), G^{+k}(N-1_1..R)] */
+	{
+		fp_t *L0, *S0, *L1, *S1;
+		int cardGkR = nck(m+R-1,R)*R;
+		L0 = (R >= 2) ? low[0]  : g + cardGkR;
+		S0 = (R >= 2) ? lowr[0] : gr + cardGkR;
+		L1 = (R >= 3) ? low[1]  : (R == 2 ? g + cardGkR  : g);
+		S1 = (R >= 3) ? lowr[1] : (R == 2 ? gr + cardGkR : gr);
+		fp_vec_t G0 = (fp_vec_t)fp_vec(R+1,0,1);
+		fp_vec_t G1 = (fp_vec_t)fp_vec(m*(R+1),0,1);
+		for (s=0;s<R;s++) fp_set(G0[s], L0[s]);
+		fp_set(G0[R], S0[0]);
+		for (k=0;k<m;k++) {
+			for (s=0;s<R;s++) fp_set(G1[k*(R+1)+s], L1[k*R+s]);
+			fp_set(G1[k*(R+1)+R], S1[k*R]);
+		}
+		perfindices(qnm,G0,G1,verbose_output,log_output,normconst_output,normconst_g_output,throughput_output,queue_output,debug_output,bounds_output,scale_factor);
+		lv_free(G0,R+1); lv_free(G1,m*(R+1));
+	}
+	for (l=0;l<R-1;l++) { lv_free(low[l],T->card[l]*R); lv_free(lowr[l],T->card[l]*R); }
+	free(low); free(lowr);
+	lvtab_free(T);
 	fp_clear(tmp);
 	fp_clear(tmp2);
 	

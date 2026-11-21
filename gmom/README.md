@@ -28,8 +28,8 @@ rational arithmetic by normal equations `(A^T A) x = A^T b` (eq 8 of the
 paper), matching how the reference and `bin/procomom` solve it. The result
 is the moment **basis** `V{M,l}`, from which `gmom` recovers the plain
 normalizing constant `G(N)`, throughputs `X_r` and mean queue lengths
-`Q_kr` by the mdecrease replica-descent (the `mom/mdecrease.c` post-step,
-started one level lower because the generalized basis is more compact).
+`Q_kr` from replica levels 0 and 1 of the full basis, which are carried
+through the recursion (see "Performance measures" below).
 
 ## Options
 
@@ -102,15 +102,22 @@ lcfs_3class   R=3   all 12 basis entries match
   sweep, so the recursion still carries the `O(N)` cost. With the shift,
   `09_asymmetric` (Z != 0) fails; with the exact init it validates.
 
-## Performance measures (mdecrease)
+## Performance measures (full basis)
 
-`measures.c` recovers `G(N)`, `X_r` and `Q_kr` from the basis by the
-replica-descent of the original MoM (a port of `mom/mdecrease.c` +
-`perfindices`). Two adaptations: the descent starts at level `R-1` rather
-than `R` (gmom's basis is one level more compact), and the class-`R`
-decrement `G(N-1_R)` that the descent needs is supplied by capturing the
-top basis one population step back (`grM`, the analogue of mom's `gr`).
-Validated bit-for-bit against `bin/ca`.
+The two slots hold replica levels `r-1` (`vl`) and `r-2` (`vl1`). For the
+full `M`-queue model, `main.c` also carries levels `0..r-3` (Casale,
+Perf. Eval. 2011, Def. 1 and App. C; tables in `util/lvtab.h`). They are
+filled by exact convolution when class `r` starts, like the two slots, and
+advanced along the class-`r` sweep by the class-`r` population constraint,
+which holds for any think time. The class-`R` decrement `G(N-1_R)` comes
+from snapshots of all levels one population step back (`grM`, `gr1M`,
+`lowr`). `measures.c` then reads `G(N)`, `X_r` and `Q_kr` directly from
+levels 0 and 1.
+
+This replaces the earlier `mdecrease` replica-descent, whose `Z_s=0` branch
+used an identity that holds only when no class has a positive think time,
+so it was wrong for models mixing zero and positive think times. Validated
+bit-for-bit against `bin/ca`.
 
 ## Files
 
@@ -119,6 +126,6 @@ Validated bit-for-bit against `bin/ca`.
 - `setup1.c` - the six per-level matrices `A,B,C,D,E,F` (port of
   `setup1.m`), with the overdetermined row count computed.
 - `main.c` - the `mbmom1` recursion, normal-equations solve, exact
-  new-class init, `grM` capture, CLI and validation harness.
-- `measures.c` - mdecrease replica-descent and perfindices for
-  `G(N)`/`X`/`Q`.
+  new-class init, lower-level carry and `N-1_R` snapshots, CLI and
+  validation harness.
+- `measures.c` - `G(N)`/`X`/`Q` output from levels 0 and 1.

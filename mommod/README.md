@@ -30,8 +30,8 @@ Those of `mom` (`-l -e -g -t -q`), plus:
 Plain Wang reconstruction splits the modulus evenly between numerator and
 denominator, so it needs `2B` bits of modulus to recover a `B`-bit value
 even when the denominator is only a few bits wide. Every quantity
-exported here is of that kind: `mdecrease` divides only by populations,
-station multiplicities and think times. Bounding the denominator recovers
+exported here is of that kind: the recursion divides only by class
+populations and the pivots of the population-independent diagonal blocks. Bounding the denominator recovers
 the value from about `B` bits and therefore from **half as many primes**,
 which is the largest single speedup available to this solver.
 
@@ -64,8 +64,15 @@ made deliberately by the caller rather than silently.
 ## Design
 
 - **`zpla/`** is a linear-algebra layer over `Z/p` mirroring the `gmpla`
-  `mpq_*` API, so `setupls.c`, `blocksolve.c` and `mdecrease.c` are
-  transliterations of the `mom` sources rather than reimplementations.
+  `mpq_*` API, so `setupls.c` and `blocksolve.c` are transliterations of
+  the `mom` sources rather than reimplementations.
+- **Full basis, no downward pass.** Replica levels `0..r-2` are carried
+  through the class-`r` recursion alongside the two top levels, each
+  advanced by the class-`r` population constraint (Casale, Perf. Eval. 2011,
+  Def. 1 and App. C). `G(N)`, `G(N-1_s)` and `G^{+k}` are read off levels 0
+  and 1 at the end. This replaces `mdecrease`, whose `Z_s=0` branch used an
+  identity that only holds when no class has a positive think time, so it
+  was wrong for models mixing zero and positive think times.
   Residues are held in **Montgomery form**: the inner-loop multiply is
   three 64x64 products instead of a 128-by-64 hardware division.
 - **Pivoting** in `zp_ludcmp` is by first nonzero. Over a finite field

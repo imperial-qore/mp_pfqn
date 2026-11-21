@@ -39,6 +39,7 @@
 #include <time.h>
 #include <zpla.h>
 #include "mommod.h"
+#include "lvtab.h"
 
 /* Number of consecutive primes that must reproduce the same reconstructed
  * rational before it is accepted.  One extra prime is the textbook
@@ -62,6 +63,32 @@ qnmodel* qnm;
 bool INTERACTIVE,RANDGEN,CANON,ZSCALE,DEBUG,VERBOSE;
 int VERBOSE_MOD = 0;
 
+/* Lower replica levels: see util/lvtab.h. */
+/* Advance levels 0..r-2 from population n-1_r to n.  glow points at the
+ * old level r-1 (second part of g), which must not yet be overwritten. */
+static void lower_step(qnmodel* qnm, lvtab* T, int r, zp_vec_t* low, zp_t* glow, zp_t ninv)
+{
+	int l, i, j, s, m = T->m;
+	zp_t zr = zp_from_z(qnm->Z[r-1]);
+	zp_t* Lr = (zp_t*)malloc(m*sizeof(zp_t));
+	for (j=0;j<m;j++) Lr[j] = zp_from_z(qnm->L[j][r-1]);
+	for (l=0;l<=r-2;l++) {
+		zp_t* above = (l+1 == r-1) ? glow : low[l+1];
+		for (i=0;i<T->card[l];i++) {
+			for (s=0;s<r;s++) {
+				zp_t acc = zp_mulv(zr, low[l][i*r+s]);
+				for (j=0;j<m;j++) {
+					if (Lr[j] == 0) continue;
+					zp_t c = zp_mulv(Lr[j], zp_from_si(qnm->mi[j] + T->cb[l][i][j]));
+					acc = zp_addv(acc, zp_mulv(c, above[T->up[l][i*m+j]*r+s]));
+				}
+				low[l][i*r+s] = zp_mulv(ninv, acc);
+			}
+		}
+	}
+	free(Lr);
+}
+
 /* ------------------------------------------------------------------ */
 /* One modular image of the whole MoM recursion.                       */
 /* Returns 0 on success, -1 if the prime is unlucky (or C is singular). */
@@ -75,8 +102,14 @@ static int solve_mod(qnmodel* qnm, zp_t p, zp_t* res)
 	LS* A=NULL;
 	int m=qnm->M;
 	int rc = 0;
+	int R=qnm->R, l;
+	lvtab* T=NULL;
+	zp_vec_t *low=NULL, *lowr=NULL; /* levels 0..r-2 and their snapshot at N-1_r */
 
 	zp_setmod(p);
+	T = lvtab_new(m,R);
+	low  = (zp_vec_t*)calloc(R>1?R-1:1,sizeof(zp_vec_t));
+	lowr = (zp_vec_t*)calloc(R>1?R-1:1,sizeof(zp_vec_t));
 
 	n=(int*)int_vec(qnm->R,0);
 
@@ -101,6 +134,24 @@ static int solve_mod(qnmodel* qnm, zp_t p, zp_t* res)
 			freels(A);
 			A = setupls(qnm->L,n,qnm->Z,qnm->mi,m,r);
 			if (A == NULL) { rc = -1; goto cleanup; }
+			/* seed levels 0..r-2 for class r: entries for classes
+			 * 1..r-2 carry over, the class r-1 entry is G(n-1_{r-1})
+			 * taken from the snapshot at N-1_{r-1} */
+			{
+				int cardGk_old = nck(m+r-2,r-1)*(r-1);
+				for (l=0;l<=r-2;l++) {
+					zp_t* old  = (l == r-2) ? g  + cardGk_old : low[l];
+					zp_t* snap = (l == r-2) ? gr + cardGk_old : lowr[l];
+					zp_vec_t nw = zp_vec(T->card[l]*r,0,1);
+					for (i=0;i<T->card[l];i++) {
+						for (s=0;s<=r-2;s++) nw[i*r+s] = old[i*(r-1)+s];
+						nw[i*r+r-1] = snap[i*(r-1)];
+					}
+					if (l < r-2) { zp_vecfree(low[l]); zp_vecfree(lowr[l]); }
+					low[l]  = nw;
+					lowr[l] = zp_vec(T->card[l]*r,0,1); /* stays 0 if N_r=0 */
+				}
+			}
 			zp_vecfree(b); zp_vecfree(b2); zp_vecfree(G);
 			b  = zp_vec(cardGk,0,1);
 			b2 = zp_vec(cardGk,0,1);
@@ -120,18 +171,20 @@ static int solve_mod(qnmodel* qnm, zp_t p, zp_t* res)
 			for(t=0;t<cardGk;t++) g[t] = Gk[t];
 			for(t=0;t<cardG;t++)  g[cardGk+t] = G[t];
 			zp_vecfree(Gk); Gk=NULL;
-			for(s=0;s<r-1;s++) if(mpz_cmp_ui(qnm->Z[s],0)==0)
-				for(t=0;t<nck(m+r-2,r-1);t++) g[cardGk+t*r+1+s]=0;
 		}
 
 		for (n[r-1]=1;n[r-1]<=qnm->N[r-1];n[r-1]++)
 		{
-			if(n[r-1]==qnm->N[r-1]) zp_vecdup(gr,g,cardGk+cardG);
+			if(n[r-1]==qnm->N[r-1]) {
+				zp_vecdup(gr,g,cardGk+cardG);
+				for (l=0;l<=r-2;l++) zp_vecdup(lowr[l],low[l],T->card[l]*r);
+			}
 
 			zp_mspvecmul(G,A->B2r,g);
 			{
 				zp_t ninv = zp_invv(zp_from_si(n[r-1]));
 				for(t=0;t<cardG;t++) G[t] = zp_mulv(ninv, G[t]);
+				lower_step(qnm,T,r,low,g+cardGk,ninv);
 			}
 
 			zp_mspvecmul(b,A->B1r,g);
@@ -144,14 +197,31 @@ static int solve_mod(qnmodel* qnm, zp_t p, zp_t* res)
 			for(t=0;t<cardGk;t++) g[t] = Gk[t];
 			for(t=0;t<cardG;t++)  g[cardGk+t] = G[t];
 			zp_vecfree(Gk); Gk=NULL;
-			for(s=0;s<r-1;s++) if(mpz_cmp_ui(qnm->Z[s],0)==0)
-				for(t=0;t<nck(m+r-2,r-1);t++) g[cardGk+t*r+1+s]=0;
 		}
 		n[r-1]=qnm->N[r-1];
 	}
 
 	if (ZP_SINGULAR) { rc = -1; goto cleanup; }
-	mdecrease(qnm,G,Gk,g,gr,res);
+	/* read levels 0 and 1 at N into the layout exportres expects:
+	 * G = [G(N), G(N-1_1..R)], Gk[k] = [G^{+k}(N), G^{+k}(N-1_1..R)] */
+	{
+		zp_t *L0, *S0, *L1, *S1;
+		int cardGkR = nck(m+R-1,R)*R;
+		L0 = (R >= 2) ? low[0]  : g + cardGkR;
+		S0 = (R >= 2) ? lowr[0] : gr + cardGkR;
+		L1 = (R >= 3) ? low[1]  : (R == 2 ? g + cardGkR  : g);
+		S1 = (R >= 3) ? lowr[1] : (R == 2 ? gr + cardGkR : gr);
+		zp_vecfree(G); zp_vecfree(Gk);
+		G  = zp_vec(R+1,0,1);
+		Gk = zp_vec(m*(R+1),0,1);
+		for (s=0;s<R;s++) G[s] = L0[s];
+		G[R] = S0[0];
+		for (k=0;k<m;k++) {
+			for (s=0;s<R;s++) Gk[k*(R+1)+s] = L1[k*R+s];
+			Gk[k*(R+1)+R] = S1[k*R];
+		}
+		exportres(qnm,G,Gk,res);
+	}
 	if (ZP_SINGULAR) rc = -1;
 	else { int u; for (u=0;u<NRES(qnm);u++) res[u] = zp_from_mont(res[u]); }
 
@@ -160,6 +230,10 @@ cleanup:
 	freels(A);
 	zp_vecfree(b); zp_vecfree(b2); zp_vecfree(g); zp_vecfree(gr);
 	zp_vecfree(G); zp_vecfree(Gk);
+	if (low)  for (l=0;l<R-1;l++) zp_vecfree(low[l]);
+	if (lowr) for (l=0;l<R-1;l++) zp_vecfree(lowr[l]);
+	free(low); free(lowr);
+	lvtab_free(T);
 	free(n);
 	return rc;
 }
@@ -175,8 +249,9 @@ cleanup:
  * Plain Wang splits the modulus evenly between numerator and denominator,
  * so it needs 2B bits of modulus to recover a B-bit value even when the
  * denominator is only a few bits wide, which is the case for every
- * quantity exported here: mdecrease divides only by populations, station
- * multiplicities and think times.  Bounding the denominator recovers the
+ * quantity exported here: the recursion divides only by class
+ * populations (lower levels) and the pivots of the population-independent
+ * diagonal blocks.  Bounding the denominator recovers the
  * value from about B bits and so from roughly half as many primes.
  *
  * A bounded reconstruction that succeeds is not necessarily correct.
@@ -383,8 +458,8 @@ int main(int argc, char**argv)
 	nckinit(qnm->M+qnm->R-1,qnm->R);
 	nres = NRES(qnm);
 
-	/* Denominator bound for reconstruction.  mdecrease divides only by
-	 * populations, station multiplicities and think times, so 2^256 is
+	/* Denominator bound for reconstruction.  The recursion divides only by
+	 * class populations and the pivots of the diagonal blocks, so 2^256 is
 	 * generous by a wide margin; anything beyond it falls back to
 	 * unbounded reconstruction. */
 	mpz_init(DENBOUND);

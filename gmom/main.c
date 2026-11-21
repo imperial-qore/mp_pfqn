@@ -6,12 +6,13 @@
 #include <gmp.h>
 #include <gmpla.h>
 #include "gmom.h"
+#include "lvtab.h"
 
 struct rusage ruse;
 double t0, t1;
 
 extern void gmva(mpq_t G, mpz_t** dem, int nq, int* pop, mpz_t* Z, int r);
-extern void gmom_measures(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM, int oe, int og, int ol, int ot, int oq, int* cperm, mpz_t scale_factor);
+extern void gmom_measures(qnmodel* qn, mpq_vec_t G, mpq_vec_t Gk, int oe, int og, int ol, int ot, int oq, int* cperm, mpz_t scale_factor);
 
 /* ---- small dense helpers over rectangular mpq matrices ---------------- */
 
@@ -82,6 +83,54 @@ static void oner(int* pop, int* nvec, int r, int s)
 static mpq_vec_t vnew(int n) { return mpq_vec(n, 0, 1); }
 static void vfree(mpq_vec_t v, int n) { int i; if (!v) return; for (i = 0; i < n+1; i++) mpq_clear(v[i]); free(v); }
 static void fp_copy_vec(mpq_vec_t d, mpq_vec_t s, int n) { int i; for (i = 0; i < n; i++) mpq_set(d[i], s[i]); }
+
+/* Lower replica levels 0..r-3 of the full M-queue basis (see
+ * util/lvtab.h).  gmom's two slots hold levels r-1 (vl) and r-2 (vl1);
+ * the levels below are carried for m=M only, filled exactly by
+ * convolution when class r starts and advanced along the class-r sweep
+ * by the class-r population constraint
+ *   n_r G^{+d}(n) = Z_r G^{+d}(n-1_r) + sum_j L_jr (m_j+d_j) G^{+d+1_j}(n-1_r),
+ * which holds for any think time.  Levels 0 and 1 at N then give G(N),
+ * X and Q without a downward pass. */
+static void fill_low(lvtab* T, mpq_vec_t* low, mpz_t** L, int r, int* nvec, mpz_t* Z)
+{
+	int l, i, s, M = T->m;
+	int* pop = (int*) malloc(r * sizeof(int));
+	for (l = 0; l <= r-3; l++)
+		for (i = 0; i < T->card[l]; i++)
+			for (s = 0; s < r; s++) {
+				oner(pop, nvec, r, s);
+				base_G(low[l][i*r+s], L, M, T->cb[l][i], r, pop, Z);
+			}
+	free(pop);
+}
+
+/* advance levels 0..r-3 from n-1_r to n; above2 is the old level r-2 */
+static void lower_step(lvtab* T, int* mi, mpz_t** L, mpz_t* Z, int r, mpq_vec_t* low, mpq_vec_t above2, int nr)
+{
+	int l, i, j, s, M = T->m;
+	mpq_t acc, c, w, zr;
+	mpq_init(acc); mpq_init(c); mpq_init(w); mpq_init(zr);
+	mpq_set_z(zr, Z[r-1]);
+	for (l = 0; l <= r-3; l++) {
+		mpq_vec_t above = (l+1 == r-2) ? above2 : low[l+1];
+		for (i = 0; i < T->card[l]; i++)
+			for (s = 0; s < r; s++) {
+				mpq_mul(acc, zr, low[l][i*r+s]);
+				for (j = 0; j < M; j++) {
+					if (mpz_sgn(L[j][r-1]) == 0) continue;
+					mpq_set_z(c, L[j][r-1]);
+					mpq_set_si(w, mi[j] + T->cb[l][i][j], 1);
+					mpq_mul(c, c, w);
+					mpq_mul(w, c, above[T->up[l][i*M+j]*r+s]);
+					mpq_add(acc, acc, w);
+				}
+				mpq_set_si(w, nr, 1);
+				mpq_div(low[l][i*r+s], acc, w);
+			}
+	}
+	mpq_clear(acc); mpq_clear(c); mpq_clear(w); mpq_clear(zr);
+}
 
 
 /* Fill V[m] both slots directly from exact convolution at the current
@@ -260,7 +309,11 @@ int main(int argc, char** argv)
 	mpq_vec_t* vl1 = (mpq_vec_t*) calloc(M+1, sizeof(mpq_vec_t));
 	int* lenl  = (int*) calloc(M+1, sizeof(int));
 	int* lenl1 = (int*) calloc(M+1, sizeof(int));
-	mpq_vec_t grM = NULL; int lengrM = 0;   /* top basis at N-1_R, for mdecrease */
+	mpq_vec_t grM = NULL; int lengrM = 0;   /* vl[M] at N-1_R */
+	mpq_vec_t gr1M = NULL; int lengr1M = 0; /* vl1[M] at N-1_R */
+	lvtab* T = lvtab_new(M, R);
+	mpq_vec_t* low  = (mpq_vec_t*) calloc(R, sizeof(mpq_vec_t)); /* levels 0..r-3, m=M */
+	mpq_vec_t* lowr = (mpq_vec_t*) calloc(R, sizeof(mpq_vec_t)); /* same at N-1_R */
 
 	/* ================= class 1 initialisation (r=2) ================= */
 	nvec[0] = N[0];
@@ -302,6 +355,12 @@ int main(int argc, char** argv)
 			 * errors on Z<>0); the exact fill is correct for all Z and
 			 * costs only R-1 convolutions, off the population sweep. */
 			for (m = 1; m <= M; m++) fill_level_all(vl, vl1, lenl, lenl1, L, m, r, nvec, Z);
+			int ll;
+			for (ll = 0; ll <= r-3; ll++) {
+				vfree(low[ll], T->card[ll]*(r-1));
+				low[ll] = vnew(T->card[ll]*r);
+			}
+			fill_low(T, low, L, r, nvec, Z);
 		}
 
 		/* population sweep of class r */
@@ -311,7 +370,15 @@ int main(int argc, char** argv)
 			if (r == R && nr == N[R-1]) {
 				vfree(grM, lengrM); lengrM = lenl[M]; grM = vnew(lenl[M]);
 				fp_copy_vec(grM, vl[M], lenl[M]);
+				vfree(gr1M, lengr1M); lengr1M = lenl1[M]; gr1M = vnew(lenl1[M]);
+				fp_copy_vec(gr1M, vl1[M], lenl1[M]);
+				int ll;
+				for (ll = 0; ll <= R-3; ll++) {
+					lowr[ll] = vnew(T->card[ll]*R);
+					fp_copy_vec(lowr[ll], low[ll], T->card[ll]*R);
+				}
 			}
+			lower_step(T, qn->mi, L, Z, r, low, vl1[M], nr);
 			fill_level1(vl, vl1, lenl, lenl1, L, r, nvec, Z);
 			for (m = 2; m <= M; m++) {
 				int colA = LS[m]->colA, colC = LS[m]->colC, colD = LS[m]->colD, nrows = LS[m]->nrows;
@@ -365,11 +432,40 @@ int main(int argc, char** argv)
 		return 0;
 	}
 
-	/* plain G(N), X, Q via the mdecrease replica-descent */
-	/* N_R=0: the class-R sweep never runs, and G(.,N-1_R)=0 (negative population). */
-	if (!grM && N[R-1] == 0) { lengrM = lenl[M]; grM = vnew(lenl[M]); }
-	if (!grM) { fprintf(stderr, "gmom: internal error, grM not captured\n"); return 2; }
-	gmom_measures(qn, vl[M], grM, out_e, out_g, out_l, out_t, out_q, cperm, scale_factor);
+	/* plain G(N), X, Q from levels 0 and 1 of the full basis at N.
+	 * N_R=0: the class-R sweep never runs, and G(.,N-1_R)=0 (negative
+	 * population), so the snapshots stay zero. */
+	if (N[R-1] == 0) {
+		int ll;
+		if (!grM)  { lengrM  = lenl[M];  grM  = vnew(lenl[M]); }
+		if (!gr1M) { lengr1M = lenl1[M]; gr1M = vnew(lenl1[M]); }
+		for (ll = 0; ll <= R-3; ll++) if (!lowr[ll]) lowr[ll] = vnew(T->card[ll]*R);
+	}
+	if (!grM || !gr1M) { fprintf(stderr, "gmom: internal error, N-1_R basis not captured\n"); return 2; }
+	{
+		/* level l lives in vl[M] (l=R-1), vl1[M] (l=R-2) or low[l] */
+		mpq_vec_t L0 = (R == 2) ? vl1[M] : low[0];
+		mpq_vec_t S0 = (R == 2) ? gr1M   : lowr[0];
+		mpq_vec_t L1 = (R == 2) ? vl[M]  : (R == 3 ? vl1[M] : low[1]);
+		mpq_vec_t S1 = (R == 2) ? grM    : (R == 3 ? gr1M   : lowr[1]);
+		mpq_vec_t G0 = vnew(R+1), G1 = vnew(M*(R+1));
+		int k;
+		for (s = 0; s < R; s++) mpq_set(G0[s], L0[s]);
+		mpq_set(G0[R], S0[0]);
+		for (k = 0; k < M; k++) {
+			for (s = 0; s < R; s++) mpq_set(G1[k*(R+1)+s], L1[k*R+s]);
+			mpq_set(G1[k*(R+1)+R], S1[k*R]);
+		}
+		gmom_measures(qn, G0, G1, out_e, out_g, out_l, out_t, out_q, cperm, scale_factor);
+		vfree(G0, R+1); vfree(G1, M*(R+1));
+	}
+	{
+		int ll;
+		for (ll = 0; ll <= R-3; ll++) { vfree(low[ll], T->card[ll]*R); vfree(lowr[ll], T->card[ll]*R); }
+		free(low); free(lowr);
+		vfree(gr1M, lengr1M);
+		lvtab_free(T);
+	}
 
 	return 0;
 }
