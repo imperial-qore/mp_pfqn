@@ -19,8 +19,25 @@ RM = /bin/rm -f
 
 all: mom
 
-mom: ${OBJS} util
-	${LD} ${OBJS} ${GMPLAOBJS} ${UTILOBJS} -o ../bin/mom ${LDFLAGS} ${LINBOX_LDFLAGS}
+mom: ${OBJS} util mmengine.o
+	${LD} ${OBJS} mmengine.o ${GMPLAOBJS} ${UTILOBJS} -o ../bin/mom ${LDFLAGS} ${LINBOX_LDFLAGS}
+
+# The multi-modular engine of mommod, used for tier 4 of the singular-model
+# fallback.  mommod's sources reuse names that mom defines too (setupls,
+# blocksolve, mdecrease, qnm, ...), so they are linked into one relocatable
+# object whose symbols are all made local except the mmengine.h API.
+MMOBJS = ../mommod/engine.o ../mommod/globals.o ../mommod/blocksolve.o ../mommod/mdecrease.o ../mommod/exportres.o ../mommod/setupls.o
+MMAPI = mommod_config mommod_stats mommod_solve_tiered mommod_interp
+
+.PHONY: mmobjs
+mmobjs:
+	$(MAKE) -C ../mommod $(notdir $(MMOBJS))
+	$(MAKE) -C ../zpla
+
+mmengine.o: mmobjs
+	ld -r -o mmengine_raw.o $(MMOBJS) ../zpla/zpla.o
+	objcopy $(addprefix --keep-global-symbol=,$(MMAPI)) mmengine_raw.o mmengine.o
+	${RM} mmengine_raw.o
 
 util:  ${UTILOBJS}
 
@@ -31,4 +48,4 @@ cleanbase:
 	${RM} ${OBJS}
 
 clean:
-	${RM} ${OBJS} ${DEPS}
+	${RM} ${OBJS} ${DEPS} mmengine.o

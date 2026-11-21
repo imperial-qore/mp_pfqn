@@ -3,7 +3,7 @@ LD = gcc
 CFLAGS = -g -O4 -fopenmp -I../deps/local/include -I. -I../include/ -I../zpla/ -I../gmpla/ -I../util/ -Wall
 LDFLAGS = -fopenmp -L../deps/local/lib -lgmp -lm -L. -L../lib/
 
-SRCS = blocksolve.c main.c mdecrease.c exportres.c setupls.c
+SRCS = blocksolve.c main.c engine.c globals.c mdecrease.c exportres.c setupls.c
 OBJS = $(SRCS:.c=.o)
 DEPS = $(SRCS:.c=.d)
 

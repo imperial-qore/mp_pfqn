@@ -8,6 +8,7 @@
 #include "mom.h"
 #include "lvtab.h"
 #include "singular.h"
+#include "../mommod/mmengine.h"
 
 /* Define global variables from profiling.h */
 int AORSCTR;
@@ -401,6 +402,7 @@ int main(int argc, char**argv)
 	char* model_file = NULL;
 	bool auto_perturbation = false;
 	bool use_linbox = false;
+	int mom_threads = 1;
 
 	if(argc < 2)
 	{
@@ -416,6 +418,7 @@ int main(int argc, char**argv)
 		printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
 		printf("  -s seed          : Set perturbation seed (default: 23000)\n");
 		printf("  --linbox         : Use LinBox Dixon p-adic lifting solver (avoids coefficient blowup)\n");
+		printf("  -j n             : Threads for the modular interpolation of singular models (default 1)\n");
 		return -1;
 	}
 	
@@ -447,6 +450,8 @@ int main(int argc, char**argv)
 			printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
 			printf("  -s seed          : Set perturbation seed (default: 23000)\n");
 			printf("  --linbox         : Use LinBox Dixon p-adic lifting solver (avoids coefficient blowup)\n");
+			printf("  -j n             : Threads for the modular interpolation of singular models (default 1)\n");
+		printf("  -j n             : Threads for the modular interpolation of singular models (default 1)\n");
 			return 0;
 		} else if(strcmp(argv[i], "-p") == 0) {
 			if(i + 1 < argc) {
@@ -466,6 +471,8 @@ int main(int argc, char**argv)
 				printf("Error: -s option requires a seed argument\n");
 				return -1;
 			}
+		} else if(strcmp(argv[i], "-j") == 0) {
+			if(i + 1 < argc) mom_threads = atoi(argv[++i]);
 		} else if(strcmp(argv[i], "--linbox") == 0) {
 			use_linbox = true;
 		} else if(argv[i][0] == '-') {
@@ -488,6 +495,7 @@ int main(int argc, char**argv)
 		printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
 		printf("  -s seed          : Set perturbation seed (default: 23000)\n");
 		printf("  --linbox         : Use LinBox Dixon p-adic lifting solver (avoids coefficient blowup)\n");
+		printf("  -j n             : Threads for the modular interpolation of singular models (default 1)\n");
 		return -1;
 	}
 	
@@ -567,7 +575,12 @@ int main(int argc, char**argv)
 		int nres = SG_NRES(qnm);
 		mpq_t* exact = sg_mpq_arr(nres);
 		char tier[256];
-		sg_ops ops = { sg_direct, NULL, NULL, NULL };
+		/* Tier 4 runs on mommod's engine: the Ntot+1 perturbed solves of
+		 * interpolation done over Q would each be a full exact solve with
+		 * long rationals, while per prime in Z/p they are word-size
+		 * recursions, combined by CRT into the same exact value. */
+		mommod_config(mom_threads, 61, 0, 0, 64);
+		sg_ops ops = { sg_direct, mommod_interp, NULL, " per prime" };
 		int rc = sg_solve_tiered(qnm, exact, tier, sizeof tier, &ops, 1);
 		if (rc != 0) {
 			fprintf(stderr, "\nError: the MoM system is singular for this model, and every exact fallback\n"

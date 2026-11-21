@@ -55,7 +55,7 @@ The test script runs all 5 solvers (mva, ca, recal, mom, comom) with options `-e
 | `mva/` | Mean Value Analysis | Classical iterative approach |
 | `ca/` | Convolution Algorithm | With multi-server station expansion |
 | `recal/` | Recursion by Chain (RECAL) | Efficient chain-based recursion |
-| `mom/` | Method of Moments (MoM) | Exact linear system solve; optional LinBox C++ backend. Singular models are solved exactly by the tiered fallback of `util/singular.h` (interpolation over Q as tier 4) instead of the old automatic perturbation |
+| `mom/` | Method of Moments (MoM) | Exact linear system solve; optional LinBox C++ backend. Singular models are solved exactly by the tiered fallback of `util/singular.h` instead of the old automatic perturbation; tier 4 runs on mommod's modular engine (`mommod/engine.c`, linked as `mom/mmengine.o` with every symbol but the `mmengine.h` API made local), `-j` threads |
 | `comom/` | Class-Oriented MoM (CoMoM) | BTF decomposition for sparse systems |
 | `gmom/` | Generalized MoM (divide-and-conquer, b=1) | Prefix-chain queue-removal branch (one queue per step); overdetermined per-level system solved by exact normal equations; lower replica levels carried through the recursion give G(N)/X/Q; distinct single-server closed queues only. See `gmom/README.md` |
 | `safe_comom/` | CoMoM exact on singular models | Hybrid MVA/CoMoM (TSE'09 Appendix A): tiered orchestrator - plain CoMoM, then class-permuted CoMoM, then exact convolution (`ca`) for genuine loading degeneracies. Every tier exact. See `safe_comom/README.md` |

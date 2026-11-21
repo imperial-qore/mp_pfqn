@@ -175,7 +175,12 @@ fallbacks below and agree there too.
 When the MoM system is singular over `Q`, `mommod` tries the following,
 cheapest first. Tiers 1 to 3 and the driver live in `util/singular.h` and
 are shared with `comommod`, `mom` and `momf`; each solver supplies only
-its own solve and, optionally, its own tier 4. Every tier is exact; the route taken is noted on stderr
+its own solve and, optionally, its own tier 4. The modular engine itself
+(`solve_mod`, `crt_solve`, the tiers) is in `engine.c` behind the small
+API of `mmengine.h`, and `main.c` holds only the command line and output.
+`mom` links the engine for its tier 4: interpolation over `Q` took 371 s
+on `12_expanded` (21 exact solves with long rationals), the per-prime
+version takes 8 s. Every tier is exact; the route taken is noted on stderr
 (and in the default report, and in `-v`).
 
 1. **Other class orders.** The system can be singular for one class
