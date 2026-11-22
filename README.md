@@ -177,7 +177,7 @@ CoMoM supports the same command-line options as MoM (see table above), except `-
 ```bash
 ./bin/mommod   [ -e | -g | -l | -t | -q ] [-j n] [--primebits bits] [-B] [-W n] models/08_multiclass.qn
 ./bin/comommod [ -e | -g | -l | -t | -q | -d ] [-j n] [--primebits bits] [-B] [-W n] models/08_multiclass.qn
-./bin/momf     [ MoM options ] [-P bits] [-I n] [--pivtol bits] models/02_bottleneck.qn
+./bin/momf     [ MoM options ] [-w bits] [-I n] [--pivtol bits] models/02_bottleneck.qn
 ```
 
 `mommod` and `comommod` replay the MoM and CoMoM recursions in `Z/p` for many word-size primes and recover the exact rationals by CRT, with `-j` primes solved concurrently. `momf` runs MoM in MPFR floating point at a settable precision. All three, like `mom`, solve singular models through the shared tiered fallback (`momf` to its working precision). See `mommod/README.md`, `comommod/README.md` and `momf/README.md`.
