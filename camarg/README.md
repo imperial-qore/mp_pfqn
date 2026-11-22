@@ -48,13 +48,18 @@ them), so `-P` is the marginal at ONE copy and `-q` multiplies its mean by
 `models/`, max relative error `3.8e-16`, and `camarg -P` is bit-for-bit
 identical to `promom -P` on each of the 9 that `promom` solves.
 
-The 15 remaining are exactly the ones no moment-basis solver answers exactly:
+The 15 remaining are the ones on which the moment-basis solvers' direct
+solve is singular:
 
 ```
-05 06 07 08 10 11 12 and the 8 test_singular*   promom declines (singular),
-                                                procomom perturbs at digit 20,
+05 06 07 08 10 11 12 and the 8 test_singular*   promom/procomom direct solve singular,
                                                 camarg exact (<4e-16 vs ca)
 ```
+
+(This was written when `promom` declined them and `procomom` perturbed at
+digit 20. Both now run the exact fallback of `util/singular_marg.h`, which
+reaches the same answer as `camarg` but, through interpolation, can cost far
+more on the larger of these models.)
 
 The 4 not covered are `14_ld_multi` and `15_repairman` (load-dependent) and
 `16_mixed`, `17_mixed_ld` (open/mixed), all rejected by design.

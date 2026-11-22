@@ -1,8 +1,9 @@
 # safe_promom - marginal probabilities, exact wherever a class order makes them so
 
 `bin/promom` inherits mom's coefficient matrix, so it is singular on exactly
-the models `bin/mom -X` rejects, and it declines them rather than perturbing
-(`bin/procomom` perturbs at digit 20 and returns an approximation).
+the models `bin/mom -X` rejects. By default `promom` then runs its own exact
+fallback (`util/singular_marg.h`); this wrapper calls `promom -X`, as
+`safe_mom` calls `mom -X`, so the tiers below are its own.
 `safe_promom` recovers the models whose singularity depends only on which
 class is processed last, using the class-permutation tier of Casale, "CoMoM"
 (IEEE TSE 2009), Appendix A, and the tier driver shared with `safe_mom`,
@@ -21,8 +22,8 @@ queue length per station).
 
 | tier | method | handles |
 |---|---|---|
-| 1 | plain `bin/promom` | non-singular models |
-| 2 | `promom` with a different recursion class (O(R) search) | singularities that depend only on which class is processed last |
+| 1 | `bin/promom -X` | non-singular models |
+| 2 | `promom -X` with a different recursion class (O(R) search) | singularities that depend only on which class is processed last |
 | 3 | exact convolution marginals (`bin/camarg`) | genuine degeneracies no class order removes |
 
 Tier 3 is `bin/camarg`, not `bin/ca`: the other wrappers fall back to `ca`,

@@ -5,13 +5,13 @@
  * class order can make them so.
  *
  * bin/promom inherits mom's coefficient matrix, so it is singular on exactly
- * the models bin/mom -X rejects and declines them rather than perturbing
- * (bin/procomom perturbs at digit 20 and returns an approximation).  This
- * wrapper applies the class-permutation tier of Casale, "CoMoM" (IEEE TSE
+ * the models bin/mom -X rejects.  By default it then runs the exact fallback
+ * of util/singular_marg.h itself; this wrapper calls it with -X, as safe_mom
+ * calls mom -X, and applies the class-permutation tier of Casale, "CoMoM" (IEEE TSE
  * 2009), Appendix A:
  *
- *   Tier 1  bin/promom                (exact or fail)
- *   Tier 2  bin/promom over the O(R) recursion-class choices
+ *   Tier 1  bin/promom -X             (exact or fail)
+ *   Tier 2  bin/promom -X over the O(R) recursion-class choices
  *   Tier 3  bin/camarg                (exact convolution marginals)
  *
  * Both tiers are exact, so a printed result is always the exact marginal.
@@ -35,8 +35,8 @@
 static const safe_cfg CFG = {
 	.name           = "safe_promom",
 	.solver         = "promom",
-	.solver_flags   = "",       /* promom has no auto-perturbation to suppress */
-	.probe_flags    = "-q",     /* fails at the first singular class transition */
+	.solver_flags   = "-X",     /* skip promom's own fallback: the tiers here decide */
+	.probe_flags    = "-X -q",  /* fails at the first singular class transition */
 	.fallback       = "camarg", /* exact convolution marginals, always exact */
 	.permuted_flags = "",       /* -P and -q are per station, not per class */
 	.flags_usage    = "[-P|-q]",

@@ -6,10 +6,14 @@
 #include <math.h>
 #include <gmpla.h>
 #include "promom.h"
+#include "singular_marg.h"
 
 qnmodel* qnm;
 double t0, t1;
 struct rusage ruse;
+/* set once the direct solve has failed: the fallback tiers make many
+ * solves that may each be singular, and only their outcome is reported */
+static int promom_quiet = 0;
 
 /* ------------------------------------------------------------------ */
 
@@ -260,7 +264,7 @@ static int solve_promom(qnmodel* qn, int sumN, mpq_t* dist)
 			mpq_mat_t A11 = submat(qm->A, nr12, 0, off);
 			int* lu = mpq_ludcmp(A11, off);
 			if (!lu) {
-				fprintf(stderr, "promom: singular transition matrix at class %d\n", r);
+				if (!promom_quiet) fprintf(stderr, "promom: singular transition matrix at class %d\n", r);
 				free_mat(A11, off, off); free_qmatrices(qm);
 				qcombs_free(Ik); qcombs_free(I); ret = -1; goto done;
 			}
@@ -292,7 +296,7 @@ static int solve_promom(qnmodel* qn, int sumN, mpq_t* dist)
 					free(acc);
 				}
 				if (mpq_lubksb(A11, rhs, off, lu) < 0) {
-					fprintf(stderr, "promom: singular transition back-substitution\n");
+					if (!promom_quiet) fprintf(stderr, "promom: singular transition back-substitution\n");
 					ret = -1;
 				}
 				for (t = 0; t < off; t++) mpq_set(gnew[n][t], rhs[t]);
@@ -319,14 +323,14 @@ static int solve_promom(qnmodel* qn, int sumN, mpq_t* dist)
 
 			QMatrices* qm = genqmatrix(Ik, I, qn, Ncur, r);
 			if (qm->nrows != qm->ncols) {
-				fprintf(stderr, "promom: system not square (%d x %d) at class %d\n",
+				if (!promom_quiet) fprintf(stderr, "promom: system not square (%d x %d) at class %d\n",
 				        qm->nrows, qm->ncols, r);
 				free_qmatrices(qm); qcombs_free(Ik); qcombs_free(I); ret = -1; goto done;
 			}
 			mpq_mat_t A = submat(qm->A, qm->nrows, 0, qm->ncols);
 			int* lu = mpq_ludcmp(A, qm->ncols);
 			if (!lu) {
-				fprintf(stderr, "promom: singular step matrix at class %d, Nr=%d\n", r, nr);
+				if (!promom_quiet) fprintf(stderr, "promom: singular step matrix at class %d, Nr=%d\n", r, nr);
 				free_mat(A, qm->nrows, qm->ncols); free_qmatrices(qm);
 				qcombs_free(Ik); qcombs_free(I); ret = -1; goto done;
 			}
@@ -346,7 +350,7 @@ static int solve_promom(qnmodel* qn, int sumN, mpq_t* dist)
 						free(acc);
 					}
 					if (mpq_lubksb(A, rhs, len, lu) < 0) {
-						fprintf(stderr, "promom: singular back-substitution\n");
+						if (!promom_quiet) fprintf(stderr, "promom: singular back-substitution\n");
 						ret = -1;
 					}
 				}
@@ -376,26 +380,47 @@ done:
 	return ret;
 }
 
-/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------
+ * Every station's unnormalized marginal, out[k*(sumN+1)+n]: station k is
+ * rotated into the reference position M.  The callback of singular_marg.h:
+ * 0 solved, 1 singular. */
+static int promom_all(qnmodel* qn, mpq_t* out, void* ctx)
+{
+	int M = qn->M, W = sum(qn->N, qn->R) + 1, k, n, rc = 0;
+	(void) ctx;
+	mpq_t* dist = sg_mpq_arr(W);
+	for (k = 0; k < M && rc == 0; k++) {
+		swap_stations(qn, k, M-1);
+		rc = solve_promom(qn, W-1, dist) < 0 ? 1 : 0;
+		swap_stations(qn, k, M-1);
+		if (rc == 0) for (n = 0; n < W; n++) mpq_set(out[k*W + n], dist[n]);
+	}
+	sg_mpq_arr_free(dist, W);
+	return rc;
+}
 
 int main(int argc, char** argv)
 {
 	t0 = CPUTIME;
 	int i;
-	bool queue_output = false, prob_output = false;
+	bool queue_output = false, prob_output = false, no_fallback = false;
 	char* model_file = NULL;
 
 	for (i = 1; i < argc; i++) {
 		if      (!strcmp(argv[i], "-q") || !strcmp(argv[i], "--qlen")) queue_output = true;
 		else if (!strcmp(argv[i], "-P") || !strcmp(argv[i], "--prob")) prob_output = true;
+		else if (!strcmp(argv[i], "-X") || !strcmp(argv[i], "--no-perturb")) no_fallback = true;
 		else if (argv[i][0] != '-') model_file = argv[i];
 	}
 	if (!model_file) {
-		printf("USAGE: %s [-q|--qlen] [-P|--prob] model.qn\n", argv[0]);
+		printf("USAGE: %s [-q|--qlen] [-P|--prob] [-X] model.qn\n", argv[0]);
 		printf("  promom: marginal queue-length probabilities on the MoM basis,\n");
 		printf("  the MoM-basis counterpart of bin/procomom.\n");
 		printf("  -q, --qlen : mean queue lengths, one per station\n");
 		printf("  -P, --prob : marginal distribution per station, one row per station\n");
+		printf("  -X, --no-perturb : fail on a singular system instead of running the\n");
+		printf("               exact fallback (class orders, merged stations/classes,\n");
+		printf("               interpolation; util/singular_marg.h)\n");
 		return -1;
 	}
 
@@ -407,40 +432,50 @@ int main(int argc, char** argv)
 	if (qnm->isLD)    { fprintf(stderr, "promom: load-dependent stations are not supported\n"); return 1; }
 
 	nckinit(M + R + 1, M);
-	int sumN = sum(qnm->N, R);
+	int sumN = sum(qnm->N, R), W = sumN + 1;
+	sg_qn_fix_nt(qnm);
 
-	mpq_t* dist = (mpq_t*) calloc(sumN+1, sizeof(mpq_t));
-	for (i = 0; i <= sumN; i++) mpq_init(dist[i]);
+	/* all stations first, so a singular system is known before printing */
+	mpq_t* tab = sg_mpq_arr(M * W);
+	char tier[256] = "direct";
+	int rc = promom_all(qnm, tab, NULL);
+	if (rc == 0)
+		sgm_normalize(qnm, tab);
+	else if (no_fallback) {
+		fprintf(stderr, "promom: singular system; no exact answer (-X suppresses the exact fallback)\n");
+		return 1;
+	} else {
+		sgm_ops ops = { promom_all, NULL };
+		promom_quiet = 1;
+		rc = sgm_solve_tiered(qnm, tab, tier, sizeof tier, &ops, 1);
+		if (rc != 0) {
+			fprintf(stderr, "promom: singular system, and every exact fallback failed "
+			                "(class orders, merged stations or classes, interpolation)\n");
+			return 1;
+		}
+		fprintf(stderr, "promom: singular system, solved exactly via %s\n", tier);
+	}
 
 	mpf_t fval; mpf_init(fval);
 	int k, j;
-	if (!queue_output && !prob_output)
+	if (!queue_output && !prob_output) {
 		printf("========== Marginal Queue-Length Probabilities ==========\n");
+		if (strcmp(tier, "direct")) printf("\nSingular system, solved exactly via %s\n", tier);
+	}
 
 	for (k = 1; k <= M; k++) {
-		swap_stations(qnm, k-1, M-1);
-		int rc = solve_promom(qnm, sumN, dist);
-		swap_stations(qnm, k-1, M-1);
-		if (rc < 0) {
-			fprintf(stderr, "promom: singular system; no exact answer for station %d\n", k);
-			return 1;
-		}
-
-		mpq_t total, Qk, term, p;
-		mpq_init(total); mpq_init(Qk); mpq_init(term); mpq_init(p);
-		mpq_set_si(total, 0, 1); mpq_set_si(Qk, 0, 1);
-		for (j = 0; j <= sumN; j++) mpq_add(total, total, dist[j]);
+		mpq_t Qk, term;
+		mpq_init(Qk); mpq_init(term);
+		mpq_t* p = tab + (k-1)*W;
 
 		if (!queue_output && !prob_output) printf("\nStation %d:\n", k);
 		for (j = 0; j <= sumN; j++) {
-			mpq_set(p, dist[j]);
-			if (mpq_sgn(total) != 0) mpq_div(p, p, total);
-			if (mpq_sgn(p) != 0) {
+			if (mpq_sgn(p[j]) != 0) {
 				mpq_set_si(term, j, 1);
-				mpq_mul(term, term, p);
+				mpq_mul(term, term, p[j]);
 				mpq_add(Qk, Qk, term);
 			}
-			mpf_set_q(fval, p);
+			mpf_set_q(fval, p[j]);
 			if (prob_output) {
 				printf("%.15e", mpf_get_d(fval));
 				if (j < sumN) printf(" ");
@@ -460,7 +495,7 @@ int main(int argc, char** argv)
 		if (queue_output)        printf("%.15e\n", mpf_get_d(fval));
 		else if (!prob_output)   printf("  Q[%d] = %.15e\n", k, mpf_get_d(fval));
 
-		mpq_clear(total); mpq_clear(Qk); mpq_clear(term); mpq_clear(p);
+		mpq_clear(Qk); mpq_clear(term);
 	}
 	mpf_clear(fval);
 
@@ -469,7 +504,6 @@ int main(int argc, char** argv)
 		t1 = CPUTIME;
 		printf("Elapsed time (ProMoM): %g s\n", t1 - t0);
 	}
-	for (i = 0; i <= sumN; i++) mpq_clear(dist[i]);
-	free(dist);
+	sg_mpq_arr_free(tab, M * W);
 	return 0;
 }

@@ -8,6 +8,7 @@
 #include <time.h>
 #include <gmpla.h>
 #include "procomom.h"
+#include "singular_marg.h"
 
 /* Global variables */
 qnmodel* qnm;
@@ -21,6 +22,9 @@ struct rusage ruse;
  * A^T A products, the LU factorisation, and the n-sweep of back-substitutions.
  * PROGRESS_STATION is the rotation currently being solved. */
 static int PROGRESS = 0;
+/* set once the direct solve has failed: the fallback tiers make many solves
+ * that may each be singular, and only their outcome is reported */
+static int procomom_quiet = 0;
 static int PROGRESS_STATION = 0, PROGRESS_NSTATIONS = 0;
 
 /* Largest entry, in bits, over the whole pk table.  On a perturbed model the
@@ -197,7 +201,7 @@ static int solve_procomom(qnmodel* qnm, combsrep* Dn, int sumN,
 			int* lu_indices = mpq_ludcmp(AtA, basisSize);
 			double t_lu = CPUTIME - t_lu0;
 			if (lu_indices == NULL) {
-				fprintf(stderr, "\nSingular AtA at class %d, Nr=%d (numRows=%d, basisSize=%d)\n",
+				if (!procomom_quiet) fprintf(stderr, "\nSingular AtA at class %d, Nr=%d (numRows=%d, basisSize=%d)\n",
 				        r, nr, numRows_saved, basisSize);
 				free_mpq_mat(AtA, basisSize, basisSize);
 				free_mpq_mat(AtB, basisSize, basisSize);
@@ -315,6 +319,45 @@ cleanup:
 	return ret;
 }
 
+/* Every station's unnormalized marginal, out[k*(sumN+1)+n]: station k is
+ * rotated into the reference position M.  The callback of singular_marg.h:
+ * 0 solved, 1 singular.  ctx points to an int: show the progress line of
+ * the default output on the first station. */
+static int procomom_all(qnmodel* qn, mpq_t* out, void* ctx)
+{
+	int M = qn->M, R = qn->R, W = sum(qn->N, R) + 1, k, n, rc = 0;
+	int show = ctx ? *(int*) ctx : 0;
+
+	/* Fixed Dn for all classes: multichoose(R, M) with column R-1 zeroed */
+	combsrep* Dn = (combsrep*)calloc(1, sizeof(combsrep));
+	Dn->n = R;
+	Dn->k = M;
+	Dn->card = nck(M + R - 1, M);
+	Dn->combs = (int**)multichoose(R, M);
+	for (int d = 0; d < Dn->card; d++)
+		Dn->combs[d][R-1] = 0;
+	Dn->combs = (int**)sortbynnzpos(Dn->combs, Dn->card, R);
+	/* Width of a shift block.  The reference station is rotated to position M,
+	 * so the stride is recomputed per rotation (set_stride). */
+	Dn->stride = M;
+
+	mpq_t* dist = sg_mpq_arr(W);
+	for (k = 1; k <= M && rc == 0; k++) {
+		swap_stations(qn, k-1, M-1);
+		int basisSize = set_stride(Dn, qn);
+		PROGRESS_STATION = k; PROGRESS_NSTATIONS = M;
+		if (PROGRESS) fprintf(stderr, "[procomom] === station %d/%d, basis %d ===\n", k, M, basisSize);
+		rc = solve_procomom(qn, Dn, W-1, dist, basisSize, (k == 1) ? show : 0) < 0 ? 1 : 0;
+		swap_stations(qn, k-1, M-1);
+		if (rc == 0) for (n = 0; n < W; n++) mpq_set(out[(k-1)*W + n], dist[n]);
+	}
+	sg_mpq_arr_free(dist, W);
+	for (int d = 0; d < Dn->card; d++) free(Dn->combs[d]);
+	free(Dn->combs);
+	free(Dn);
+	return rc;
+}
+
 int main(int argc, char** argv)
 {
 	t0 = CPUTIME;
@@ -326,15 +369,16 @@ int main(int argc, char** argv)
 	int perturbation_digit = 0;
 	int perturbation_seed = 23000;
 	char* model_file = NULL;
-	bool auto_perturbation = false;
+	bool no_fallback = false;
 	bool show_progress = true;
 
 	if (argc < 2) {
-		printf("USAGE: %s [-q|--qlen] [-P|--prob] [-p digit] [-s seed] [-h|--help] model.qn\n", argv[0]);
+		printf("USAGE: %s [-q|--qlen] [-P|--prob] [-p digit] [-s seed] [-X] [-h|--help] model.qn\n", argv[0]);
 		printf("  -q, --qlen  : Print mean queue lengths (one per station, matching CoMoM format)\n");
 		printf("  -P, --prob  : Print marginal probability distributions per station\n");
 		printf("  -p digit    : Apply perturbation at the specified digit\n");
 		printf("  -s seed     : Set perturbation seed (default: 23000)\n");
+		printf("  -X, --no-perturb : Fail on a singular system instead of the exact fallback\n");
 		printf("  --progress  : Report per-step timing on stderr (diagnostic)\n");
 		printf("  -h, --help  : Print this help message\n");
 		return -1;
@@ -345,6 +389,8 @@ int main(int argc, char** argv)
 			queue_output = true;
 		} else if (strcmp(argv[i], "-P") == 0 || strcmp(argv[i], "--prob") == 0) {
 			prob_output = true;
+		} else if (strcmp(argv[i], "-X") == 0 || strcmp(argv[i], "--no-perturb") == 0) {
+			no_fallback = true;
 		} else if (strcmp(argv[i], "--progress") == 0) {
 			PROGRESS = 1;
 		} else if (strcmp(argv[i], "-p") == 0) {
@@ -366,11 +412,12 @@ int main(int argc, char** argv)
 				return -1;
 			}
 		} else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-			printf("USAGE: %s [-q|--qlen] [-P|--prob] [-p digit] [-s seed] [-h|--help] model.qn\n", argv[0]);
+			printf("USAGE: %s [-q|--qlen] [-P|--prob] [-p digit] [-s seed] [-X] [-h|--help] model.qn\n", argv[0]);
 			printf("  -q, --qlen  : Print mean queue lengths (one per station, matching CoMoM format)\n");
 			printf("  -P, --prob  : Print marginal probability distributions per station\n");
 			printf("  -p digit    : Apply perturbation at the specified digit\n");
 			printf("  -s seed     : Set perturbation seed (default: 23000)\n");
+			printf("  -X, --no-perturb : Fail on a singular system instead of the exact fallback\n");
 			printf("  -h, --help  : Print this help message\n");
 			return 0;
 		} else if (argv[i][0] == '-') {
@@ -390,8 +437,8 @@ int main(int argc, char** argv)
 	if (queue_output || prob_output)
 		show_progress = false;
 
-solve_attempt:;
-	/* Apply perturbation if requested (same logic as comom) */
+	/* Explicit perturbation (-p): the old approximate mode, kept on request.
+	 * A singular system is otherwise solved exactly by util/singular_marg.h. */
 	mpz_t scale_factor;
 	mpz_init(scale_factor);
 	mpz_set_ui(scale_factor, 1);
@@ -440,12 +487,8 @@ solve_attempt:;
 		}
 		free(perm);
 
-		if (show_progress) {
-			if (auto_perturbation)
-				printf("\nNote: Auto perturbation at digit %d.\n", perturbation_digit);
-			else
-				printf("\nWarning: Perturbation at digit %d.\n\n", perturbation_digit);
-		}
+		if (show_progress)
+			printf("\nWarning: Perturbation at digit %d.\n\n", perturbation_digit);
 	}
 
 	if (show_progress) {
@@ -458,269 +501,85 @@ solve_attempt:;
 	int M = qnm->M;
 	int R = qnm->R;
 	nckinit(M + R + 1, M);
+	int sumN = sum(qnm->N, R), W = sumN + 1;
+	sg_qn_fix_nt(qnm);
 
-	/* Fixed Dn for all classes: multichoose(R, M) with column R-1 zeroed */
-	combsrep* Dn = (combsrep*)calloc(1, sizeof(combsrep));
-	Dn->n = R;
-	Dn->k = M;
-	Dn->card = nck(M + R - 1, M);
-	Dn->combs = (int**)multichoose(R, M);
-	for (int d = 0; d < Dn->card; d++)
-		Dn->combs[d][R-1] = 0;
-	Dn->combs = (int**)sortbynnzpos(Dn->combs, Dn->card, R);
-	/* Width of a shift block.  The reference station is rotated to position M,
-	 * so the stride is recomputed per rotation in the loops below. */
-	Dn->stride = M;
-
-	int basisSize = Dn->card * Dn->stride;
-	int sumN = sum(qnm->N, R);
-
-	/* Allocate result distribution array */
-	mpq_t* dist = (mpq_t*)calloc(sumN + 1, sizeof(mpq_t));
-	for (i = 0; i <= sumN; i++)
-		mpq_init(dist[i]);
-
-	if (queue_output) {
-		/*
-		 * Compute Q for ALL stations by rotating L so each station
-		 * takes a turn as the reference (station M).
-		 */
-		mpf_t fval;
-		mpf_init(fval);
-
-		/* Buffer the results: on a singular solve this function jumps back to
-		 * solve_attempt and recomputes every station, so anything already
-		 * printed would be emitted twice.  Print only once all M stations
-		 * have succeeded. */
-		double* qbuf = (double*) calloc(M, sizeof(double));
-
-		for (int k = 1; k <= M; k++) {
-			/* Swap station k-1 with station M-1 to make station k the reference */
-			swap_stations(qnm, k-1, M-1);
-			basisSize = set_stride(Dn, qnm);
-			PROGRESS_STATION = k; PROGRESS_NSTATIONS = M;
-			if (PROGRESS) fprintf(stderr, "[procomom] === station %d/%d, basis %d ===\n", k, M, basisSize);
-
-			/* Run algorithm */
-			int ret = solve_procomom(qnm, Dn, sumN, dist, basisSize, 0);
-			if (ret < 0) {
-				/* Swap back before handling error */
-				swap_stations(qnm, k-1, M-1);
-				free(qbuf);
-				goto singular_matrix_detected;
-			}
-
-			/* Swap back */
-			swap_stations(qnm, k-1, M-1);
-
-			/* Normalize and compute Q */
-			mpq_t total_prob, Q_k, term;
-			mpq_init(total_prob);
-			mpq_init(Q_k);
-			mpq_init(term);
-			mpq_set_si(total_prob, 0, 1);
-			mpq_set_si(Q_k, 0, 1);
-
-			for (int j = 0; j <= sumN; j++)
-				mpq_add(total_prob, total_prob, dist[j]);
-
-			for (int j = 0; j <= sumN; j++) {
-				if (mpq_sgn(dist[j]) != 0) {
-					mpq_set_si(term, j, 1);
-					mpq_mul(term, term, dist[j]);
-					mpq_add(Q_k, Q_k, term);
-				}
-			}
-			if (mpq_sgn(total_prob) != 0)
-				mpq_div(Q_k, Q_k, total_prob);
-
-			/* mi_k > 1 means mi_k replicated single-server queues, and the
-			 * distribution above is the marginal at ONE copy, so the station
-			 * total is mi_k times its mean.  Same convention as promom -q,
-			 * and what makes this comparable with ca -q summed over classes. */
-			{ mpq_t mq; mpq_init(mq); mpq_set_si(mq, qnm->mi[k-1], 1);
-			  mpq_mul(Q_k, Q_k, mq); mpq_clear(mq); }
-			mpf_set_q(fval, Q_k);
-			qbuf[k-1] = mpf_get_d(fval);
-
-			mpq_clear(total_prob);
-			mpq_clear(Q_k);
-			mpq_clear(term);
-		}
-
-		for (int k = 1; k <= M; k++) printf("%.15e\n", qbuf[k-1]);
-		free(qbuf);
-		mpf_clear(fval);
-	} else if (prob_output) {
-		/*
-		 * Print raw probabilities per station (machine-readable)
-		 * Run once per station with rotation.
-		 */
-		mpf_t fval;
-		mpf_init(fval);
-
-		/* buffered for the same reason as the -q branch above */
-		double* pbuf = (double*) calloc((size_t)M * (sumN+1), sizeof(double));
-
-		for (int k = 1; k <= M; k++) {
-			swap_stations(qnm, k-1, M-1);
-			basisSize = set_stride(Dn, qnm);
-			PROGRESS_STATION = k; PROGRESS_NSTATIONS = M;
-			if (PROGRESS) fprintf(stderr, "[procomom] === station %d/%d, basis %d ===\n", k, M, basisSize);
-
-			int ret = solve_procomom(qnm, Dn, sumN, dist, basisSize, 0);
-			if (ret < 0) {
-				swap_stations(qnm, k-1, M-1);
-				free(pbuf);
-				goto singular_matrix_detected;
-			}
-			swap_stations(qnm, k-1, M-1);
-
-			/* Normalize */
-			mpq_t total_prob;
-			mpq_init(total_prob);
-			mpq_set_si(total_prob, 0, 1);
-			for (int j = 0; j <= sumN; j++)
-				mpq_add(total_prob, total_prob, dist[j]);
-
-			for (int j = 0; j <= sumN; j++) {
-				mpq_t p;
-				mpq_init(p);
-				mpq_set(p, dist[j]);
-				if (mpq_sgn(total_prob) != 0)
-					mpq_div(p, p, total_prob);
-				mpf_set_q(fval, p);
-				pbuf[(size_t)(k-1)*(sumN+1) + j] = mpf_get_d(fval);
-				mpq_clear(p);
-			}
-			mpq_clear(total_prob);
-		}
-
-		for (int k = 1; k <= M; k++) {
-			for (int j = 0; j <= sumN; j++) {
-				printf("%.15e", pbuf[(size_t)(k-1)*(sumN+1) + j]);
-				if (j < sumN) printf(" ");
-			}
-			printf("\n");
-		}
-		free(pbuf);
-		mpf_clear(fval);
+	/* All stations first, so nothing is printed before the outcome is known */
+	mpq_t* tab = sg_mpq_arr(M * W);
+	char tier[256] = "direct";
+	int sp = show_progress ? 1 : 0;
+	int rc = procomom_all(qnm, tab, &sp);
+	if (rc == 0)
+		sgm_normalize(qnm, tab);
+	else if (perturbation_digit > 0) {
+		fprintf(stderr, "\nError: Singular matrix with perturbation at digit %d.\n", perturbation_digit);
+		return 1;
+	} else if (no_fallback) {
+		fprintf(stderr, "\nError: Singular matrix (-X suppresses the exact fallback).\n");
+		return 1;
 	} else {
-		/*
-		 * Default: run for all stations and print distributions + Q
-		 */
+		int quiet = 0;
+		sgm_ops ops = { procomom_all, &quiet };
+		procomom_quiet = 1;
+		rc = sgm_solve_tiered(qnm, tab, tier, sizeof tier, &ops, 1);
+		if (rc != 0) {
+			fprintf(stderr, "procomom: singular system, and every exact fallback failed "
+			                "(class orders, merged stations or classes, interpolation)\n");
+			return 1;
+		}
+		fprintf(stderr, "procomom: singular system, solved exactly via %s\n", tier);
+	}
+
+	mpf_t fval;
+	mpf_init(fval);
+	if (!queue_output && !prob_output) {
+		if (show_progress) printf("\n");
 		printf("========== Marginal Queue-Length Probabilities ==========\n");
-		mpf_t fval;
-		mpf_init(fval);
-
-		for (int k = 1; k <= M; k++) {
-			swap_stations(qnm, k-1, M-1);
-			basisSize = set_stride(Dn, qnm);
-			PROGRESS_STATION = k; PROGRESS_NSTATIONS = M;
-			if (PROGRESS) fprintf(stderr, "[procomom] === station %d/%d, basis %d ===\n", k, M, basisSize);
-
-			int ret = solve_procomom(qnm, Dn, sumN, dist, basisSize,
-			                          (k == 1) ? show_progress : 0);
-			if (ret < 0) {
-				swap_stations(qnm, k-1, M-1);
-				goto singular_matrix_detected;
+		if (strcmp(tier, "direct")) printf("\nSingular system, solved exactly via %s\n", tier);
+	}
+	for (int k = 1; k <= M; k++) {
+		mpq_t Q_k, term;
+		mpq_init(Q_k);
+		mpq_init(term);
+		mpq_t* p = tab + (k-1)*W;
+		if (!queue_output && !prob_output) printf("\nStation %d:\n", k);
+		for (int j = 0; j <= sumN; j++) {
+			if (mpq_sgn(p[j]) != 0) {
+				mpq_set_si(term, j, 1);
+				mpq_mul(term, term, p[j]);
+				mpq_add(Q_k, Q_k, term);
 			}
-			swap_stations(qnm, k-1, M-1);
-
-			printf("\nStation %d:\n", k);
-
-			/* Normalize */
-			mpq_t total_prob, p_norm, Q_k, term;
-			mpq_init(total_prob);
-			mpq_init(p_norm);
-			mpq_init(Q_k);
-			mpq_init(term);
-			mpq_set_si(total_prob, 0, 1);
-			mpq_set_si(Q_k, 0, 1);
-
-			for (int j = 0; j <= sumN; j++)
-				mpq_add(total_prob, total_prob, dist[j]);
-
-			for (int j = 0; j <= sumN; j++) {
-				mpq_set(p_norm, dist[j]);
-				if (mpq_sgn(total_prob) != 0)
-					mpq_div(p_norm, p_norm, total_prob);
-
-				mpf_set_q(fval, p_norm);
+			mpf_set_q(fval, p[j]);
+			if (prob_output) {
+				printf("%.15e", mpf_get_d(fval));
+				if (j < sumN) printf(" ");
+			} else if (!queue_output) {
 				double pval = mpf_get_d(fval);
 				if (pval > 1e-20 || j <= 5)
 					printf("  P(n_%d = %d) = %.15e\n", k, j, pval);
-
-				if (mpq_sgn(p_norm) != 0) {
-					mpq_set_si(term, j, 1);
-					mpq_mul(term, term, p_norm);
-					mpq_add(Q_k, Q_k, term);
-				}
 			}
-
-			{ mpq_t mq; mpq_init(mq); mpq_set_si(mq, qnm->mi[k-1], 1);
-			  mpq_mul(Q_k, Q_k, mq); mpq_clear(mq); }
-			mpf_set_q(fval, Q_k);
-			printf("  Q[%d] = %.15e\n", k, mpf_get_d(fval));
-
-			mpq_clear(total_prob);
-			mpq_clear(p_norm);
-			mpq_clear(Q_k);
-			mpq_clear(term);
 		}
-
-		mpf_clear(fval);
+		if (prob_output) printf("\n");
+		/* mi_k > 1 means mi_k replicated single-server queues, and the
+		 * distribution above is the marginal at ONE copy, so the station
+		 * total is mi_k times its mean.  Same convention as promom -q,
+		 * and what makes this comparable with ca -q summed over classes. */
+		{ mpq_t mq; mpq_init(mq); mpq_set_si(mq, qnm->mi[k-1], 1);
+		  mpq_mul(Q_k, Q_k, mq); mpq_clear(mq); }
+		mpf_set_q(fval, Q_k);
+		if (queue_output)        printf("%.15e\n", mpf_get_d(fval));
+		else if (!prob_output)   printf("  Q[%d] = %.15e\n", k, mpf_get_d(fval));
+		mpq_clear(Q_k);
+		mpq_clear(term);
+	}
+	mpf_clear(fval);
+	if (!queue_output && !prob_output) {
 		printf("\n=========================================================\n");
 		t1 = CPUTIME;
 		printf("Elapsed time (ProCoMoM): %g s\n", t1 - t0);
 	}
 
-	/* Cleanup */
-	for (i = 0; i <= sumN; i++)
-		mpq_clear(dist[i]);
-	free(dist);
+	sg_mpq_arr_free(tab, M * W);
 	mpz_clear(scale_factor);
-
 	return 0;
-
-singular_matrix_detected:
-	if (!auto_perturbation && perturbation_digit == 0) {
-		fprintf(stderr, "\nWarning: Singular matrix. Applying perturbation at digit 20.\n");
-		perturbation_digit = 20;
-		auto_perturbation = true;
-
-		if (original_L == NULL) {
-			size_t r_size = (size_t)qnm->R;
-			size_t m_size = (size_t)qnm->M;
-			original_L = (mpz_t**)calloc(m_size, sizeof(mpz_t*));
-			original_Z = (mpz_t*)calloc(r_size, sizeof(mpz_t));
-			for (int ii = 0; ii < qnm->M; ii++) {
-				original_L[ii] = (mpz_t*)calloc(r_size, sizeof(mpz_t));
-				for (int j = 0; j < qnm->R; j++) {
-					mpz_init(original_L[ii][j]);
-					mpz_set(original_L[ii][j], qnm->L[ii][j]);
-				}
-			}
-			for (int j = 0; j < qnm->R; j++) {
-				mpz_init(original_Z[j]);
-				mpz_set(original_Z[j], qnm->Z[j]);
-			}
-		}
-
-		qnm = (qnmodel*)readmodel(model_file);
-
-		for (i = 0; i <= sumN; i++)
-			mpq_clear(dist[i]);
-		free(dist);
-		mpz_clear(scale_factor);
-
-		goto solve_attempt;
-	} else {
-		fprintf(stderr, "\nError: Singular matrix with perturbation at digit %d.\n", perturbation_digit);
-		for (i = 0; i <= sumN; i++)
-			mpq_clear(dist[i]);
-		free(dist);
-		mpz_clear(scale_factor);
-		return 1;
-	}
 }

@@ -172,21 +172,30 @@ station total, which is what makes the `ca` comparison above line up.
 - Closed models only; open/mixed (`LAMBDA`) and load-dependent (`MU`) stations
   are rejected with a message rather than mis-solved.
 - The step matrix is mom's, so `promom` is singular on exactly the models that
-  `bin/mom -X` rejects. Of the 28 models in `models/`, `promom` solves 9 and
-  declines 19: 15 mom-singular (`05`, `06`, `07`, `08`, `10`, `11`, `12`, the
+  `bin/mom -X` rejects. Of the 28 models in `models/`, the direct solve
+  succeeds on 9 and stops on 19: 15 mom-singular (`05`, `06`, `07`, `08`, `10`, `11`, `12`, the
   8 `test_singular*`), 2 load-dependent (`14_ld_multi`, `15_repairman`) and 2
   open/mixed (`16_mixed`, `17_mixed_ld`). The singular set is exactly
   `safe_mom`'s Tier 2 + Tier 3 set, which is the check that the shared
   coefficient matrix behaves as it should.
 
-  It reports the singularity and exits non-zero rather than perturbing;
-  `procomom` perturbs at digit 20 there and returns an approximation. Two
-  cheap ways to close the gap, in order of value:
+  On a singular system `promom` now runs the exact fallback of
+  `util/singular_marg.h`, the marginal counterpart of mom's `util/singular.h`
+  tiers: other class orders, stations with identical demands folded into
+  one, classes with proportional demands and think times aggregated, then
+  the exact limit of a perturbation by Lagrange interpolation over Nt+1
+  perturbed solves. The interpolation works on the UNNORMALIZED marginals
+  q_k(N, n), which are homogeneous polynomials of degree Nt in (L, Z) like G;
+  the normalized probabilities are only rational in t. One extra perturbed
+  solve is predicted from the interpolant and must match exactly, otherwise
+  the tier reports failure. Every tier is exact; the route taken goes to
+  stderr (and to stdout in the default text report). `-X`/`--no-perturb`
+  restores the old fail-fast behaviour, which `safe_promom` uses.
 
-  1. a `safe_promom` wrapper over `util/safe_tiers` -- the class-permutation
-     tier alone recovers `08_multiclass` and `11_swapped`, which are exactly
-     the two models `safe_mom` answers at Tier 2. There is no Tier-3 exact
-     fallback for marginals, though: `bin/ca` returns queue lengths, not
-     distributions, so a genuinely degenerate model would still be declined.
-  2. a `-p digit` flag matching procomom's, for an approximate answer
-     everywhere.
+  On the 305 small brute-force models `promom` is now exact on all 305; the
+  121 it used to decline were recovered by class order (14), merged stations
+  and/or classes, possibly with a class order (78), and interpolation (29).
+  On `models/`, `05_sparse` and `07_mixed` go through interpolation and
+  `08_multiclass`/`11_swapped` through class order; `06_large`, `10_diverse`
+  and `12_expanded` take more than 300 s in the fallback (interpolation
+  costs Nt+1 full solves with long rationals), where `camarg` is cheaper.

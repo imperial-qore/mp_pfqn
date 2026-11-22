@@ -18,11 +18,19 @@ make -C procomom
 ./bin/procomom models/02_bottleneck.qn -P    # distribution, one row per station
 ./bin/procomom models/02_bottleneck.qn -q    # mean queue lengths
 ./bin/procomom models/02_bottleneck.qn -p 20 # perturbed (approximate) solve
+./bin/procomom models/08_multiclass.qn -X -q # fail on a singular system
 ```
 
-Unlike `promom`, `procomom` auto-perturbs at digit 20 on a singular system
-rather than declining, so it answers the degenerate models too -- but
-approximately, and on some of them not in practical time (see below).
+On a singular system `procomom` runs the exact fallback of
+`util/singular_marg.h`, the same as `promom` (see `promom/README.md`, Limits):
+other class orders, merged identical stations, merged proportional classes,
+then exact interpolation of a perturbation limit. It used to auto-perturb at
+digit 20 and return an approximation (abs error up to ~1e-16 after the
+multiserver fixes); that mode is still available on request with `-p digit`.
+`-X`/`--no-perturb` fails instead. On the 305 small brute-force models every
+`-P` and `-q` result is now exact (before: 228 and 261). The interpolation
+tier costs Nt+1 full solves, so on models where a single perturbed solve was
+already impractical (`05_sparse`, below) it is impractical too; use `camarg`.
 
 `--progress` reports per-step timing on stderr; stdout stays machine-readable.
 A run can take hours, and without it a slow run is indistinguishable from a
@@ -122,7 +130,7 @@ buffer their results and print only after all `M` stations have succeeded.
 | | procomom | promom |
 |---|---|---|
 | basis | CoMoM: population shift x station | MoM: replica combination x class decrement |
-| singular models | auto-perturbs at digit 20 (approximate) | declines; see `safe_promom` |
+| singular models | exact fallback (`util/singular_marg.h`); `-p` for the old perturbation | exact fallback (`util/singular_marg.h`) |
 | replicated station elsewhere | correct (after the fixes above) | correct |
 | replicated REFERENCE station | correct (after the fixes above) | correct |
 | `-P` convention | marginal at one copy | marginal at one copy |
