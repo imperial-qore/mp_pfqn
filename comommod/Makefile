@@ -16,7 +16,9 @@ RM = /bin/rm -f
 all: comommod
 
 comommod: ${OBJS} util
-	${LD} ${OBJS} ${ZPLAOBJS} ${GMPLAOBJS} ${UTILOBJS} -o ../bin/comommod ${LDFLAGS}
+# -fopenmp on the link line itself: the top-level Makefile passes LDFLAGS on
+# the command line, which replaces the assignment above and with it -fopenmp
+	${LD} ${OBJS} ${ZPLAOBJS} ${GMPLAOBJS} ${UTILOBJS} -o ../bin/comommod ${LDFLAGS} -fopenmp
 
 util:  ${UTILOBJS}
 

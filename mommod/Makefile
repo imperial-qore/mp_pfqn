@@ -16,7 +16,9 @@ RM = /bin/rm -f
 all: mommod
 
 mommod: ${OBJS} util
-	${LD} ${OBJS} ${ZPLAOBJS} ${GMPLAOBJS} ${UTILOBJS} -o ../bin/mommod ${LDFLAGS}
+# -fopenmp on the link line itself: the top-level Makefile passes LDFLAGS on
+# the command line, which replaces the assignment above and with it -fopenmp
+	${LD} ${OBJS} ${ZPLAOBJS} ${GMPLAOBJS} ${UTILOBJS} -o ../bin/mommod ${LDFLAGS} -fopenmp
 
 util:  ${UTILOBJS}
 

@@ -17,7 +17,9 @@ RM = /bin/rm -f
 all: comom
 
 comom: ${OBJS} util ccengine.o
-	${LD} ${OBJS} ccengine.o ${GMPLAOBJS} ${UTILOBJS} -o ../bin/comom ${LDFLAGS} 
+# -fopenmp on the link line itself: the top-level Makefile passes LDFLAGS on
+# the command line, which replaces the assignment above and with it -fopenmp
+	${LD} ${OBJS} ccengine.o ${GMPLAOBJS} ${UTILOBJS} -o ../bin/comom ${LDFLAGS} -fopenmp
 
 # The multi-modular engine of comommod, used for tier 4 of the singular-model
 # fallback (as bin/mom uses mommod's).  comommod's sources reuse names that
