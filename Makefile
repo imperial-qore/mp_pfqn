@@ -29,8 +29,8 @@ LDFLAGS += $(DEP_LDFLAGS)
 
 #.SILENT:
 
-DIRS	= util gmpla fpla zpla mva mvamx mom recal rndmodel ca comom routing2visits procomom gld comomld mvaldmx lcfsmva momf mommod comommod gmom safe_comom safe_mom safe_gmom promom safe_promom camarg binmom bincomom
-EXE	= ./bin/mom ./bin/momf ./bin/mommod ./bin/comommod ./bin/gmom ./bin/comom ./bin/safe_comom ./bin/safe_mom ./bin/safe_gmom ./bin/procomom ./bin/promom ./bin/safe_promom ./bin/camarg ./bin/binmom ./bin/bincomom
+DIRS	= util gmpla zpla mva mvamx mom recal rndmodel ca comom routing2visits procomom gld comomld mvaldmx lcfsmva mommod comommod gmom safe_comom safe_mom safe_gmom promom safe_promom camarg binmom bincomom
+EXE	= ./bin/mom ./bin/mommod ./bin/comommod ./bin/gmom ./bin/comom ./bin/safe_comom ./bin/safe_mom ./bin/safe_gmom ./bin/procomom ./bin/promom ./bin/safe_promom ./bin/camarg ./bin/binmom ./bin/bincomom
 LIBS	= -L. -lsub -lsuba -lsubsub
 
 all : check-deps $(EXE) 
@@ -86,9 +86,7 @@ $(EXE) :
 	cd comomld; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	cd mvaldmx; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	cd lcfsmva; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
-	cd fpla; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	cd zpla; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
-	cd momf; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	cd mommod; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	cd comommod; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	cd gmom; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..

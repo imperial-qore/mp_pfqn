@@ -20,7 +20,7 @@ make
 make clean && make
 ```
 
-Binaries are placed in `bin/`: `mva`, `ca`, `recal`, `mom`, `momf`, `mommod`, `comom`, `comommod`, `procomom`, `rndmodel`, `routing2visits`.
+Binaries are placed in `bin/`: `mva`, `ca`, `recal`, `mom`, `mommod`, `comom`, `comommod`, `procomom`, `rndmodel`, `routing2visits`.
 
 **`bool` in headers**: `util/util.h` includes `<stdbool.h>` unconditionally. It must
 not go back to defining `bool` as `unsigned int`: sources differ in whether they
@@ -67,21 +67,19 @@ The test script runs all 5 solvers (mva, ca, recal, mom, comom) with options `-e
 | `safe_promom/` | ProMoM exact on class-order singularities | Tier wrapper over `util/safe_tiers`: `promom -X`, then class-permuted `promom -X`. Tier 3 is `camarg` (exact convolution marginals), not `ca`, which returns means rather than distributions. Tier 2 recovers `08_multiclass` and `11_swapped`. See `safe_promom/README.md` |
 | `binmom/` | MoM by binary splitting | Same recursion and output as `mom` (byte-identical), but within each class the steps `n g(n) = (nP+Q) g(n-1)` (blocks fixed per class) are multiplied together by binary splitting over the integers: about `d^3 N polylog N` instead of `d^2 N^2 log N`. Splits a class only when `N_r >= 2 d^2` (`--cross`), else takes `mom`'s steps; `-j` threads the products. Up to 500x faster than every other solver at small basis and large population; matches `mom` elsewhere; `mommod` stays faster at moderate basis. Prototype: refuses mixed zero/non-zero think times and singular systems (use `mom`). See `binmom/README.md` |
 | `bincomom/` | CoMoM by binary splitting | `bin/comom` itself (its `main.c` compiled with `main` renamed, comom's objects and `ccengine.o` linked) plus one hook, `COMOM_ADVANCE`: once a class system is set up it moves the basis from `n_r = 0` to `N_r - (M+1)` by binary splitting (`util/binsplit.h`); the last `M+1` steps stay with comom. The step matrices are read off `comom_step()` (comom's step, moved unchanged into a function) at `n = 1, 2`, so every special path of comom is inside them; a guard checks them against a real step. Byte-identical to `comom`, every flag and the singular fallback included, no refusals of its own. Splits when `N_r - M - 1 >= 2 d^2` (`--cross`). 330x faster than comom at small basis and large population, the same elsewhere. See `bincomom/README.md` |
-| `momf/` | MoM in fixed-precision floating point | MPFR at a settable working precision, optional Wilkinson/Moler iterative refinement. Built to measure whether the exact arithmetic is necessary. Singular models go through the `util/singular.h` tiers; LU pivots below 2^-(P/2) count as singular (`--pivtol`), and tier 4 raises the precision until two rounds agree; see `momf/README.md` |
 | `mommod/` | Multi-modular MoM | Whole recursion replayed in `Z/p` for many word-size primes, CRT plus rational reconstruction at the end, OpenMP over primes (`-j`). `-B` halves the prime count via denominator-bounded reconstruction, verified against witness primes held out of the CRT (`-W`); off by default since it is probabilistic. Singular models are solved exactly by a tiered fallback: other class orders, merging identical stations or proportional classes, then interpolation of the exact limit of a perturbation (tiers 1-3 shared in `util/singular.h`, tier 4 per prime). See `mommod/README.md` |
 | `comommod/` | Multi-modular CoMoM | The `comom` class-oriented recursion replayed in `Z/p` for many word-size primes, CRT plus rational reconstruction at the end, OpenMP over primes (`-j`). Same flags as `mommod`, except that `-B`'s denominator bound defaults to a third of the modulus: CoMoM denominators grow with the population instead of staying a few dozen bits wide. Singular models are solved exactly by the same tiered fallback as `mommod`. See `comommod/README.md` |
 
 ### Shared Libraries
 
 - **`gmpla/`** — GMP linear algebra: dense matrices (`mpq_mat_t`), sparse matrices (`mpq_msp_t`), LU decomposition (`mpq_ludcmp`/`mpq_lubksb`), LinBox interface
-- **`fpla/`** — the same API over MPFR floats at a run-time settable precision (`fp_*`), plus iterative refinement
 - **`zpla/`** — the same API over `Z/p` in machine words (`zp_*`), Montgomery arithmetic, CRT and rational reconstruction
 - **`util/`** — Model I/O (`readmodel`), population enumeration (`nextpop`, `popindex`), combinatorics (`nck`),
   the shared b=1 level builder and singularity oracle (`setup1`, `pfqn_recursion_singular`,
   `pfqn_nonsingular_recclass` in `pfqn_sing.{c,h}`), the tiered exact-wrapper driver
   (`safe_tiers.{c,h}`, used by `safe_comom`, `safe_mom`, `safe_gmom` and `safe_promom`); header-only
   `lvtab.h` (replica-level tables of the full MoM basis, `mom_mixed_think`), `singular.h` (tiered exact
-  fallback for singular MoM/CoMoM systems, shared by `mom`, `momf`, `mommod`, `comom`, `comommod`) and
+  fallback for singular MoM/CoMoM systems, shared by `mom`, `mommod`, `comom`, `comommod`) and
   `singular_marg.h` (the same tiers for per-station marginal distributions, interpolating the unnormalized
   marginals; used by `promom` and `procomom`), `binsplit.h` (exact products of a class's population steps by
   binary splitting, shared by `binmom` and `bincomom`) and `replicas.h` (the copies meaning of `mi` for the
@@ -131,11 +129,10 @@ All solvers share: `-l` (log NC), `-e` (exact NC num/den), `-g` (NC as double), 
 
 MoM/CoMoM additionally support: `-p digit` (perturbation), `-s seed` (perturbation seed).
 
-Letters keep one meaning across solvers: `-b` bounds (`mom`, `momf`, `gmom`), `-P` marginal/state probabilities
+Letters keep one meaning across solvers: `-b` bounds (`mom`, `gmom`), `-P` marginal/state probabilities
 (`promom`, `procomom`, `camarg`, `comomld`), `-q` mean queue lengths, `-W` witness primes (`mommod`,
 `comommod`). Renamed to get there, the old letter now failing with a pointer to the new name: prime bit size
-`-b` -> `--primebits` (`mommod`, `comommod`), back probabilities `-b` -> `--back` (`lcfsmva`), working
-precision `-P` -> `-w`/`--prec` and residual precision `-W` -> `--resprec` (`momf`), state probabilities
+`-b` -> `--primebits` (`mommod`, `comommod`), back probabilities `-b` -> `--back` (`lcfsmva`), state probabilities
 `-q` -> `-P` (`comomld`, which has no mean queue lengths).
 `mom`, `comom`, `gmom`, `promom` and `procomom` also support `-X`/`--no-perturb`: fail on a singular system instead of running the exact fallback (or, for `gmom`, auto-perturbing).
 
@@ -152,3 +149,7 @@ precision `-P` -> `-w`/`--prec` and residual precision `-W` -> `--resprec` (`mom
 ## Commit Convention
 
 Use conventional commits: `feat:`, `fix:`, `chore:`, etc.
+
+## Development-only solvers
+
+`momf` (MoM in MPFR fixed precision, with its `fpla/` library) lives on the `momf-dev` branch only, outside the production releases cut from `main` and `dev`. `momf-dev` follows `dev` by merging `dev` into it; the commit that removed `momf` from `dev` is recorded there as merged (`git merge -s ours`), so those merges keep `momf`.

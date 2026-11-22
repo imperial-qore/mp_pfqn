@@ -87,7 +87,6 @@ Examples are available under the models/ folder.
 ./bin/ca model.qn       # Convolution Algorithm
 ./bin/recal model.qn    # Recursion by Chain Algorithm
 ./bin/mom model.qn      # Method of Moments
-./bin/momf model.qn     # Method of Moments in fixed-precision floating point (MPFR)
 ./bin/mommod model.qn   # Multi-modular Method of Moments (Z/p images, CRT, OpenMP -j)
 ./bin/comom model.qn    # Class-Oriented Method of Moments
 ./bin/comommod model.qn # Multi-modular Class-Oriented Method of Moments
@@ -172,15 +171,14 @@ When the MoM system is singular, `mom` solves the model exactly through other cl
 
 CoMoM supports the same command-line options as MoM (see table above), except `-j` and `--linbox`. The Class-Oriented Method of Moments provides an efficient algorithm specifically designed for multiclass models with large population sizes.
 
-#### mommod, comommod and momf Solver Options
+#### mommod and comommod Solver Options
 
 ```bash
 ./bin/mommod   [ -e | -g | -l | -t | -q ] [-j n] [--primebits bits] [-B] [-W n] models/08_multiclass.qn
 ./bin/comommod [ -e | -g | -l | -t | -q | -d ] [-j n] [--primebits bits] [-B] [-W n] models/08_multiclass.qn
-./bin/momf     [ MoM options ] [-P bits] [-I n] [--pivtol bits] models/02_bottleneck.qn
 ```
 
-`mommod` and `comommod` replay the MoM and CoMoM recursions in `Z/p` for many word-size primes and recover the exact rationals by CRT, with `-j` primes solved concurrently. `momf` runs MoM in MPFR floating point at a settable precision. All three, like `mom`, solve singular models through the shared tiered fallback (`momf` to its working precision). See `mommod/README.md`, `comommod/README.md` and `momf/README.md`.
+`mommod` and `comommod` replay the MoM and CoMoM recursions in `Z/p` for many word-size primes and recover the exact rationals by CRT, with `-j` primes solved concurrently. Both, like `mom`, solve singular models through the shared tiered fallback. See `mommod/README.md` and `comommod/README.md`.
 
 #### gmom Solver Options
 
@@ -224,7 +222,7 @@ CoMoM supports the same command-line options as MoM (see table above), except `-
 ```
 **Notes**: 
 - The `-d`/`--exact` option is available in all solvers and prints performance metrics (throughputs, queue lengths, normalizing constants) in full exact precision as rational numbers (e.g., `1/3` instead of `0.333333`). This is useful for verification and when exact values are required.
-- `mom`, `momf`, `mommod` and `comommod` solve models with a singular MoM/CoMoM system exactly, through other class orders, merged stations or classes, or interpolation of the exact limit of a perturbation (`util/singular.h`); the route is noted on stderr. The perturbation option (`-p`) remains available in the MoM and CoMoM solvers for an approximate solution. It introduces small randomized numerical perturbations to enable approximate solutions. When perturbation is applied, model parameters are displayed as original integer values with separate perturbation annotations (e.g., `50 eps=1.0e-05`). The `-s` option allows you to specify a random seed for reproducible perturbations.
+- `mom`, `mommod` and `comommod` solve models with a singular MoM/CoMoM system exactly, through other class orders, merged stations or classes, or interpolation of the exact limit of a perturbation (`util/singular.h`); the route is noted on stderr. The perturbation option (`-p`) remains available in the MoM and CoMoM solvers for an approximate solution. It introduces small randomized numerical perturbations to enable approximate solutions. When perturbation is applied, model parameters are displayed as original integer values with separate perturbation annotations (e.g., `50 eps=1.0e-05`). The `-s` option allows you to specify a random seed for reproducible perturbations.
 
 ## References
 
