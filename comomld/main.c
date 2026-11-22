@@ -8,25 +8,9 @@
 #include <sys/resource.h>
 #include "util.h"
 #include "comomld.h"
+#include "replicas.h"
 
 #define CPUTIME (getrusage(RUSAGE_SELF,&ruse), ruse.ru_utime.tv_sec + ruse.ru_stime.tv_sec + 1e-6 * (ruse.ru_utime.tv_usec + ruse.ru_stime.tv_usec))
-
-/* Auto-generate mu from mi: mu[m][k] = min(k+1, mi[m]) */
-static void comomld_auto_mu(qnmodel *qn)
-{
-	int m, k;
-	if (qn->mu != NULL || qn->Nt <= 0)
-		return;
-	qn->mu = (mpq_t **)malloc(qn->M * sizeof(mpq_t *));
-	for (m = 0; m < qn->M; m++) {
-		qn->mu[m] = (mpq_t *)malloc(qn->Nt * sizeof(mpq_t));
-		for (k = 0; k < qn->Nt; k++) {
-			mpq_init(qn->mu[m][k]);
-			mpq_set_ui(qn->mu[m][k], MIN(k + 1, qn->mi[m]), 1);
-		}
-	}
-	qn->isLD = 1;
-}
 
 int main(int argc, char **argv)
 {
@@ -41,11 +25,11 @@ int main(int argc, char **argv)
 	char *model_file = NULL;
 
 	if (argc < 2) {
-		printf("USAGE: %s [-l] [-e] [-g] [-q] [-h] model.qn\n", argv[0]);
+		printf("USAGE: %s [-l] [-e] [-g] [-P] [-h] model.qn\n", argv[0]);
 		printf("  -l : log of normalizing constant\n");
 		printf("  -e : exact normalizing constant (num/den)\n");
 		printf("  -g : normalizing constant as double\n");
-		printf("  -q : state probabilities at queueing station\n");
+		printf("  -P : state probabilities at the queueing station (was -q)\n");
 		return -1;
 	}
 
@@ -56,10 +40,15 @@ int main(int argc, char **argv)
 			normconst_output = true;
 		else if (strcmp(argv[i], "-g") == 0)
 			normconst_g_output = true;
-		else if (strcmp(argv[i], "-q") == 0)
+		else if (strcmp(argv[i], "-P") == 0)
 			prob_output = true;
+		else if (strcmp(argv[i], "-q") == 0) {
+			/* -q means mean queue lengths in every other solver */
+			fprintf(stderr, "comomld: the state probabilities moved from -q to -P; mean queue lengths (-q) are not available\n");
+			return 1;
+		}
 		else if (strcmp(argv[i], "-h") == 0) {
-			printf("USAGE: %s [-l] [-e] [-g] [-q] [-h] model.qn\n", argv[0]);
+			printf("USAGE: %s [-l] [-e] [-g] [-P] [-h] model.qn\n", argv[0]);
 			return 0;
 		} else if (argv[i][0] == '-') {
 			/* skip unknown options with arguments */
@@ -71,7 +60,7 @@ int main(int argc, char **argv)
 	}
 
 	if (model_file == NULL) {
-		printf("USAGE: %s [-l] [-e] [-g] [-q] model.qn\n", argv[0]);
+		printf("USAGE: %s [-l] [-e] [-g] [-P] model.qn\n", argv[0]);
 		return -1;
 	}
 
@@ -80,9 +69,9 @@ int main(int argc, char **argv)
 	if (!log_output && !normconst_output && !normconst_g_output && !prob_output)
 		printmodel(qn);
 
-	/* Auto-generate mu from mi if no MU section */
-	if (!qn->isLD)
-		comomld_auto_mu(qn);
+	/* mi copies of a station as one load-dependent station (util/replicas.h) */
+	if (qn_replica_mu(qn))
+		return 1;
 
 	int Nt = qn->Nt;
 

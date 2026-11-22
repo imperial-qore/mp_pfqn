@@ -12,7 +12,9 @@
  * All arithmetic is exact rational (mpq_t).
  */
 
-/* Auto-generate mu from mi: mu[m][k] = min(k+1, mi[m]) for k=0..Nt-1 */
+/* Rates without a MU section: mu[m][k] = min(k+1, mi[m]) for k=0..Nt-1,
+ * which is 1 throughout, since main expands a station with mi > 1 into
+ * mi single-server copies first (util/replicas.h). */
 void mvaldmx_auto_mu(qnmodel *qn)
 {
 	int m, k;

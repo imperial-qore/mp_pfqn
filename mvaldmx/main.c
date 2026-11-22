@@ -8,6 +8,7 @@
 #include <sys/resource.h>
 #include "util.h"
 #include "mvaldmx.h"
+#include "replicas.h"
 
 #define CPUTIME (getrusage(RUSAGE_SELF,&ruse), ruse.ru_utime.tv_sec + ruse.ru_stime.tv_sec + 1e-6 * (ruse.ru_utime.tv_usec + ruse.ru_stime.tv_usec))
 
@@ -92,9 +93,17 @@ int main(int argc, char **argv)
 		return -1;
 	}
 
-	/* Auto-generate mu from mi if no MU section */
-	if (!qn->isLD)
-		mvaldmx_auto_mu(qn);
+	/* mi copies of a station: one station per copy, their queue lengths
+	 * summed back below (util/replicas.h).  Folding the copies into one
+	 * load-dependent station instead would be exact for the closed classes
+	 * only, since the open-class correction holds the rates constant past
+	 * Nt. */
+	qnmodel *qs = qn;
+	int *owner = NULL;
+	for (m = 0; m < qn->M; m++)
+		if (qn->mi[m] > 1) { qs = qn_expand_replicas(qn, &owner); break; }
+	if (!qs->isLD)
+		mvaldmx_auto_mu(qs);
 
 	/* Allocate output arrays */
 	mpq_t *X = (mpq_t *)calloc(qn->R, sizeof(mpq_t));
@@ -102,13 +111,34 @@ int main(int argc, char **argv)
 	for (r = 0; r < qn->R; r++)
 		mpq_init(X[r]);
 	for (m = 0; m < qn->M; m++) {
-		Q[m] = (mpq_t *)calloc(qn->R, sizeof(mpq_t));
+		Q[m] = (mpq_t *)calloc((unsigned) qn->R, sizeof(mpq_t));
 		for (r = 0; r < qn->R; r++)
 			mpq_init(Q[m][r]);
 	}
 
 	/* Run solver */
-	double logG = mvaldmx_solve(qn, X, Q);
+	mpq_t **Qs = Q;
+	if (qs != qn) {
+		Qs = (mpq_t **)calloc(qs->M, sizeof(mpq_t *));
+		for (m = 0; m < qs->M; m++) {
+			Qs[m] = (mpq_t *)calloc((unsigned) qn->R, sizeof(mpq_t));
+			for (r = 0; r < qn->R; r++)
+				mpq_init(Qs[m][r]);
+		}
+	}
+	double logG = mvaldmx_solve(qs, X, Qs);
+	if (qs != qn) {
+		for (m = 0; m < qs->M; m++) {
+			for (r = 0; r < qn->R; r++) {
+				mpq_add(Q[owner[m]][r], Q[owner[m]][r], Qs[m][r]);
+				mpq_clear(Qs[m][r]);
+			}
+			free(Qs[m]);
+		}
+		free(Qs);
+		qn_free_expanded(qs, qn->R);
+		free(owner);
+	}
 
 	/* Output results */
 	(void)logG;

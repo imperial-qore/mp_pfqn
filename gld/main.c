@@ -8,6 +8,7 @@
 #include <sys/resource.h>
 #include "util.h"
 #include "gld.h"
+#include "replicas.h"
 
 #define CPUTIME (getrusage(RUSAGE_SELF,&ruse), ruse.ru_utime.tv_sec + ruse.ru_stime.tv_sec + 1e-6 * (ruse.ru_utime.tv_usec + ruse.ru_stime.tv_usec))
 
@@ -61,9 +62,9 @@ int main(int argc, char **argv)
 	if (!log_output && !normconst_output && !normconst_g_output)
 		printmodel(qn);
 
-	/* Auto-generate mu from mi if no MU section */
-	if (!qn->isLD)
-		gld_auto_mu(qn);
+	/* mi copies of a station as one load-dependent station (util/replicas.h) */
+	if (qn_replica_mu(qn))
+		return 1;
 
 	mpq_t G;
 	mpq_init(G);

@@ -574,8 +574,8 @@ int main(int argc, char**argv)
 		printf("  -h, --help       : Print this help message\n");
 		printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
 		printf("  -s seed          : Set perturbation seed (default: 23000)\n");
-		printf("  -P bits          : Working floating-point precision (default: 53, i.e. IEEE double)\n");
-		printf("  -W bits          : Residual precision for iterative refinement (default: 2*P)\n");
+		printf("  -w, --prec bits  : Working floating-point precision (default: 53, i.e. IEEE double)\n");
+		printf("  --resprec bits   : Residual precision for iterative refinement (default: 2*prec)\n");
 		printf("  -I n             : Wilkinson/Moler refinement sweeps per block solve (default: 0 = off)\n");
 		printf("  --pivtol bits    : Treat LU pivots below 2^-bits (relative to their row) as singular\n");
 		printf("                     (default: P/2; 0 = exact zero only, the earlier behavior)\n");
@@ -610,8 +610,8 @@ int main(int argc, char**argv)
 			printf("  -h, --help       : Print this help message\n");
 			printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
 			printf("  -s seed          : Set perturbation seed (default: 23000)\n");
-			printf("  -P bits          : Working floating-point precision (default: 53, i.e. IEEE double)\n");
-			printf("  -W bits          : Residual precision for iterative refinement (default: 2*P)\n");
+			printf("  -w, --prec bits  : Working floating-point precision (default: 53, i.e. IEEE double)\n");
+			printf("  --resprec bits   : Residual precision for iterative refinement (default: 2*prec)\n");
 			printf("  -I n             : Wilkinson/Moler refinement sweeps per block solve (default: 0 = off)\n");
 		printf("  --pivtol bits    : Treat LU pivots below 2^-bits (relative to their row) as singular\n");
 		printf("                     (default: P/2; 0 = exact zero only, the earlier behavior)\n");
@@ -644,7 +644,13 @@ int main(int argc, char**argv)
 			}
 		} else if(strcmp(argv[i], "-D") == 0 || strcmp(argv[i], "--diag") == 0) {
 			DIAGNOSE = true;
-		} else if(strcmp(argv[i], "-P") == 0 || strcmp(argv[i], "--prec") == 0) {
+		} else if(strcmp(argv[i], "-P") == 0 || strcmp(argv[i], "-W") == 0) {
+			/* -P means probabilities in promom/procomom/camarg, -W the
+			 * witness primes in mommod/comommod */
+			fprintf(stderr, "momf: %s is now %s\n", argv[i],
+			        argv[i][1] == 'P' ? "-w/--prec" : "--resprec");
+			return 1;
+		} else if(strcmp(argv[i], "-w") == 0 || strcmp(argv[i], "--prec") == 0) {
 			if(i + 1 < argc) {
 				working_prec = atol(argv[++i]);
 				if(working_prec < 2) {
@@ -652,14 +658,14 @@ int main(int argc, char**argv)
 					return -1;
 				}
 			} else {
-				printf("Error: -P option requires a bit count\n");
+				printf("Error: -w option requires a bit count\n");
 				return -1;
 			}
-		} else if(strcmp(argv[i], "-W") == 0 || strcmp(argv[i], "--resprec") == 0) {
+		} else if(strcmp(argv[i], "--resprec") == 0) {
 			if(i + 1 < argc) {
 				residual_prec = atol(argv[++i]);
 			} else {
-				printf("Error: -W option requires a bit count\n");
+				printf("Error: --resprec option requires a bit count\n");
 				return -1;
 			}
 		} else if(strcmp(argv[i], "-I") == 0 || strcmp(argv[i], "--refine") == 0) {
@@ -695,8 +701,8 @@ int main(int argc, char**argv)
 		printf("  -h, --help       : Print this help message\n");
 		printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
 		printf("  -s seed          : Set perturbation seed (default: 23000)\n");
-		printf("  -P bits          : Working floating-point precision (default: 53, i.e. IEEE double)\n");
-		printf("  -W bits          : Residual precision for iterative refinement (default: 2*P)\n");
+		printf("  -w, --prec bits  : Working floating-point precision (default: 53, i.e. IEEE double)\n");
+		printf("  --resprec bits   : Residual precision for iterative refinement (default: 2*prec)\n");
 		printf("  -I n             : Wilkinson/Moler refinement sweeps per block solve (default: 0 = off)\n");
 		printf("  --pivtol bits    : Treat LU pivots below 2^-bits (relative to their row) as singular\n");
 		printf("                     (default: P/2; 0 = exact zero only, the earlier behavior)\n");

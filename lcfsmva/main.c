@@ -31,13 +31,13 @@ int main(int argc, char **argv)
 	char* model_file = NULL;
 
 	if (argc < 2) {
-		printf("USAGE: lcfsmva [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-b|--back] [-d|--exact] [-h|--help] model.qn\n");
+		printf("USAGE: lcfsmva [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [--back] [-d|--exact] [-h|--help] model.qn\n");
 		printf("  -l, --log        : Print only log of normalizing constant as double\n");
 		printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
 		printf("  -g, --nc         : Print normalizing constant as double\n");
 		printf("  -t, --tput       : Print only throughputs, one per row\n");
 		printf("  -q, --qlen       : Print only queue lengths, one per row\n");
-		printf("  -b, --back       : Print back probabilities (2 rows, R columns)\n");
+		printf("  --back           : Print back probabilities (2 rows, R columns)\n");
 		printf("  -d, --exact      : Print all performance metrics in full exact precision (integer or rational)\n");
 		printf("  -h, --help       : Print this help message\n");
 		return -1;
@@ -54,18 +54,21 @@ int main(int argc, char **argv)
 			throughput_output = true;
 		} else if (strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--qlen") == 0) {
 			queue_output = true;
-		} else if (strcmp(argv[i], "-b") == 0 || strcmp(argv[i], "--back") == 0) {
+		} else if (strcmp(argv[i], "--back") == 0) {
 			back_output = true;
+		} else if (strcmp(argv[i], "-b") == 0) {
+			fprintf(stderr, "lcfsmva: -b is now --back (-b means bounds in mom, momf and gmom)\n");
+			return 1;
 		} else if (strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--exact") == 0) {
 			exact_output = true;
 		} else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-			printf("USAGE: lcfsmva [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-b|--back] [-d|--exact] [-h|--help] model.qn\n");
+			printf("USAGE: lcfsmva [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [--back] [-d|--exact] [-h|--help] model.qn\n");
 			printf("  -l, --log        : Print only log of normalizing constant as double\n");
 			printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
 			printf("  -g, --nc         : Print normalizing constant as double\n");
 			printf("  -t, --tput       : Print only throughputs, one per row\n");
 			printf("  -q, --qlen       : Print only queue lengths, one per row\n");
-			printf("  -b, --back       : Print back probabilities (2 rows, R columns)\n");
+			printf("  --back           : Print back probabilities (2 rows, R columns)\n");
 			printf("  -d, --exact      : Print all performance metrics in full exact precision (integer or rational)\n");
 			printf("  -h, --help       : Print this help message\n");
 			return 0;
@@ -83,13 +86,13 @@ int main(int argc, char **argv)
 	}
 
 	if (model_file == NULL) {
-		printf("USAGE: lcfsmva [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-b|--back] [-d|--exact] [-h|--help] model.qn\n");
+		printf("USAGE: lcfsmva [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [--back] [-d|--exact] [-h|--help] model.qn\n");
 		printf("  -l, --log        : Print only log of normalizing constant as double\n");
 		printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
 		printf("  -g, --nc         : Print normalizing constant as double\n");
 		printf("  -t, --tput       : Print only throughputs, one per row\n");
 		printf("  -q, --qlen       : Print only queue lengths, one per row\n");
-		printf("  -b, --back       : Print back probabilities (2 rows, R columns)\n");
+		printf("  --back           : Print back probabilities (2 rows, R columns)\n");
 		printf("  -d, --exact      : Print all performance metrics in full exact precision (integer or rational)\n");
 		printf("  -h, --help       : Print this help message\n");
 		return -1;

@@ -66,8 +66,7 @@ The test script runs all 5 solvers (mva, ca, recal, mom, comom) with options `-e
 | `camarg/` | Convolution marginals | Exact marginal queue-length distribution per station by Buzen convolution over the population lattice, `q_k(N,n) = sum_{|j|=n} (n!/prod j_r!) prod L_kr^{j_r} G_-k(N-j)`. No coefficient matrix, so never singular: the oracle for `promom`/`procomom` on degenerate models and `safe_promom`'s Tier 3. Cost is exponential in R. See `camarg/README.md` |
 | `safe_promom/` | ProMoM exact on class-order singularities | Tier wrapper over `util/safe_tiers`: `promom -X`, then class-permuted `promom -X`. Tier 3 is `camarg` (exact convolution marginals), not `ca`, which returns means rather than distributions. Tier 2 recovers `08_multiclass` and `11_swapped`. See `safe_promom/README.md` |
 | `binmom/` | MoM by binary splitting | Same recursion and output as `mom` (byte-identical), but within each class the steps `n g(n) = (nP+Q) g(n-1)` (blocks fixed per class) are multiplied together by binary splitting over the integers: about `d^3 N polylog N` instead of `d^2 N^2 log N`. Splits a class only when `N_r >= 2 d^2` (`--cross`), else takes `mom`'s steps; `-j` threads the products. Up to 500x faster than every other solver at small basis and large population; matches `mom` elsewhere; `mommod` stays faster at moderate basis. Prototype: refuses mixed zero/non-zero think times and singular systems (use `mom`). See `binmom/README.md` |
-| `clw/` | Choudhury-Leung-Whitt (CLW) | Generating-function inversion; single-server + IS. Floating-point (G/logG as doubles, not exact) |
-| `clwld/` | CLW with load-dependent stations | Bertozzi-McKenna per-center transforms; multiserver and load-dependent. Floating-point output |
+| `bincomom/` | CoMoM by binary splitting | `bin/comom` itself (its `main.c` compiled with `main` renamed, comom's objects and `ccengine.o` linked) plus one hook, `COMOM_ADVANCE`: once a class system is set up it moves the basis from `n_r = 0` to `N_r - (M+1)` by binary splitting (`util/binsplit.h`); the last `M+1` steps stay with comom. The step matrices are read off `comom_step()` (comom's step, moved unchanged into a function) at `n = 1, 2`, so every special path of comom is inside them; a guard checks them against a real step. Byte-identical to `comom`, every flag and the singular fallback included, no refusals of its own. Splits when `N_r - M - 1 >= 2 d^2` (`--cross`). 330x faster than comom at small basis and large population, the same elsewhere. See `bincomom/README.md` |
 | `momf/` | MoM in fixed-precision floating point | MPFR at a settable working precision, optional Wilkinson/Moler iterative refinement. Built to measure whether the exact arithmetic is necessary. Singular models go through the `util/singular.h` tiers; LU pivots below 2^-(P/2) count as singular (`--pivtol`), and tier 4 raises the precision until two rounds agree; see `momf/README.md` |
 | `mommod/` | Multi-modular MoM | Whole recursion replayed in `Z/p` for many word-size primes, CRT plus rational reconstruction at the end, OpenMP over primes (`-j`). `-B` halves the prime count via denominator-bounded reconstruction, verified against witness primes held out of the CRT (`-W`); off by default since it is probabilistic. Singular models are solved exactly by a tiered fallback: other class orders, merging identical stations or proportional classes, then interpolation of the exact limit of a perturbation (tiers 1-3 shared in `util/singular.h`, tier 4 per prime). See `mommod/README.md` |
 | `comommod/` | Multi-modular CoMoM | The `comom` class-oriented recursion replayed in `Z/p` for many word-size primes, CRT plus rational reconstruction at the end, OpenMP over primes (`-j`). Same flags as `mommod`, except that `-B`'s denominator bound defaults to a third of the modulus: CoMoM denominators grow with the population instead of staying a few dozen bits wide. Singular models are solved exactly by the same tiered fallback as `mommod`. See `comommod/README.md` |
@@ -84,7 +83,10 @@ The test script runs all 5 solvers (mva, ca, recal, mom, comom) with options `-e
   `lvtab.h` (replica-level tables of the full MoM basis, `mom_mixed_think`), `singular.h` (tiered exact
   fallback for singular MoM/CoMoM systems, shared by `mom`, `momf`, `mommod`, `comom`, `comommod`) and
   `singular_marg.h` (the same tiers for per-station marginal distributions, interpolating the unnormalized
-  marginals; used by `promom` and `procomom`)
+  marginals; used by `promom` and `procomom`), `binsplit.h` (exact products of a class's population steps by
+  binary splitting, shared by `binmom` and `bincomom`) and `replicas.h` (the copies meaning of `mi` for the
+  load-dependent solvers: `qn_replica_mu` folds `mi` copies into one load-dependent station, exactly;
+  `qn_expand_replicas` writes one station per copy)
 
 ### Core Data Structure (`util/util.h`)
 
@@ -95,7 +97,7 @@ typedef struct {
     int *N;          // job populations per class
     mpz_t *Z;        // think times (GMP integers)
     mpz_t **L;       // service demands (GMP integers)
-    int *mi;         // queue multiplicities (server count)
+    int *mi;         // multiplicity: number of identical copies of the station (see below)
 } qnmodel;
 ```
 
@@ -112,6 +114,15 @@ m1 L11 L12 ... L1R   # station 1: multiplicity, demands per class
 ...
 ```
 
+**Multiplicity `mi`** means `mi` identical copies of the station, each a single-server queue with the
+station's demands (and rates, with a MU section), every job visiting each copy; queue lengths are reported as
+the total over the copies. Every solver reads it this way. A queue with `c` servers sharing one line is
+written with a MU section, rates `1 2 ... c c c`. `gld`, `comomld` and `mvaldmx` used to read `mi` as `c`
+servers (rates `min(n, mi)`), a different model, and disagreed with `ca` by 1% to 80% on models with `mi > 1`;
+they now fold the copies into one load-dependent station of rates `c(t-1)/c(t)`, `c` the `mi`-fold convolution
+of `1/(mu(1)...mu(t))` (`t/(t+mi-1)` for plain queues), or, in `mvaldmx`, expand them (`util/replicas.h`), and
+match `ca` exactly.
+
 12 test models in `models/` (01_single through 12_expanded).
 
 ### Solver CLI Options
@@ -119,6 +130,13 @@ m1 L11 L12 ... L1R   # station 1: multiplicity, demands per class
 All solvers share: `-l` (log NC), `-e` (exact NC num/den), `-g` (NC as double), `-t` (throughputs), `-q` (queue lengths), `-d` (all metrics exact rational).
 
 MoM/CoMoM additionally support: `-p digit` (perturbation), `-s seed` (perturbation seed).
+
+Letters keep one meaning across solvers: `-b` bounds (`mom`, `momf`, `gmom`), `-P` marginal/state probabilities
+(`promom`, `procomom`, `camarg`, `comomld`), `-q` mean queue lengths, `-W` witness primes (`mommod`,
+`comommod`). Renamed to get there, the old letter now failing with a pointer to the new name: prime bit size
+`-b` -> `--primebits` (`mommod`, `comommod`), back probabilities `-b` -> `--back` (`lcfsmva`), working
+precision `-P` -> `-w`/`--prec` and residual precision `-W` -> `--resprec` (`momf`), state probabilities
+`-q` -> `-P` (`comomld`, which has no mean queue lengths).
 `mom`, `comom`, `gmom`, `promom` and `procomom` also support `-X`/`--no-perturb`: fail on a singular system instead of running the exact fallback (or, for `gmom`, auto-perturbing).
 
 ## Build System Details

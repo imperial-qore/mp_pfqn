@@ -403,7 +403,7 @@ static int crt_solve(qnmodel* q, image_fn image, void* ctx, unsigned long minpri
 				        "Error: exhausted the primes of %d bits after %d of them"
 				        " (%lu bits of modulus).\n"
 				        "The reconstruction needs a larger modulus than this prime size"
-				        " can supply; rerun with a larger -b\n"
+				        " can supply; rerun with a larger --primebits\n"
 				        "(the default -b 61 supplies on the order of 1e18 bits and is"
 				        " never exhausted in practice).\n",
 				        S_PRIMEBITS, nprimes, (unsigned long)mpz_sizeinbase(M,2));

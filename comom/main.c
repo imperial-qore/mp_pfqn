@@ -50,6 +50,361 @@ void printcompact(int*n,int R, double elapsed_time)
 	fflush(stdout);
 }
 
+/* One population step of class r, with the class system of linsys: g holds
+ * the basis at n_r = nr-1 on entry and is not changed; G and b1 receive
+ * G(nr) and Gk(nr) (b1b is workspace).  Returns 0, or -1 on a singular
+ * solve.  Every operation is linear in g with pivots chosen from the
+ * coefficients alone, so nr*[b1;G] = (nr*P + Q) g for matrices P, Q fixed
+ * within the class: bincomom relies on this. */
+int comom_step(LS* linsys, combsrep* Dn, int r, int nr, mpq_vec_t g, mpq_vec_t G,
+               mpq_vec_t b1, mpq_vec_t b1b, long int cardG, long int cardGk, bool debug_output)
+{
+	int i, s, d;
+	if (cardG <= 0 || cardGk <= 0 || cardGk > INT32_MAX) return -1;
+	/* compute G=B2*g/n */
+	mpq_mspvecmul(G, linsys->B2, g);
+	mpq_t ninv; mpq_init(ninv); mpq_set_si(ninv,1,nr);
+	for(i=0;i<cardG;i++) mpq_mul(G[i],ninv,G[i]);
+	mpq_clear(ninv);
+
+	/* Zero G at impossible positions before computing b1.
+	 * This prevents contamination of the RHS for the Gk solve. */
+	if (r >= 2) {
+		for (d = 0; d < Dn->card; d++) {
+			int is_imp = 0;
+			for (s = 0; s <= r-2; s++) {
+				if (Dn->combs[d][s] > qnm->N[s]) {
+					is_imp = 1; break;
+				}
+			}
+			if (is_imp) mpq_set_ui(G[d], 0, 1);
+		}
+	}
+
+	/* compute b1=B1*g - A12*G */
+	mpq_mspvecmul(b1,linsys->B1,g);
+	mpq_mspvecmul(b1b,linsys->A12,G);
+	for(i=1;i<=cardGk;i++) mpq_sub(b1[i-1],b1[i-1],b1b[i-1]);
+
+	/* compute Gk via augmented LU (non-filtered path), BTF, or direct LU */
+	if (linsys->n_nf_combos > 0) {
+		/* Overdetermined solve: original A11 rows + NF CE identity rows.
+		 * Build tall matrix and solve via GE. */
+		int M_val = qnm->M;
+		int n_nf = linsys->n_nf_combos;
+		int N_cols = (int)cardGk;
+		int N_tall = N_cols + n_nf * M_val;
+
+		/* Build tall matrix and RHS */
+		mpq_mat_t A_tall = (mpq_mat_t)mpq_matzeros(N_tall, N_cols);
+		mpq_vec_t b_tall = (mpq_vec_t)mpq_vec(N_tall, 0, 1);
+
+		/* First cardGk rows: original A11 */
+		for (int row = 0; row < N_cols; row++) {
+			for (int j = 0; j < N_cols; j++)
+				mpq_set(A_tall[row][j], linsys->A11[row][j]);
+			mpq_set(b_tall[row], b1[row]);
+		}
+
+		/* Last n_nf*M rows: CE identity for NF combos */
+		for (int ni = 0; ni < n_nf; ni++) {
+			int d_idx = linsys->nf_combo_indices[ni];
+			int is_imp = 0;
+			if (r >= 2)
+				for (int ss = 0; ss <= r-2; ss++)
+					if (Dn->combs[d_idx][ss] > qnm->N[ss])
+						{ is_imp = 1; break; }
+			for (int kk = 0; kk < M_val; kk++) {
+				int tall_row = N_cols + ni * M_val + kk;
+				int col = linsys->nf_col_indices[ni * M_val + kk];
+				mpq_set_ui(A_tall[tall_row][col], 1, 1);
+				if (is_imp) {
+					mpq_set_ui(b_tall[tall_row], 0, 1);
+				} else {
+					int h = hash(Dn, Dn->combs[d_idx], kk+1) - 1;
+					mpq_t Lkr; mpq_init(Lkr);
+					mpq_set_z(Lkr, qnm->L[kk][r-1]);
+					mpq_mul(b_tall[tall_row], Lkr, g[h]);
+					mpq_add(b_tall[tall_row], b_tall[tall_row], G[d_idx]);
+					mpq_clear(Lkr);
+				}
+			}
+		}
+
+		/* GE with partial pivoting on tall matrix */
+		mpq_t gf, gt;
+		mpq_init(gf); mpq_init(gt);
+		int rank = 0;
+		int* piv_col = (int*)calloc(N_cols, sizeof(int));
+		for (int j = 0; j < N_cols; j++) piv_col[j] = -1;
+
+		for (int col = 0; col < N_cols && rank < N_cols; col++) {
+			int piv = -1;
+			for (int row = rank; row < N_tall; row++)
+				if (mpq_sgn(A_tall[row][col]) != 0) { piv = row; break; }
+			if (piv < 0) continue;
+			piv_col[rank] = col;
+			if (piv != rank) {
+				for (int j = col; j < N_cols; j++)
+					mpq_swap(A_tall[rank][j], A_tall[piv][j]);
+				mpq_swap(b_tall[rank], b_tall[piv]);
+			}
+			for (int row = rank + 1; row < N_tall; row++) {
+				if (mpq_sgn(A_tall[row][col]) == 0) continue;
+				mpq_div(gf, A_tall[row][col], A_tall[rank][col]);
+				for (int j = col + 1; j < N_cols; j++) {
+					mpq_mul(gt, gf, A_tall[rank][j]);
+					mpq_sub(A_tall[row][j], A_tall[row][j], gt);
+				}
+				mpq_mul(gt, gf, b_tall[rank]);
+				mpq_sub(b_tall[row], b_tall[row], gt);
+				mpq_set_ui(A_tall[row][col], 0, 1);
+			}
+			rank++;
+		}
+		mpq_clear(gf); mpq_clear(gt);
+
+		if (debug_output) {
+			fprintf(stderr, "DEBUG: Overdetermined GE rank=%d/%d\n", rank, N_cols);
+			/* Check consistency: rows rank..N_tall-1 should be zero */
+			int n_incon = 0;
+			for (int row = rank; row < N_tall; row++)
+				if (mpq_sgn(b_tall[row]) != 0) n_incon++;
+			fprintf(stderr, "DEBUG: Inconsistent rows: %d\n", n_incon);
+		}
+
+		/* Back-substitution (use first 'rank' rows) */
+		for (int ii = rank - 1; ii >= 0; ii--) {
+			int pc = piv_col[ii];
+			mpq_set(b1[pc], b_tall[ii]);
+			for (int j = pc + 1; j < N_cols; j++) {
+				if (mpq_sgn(A_tall[ii][j]) == 0) continue;
+				mpq_t tmp; mpq_init(tmp);
+				mpq_mul(tmp, A_tall[ii][j], b1[j]);
+				mpq_sub(b1[pc], b1[pc], tmp);
+				mpq_clear(tmp);
+			}
+			mpq_div(b1[pc], b1[pc], A_tall[ii][pc]);
+		}
+		/* Zero any free columns */
+		{
+			int* is_piv = (int*)calloc(N_cols, sizeof(int));
+			for (int ii = 0; ii < rank; ii++)
+				if (piv_col[ii] >= 0) is_piv[piv_col[ii]] = 1;
+			for (int j = 0; j < N_cols; j++)
+				if (!is_piv[j]) mpq_set_ui(b1[j], 0, 1);
+			free(is_piv);
+		}
+
+		/* Cleanup */
+		for (int row = 0; row < N_tall; row++) {
+			for (int j = 0; j < N_cols; j++)
+				mpq_clear(A_tall[row][j]);
+			free(A_tall[row]);
+		}
+		free(A_tall);
+		for (int row = 0; row < N_tall; row++) mpq_clear(b_tall[row]);
+		free(b_tall);
+		free(piv_col);
+	} else if (linsys->btf) {
+		if (btf_solve(linsys->btf, b1, cardGk) < 0)
+			return -1;
+	} else {
+		/* Direct LU back-substitution on full A11 */
+		if (mpq_lubksb(linsys->A11_lu, b1, (int)cardGk, linsys->A11_lu_indices) < 0)
+			return -1;
+	}
+
+	/* Fix impossible-combo contamination. */
+	if (r >= 2) {
+		/* Identify possible / impossible combos */
+		int has_impossible = 0;
+		int* combo_possible = (int*)calloc(Dn->card, sizeof(int));
+		int n_possible = 0;
+		for (d = 1; d <= Dn->card; d++) {
+			int is_imp = 0;
+			for (s = 0; s <= r-2; s++) {
+				if (Dn->combs[d-1][s] > qnm->N[s]) {
+					is_imp = 1; break;
+				}
+			}
+			combo_possible[d-1] = !is_imp;
+			if (!is_imp) n_possible++;
+			if (is_imp) has_impossible = 1;
+		}
+
+		if (has_impossible) {
+			int M = qnm->M;
+			int n_poss_Gk = n_possible * M;
+
+			/* Column mapping: sub-system col -> original A11 col */
+			int* col_map = (int*)calloc(n_poss_Gk, sizeof(int));
+			int ci = 0;
+			for (d = 0; d < Dn->card; d++) {
+				if (!combo_possible[d]) continue;
+				for (int k = 1; k <= M; k++)
+					col_map[ci++] = hash(Dn, Dn->combs[d], k) - 1;
+			}
+
+			/* Zero G at impossible positions */
+			for (d = 0; d < Dn->card; d++)
+				if (!combo_possible[d])
+					mpq_set_ui(G[d], 0, 1);
+
+			/* Recompute RHS = B1*g - A12*G  (G zeroed at impossible) */
+			mpq_vec_t b1_rhs = (mpq_vec_t) mpq_vec(cardGk, 0, 1);
+			mpq_vec_t a12g   = (mpq_vec_t) mpq_vec(cardGk, 0, 1);
+			mpq_mspvecmul(b1_rhs, linsys->B1, g);
+			mpq_mspvecmul(a12g,   linsys->A12, G);
+			for (i = 0; i < cardGk; i++)
+				mpq_sub(b1_rhs[i], b1_rhs[i], a12g[i]);
+
+			/* Count included rows */
+			int* row_included = (int*)calloc(cardGk, sizeof(int));
+			int n_sub_rows = 0;
+			{
+				int row = 0;
+				for (d = 1; d <= Dn->card; d++) {
+					if (int_vecsubsum(Dn->combs[d-1], 0, r-1) >= M)
+						continue;
+					int dp = combo_possible[d-1];
+					for (int k = 0; k < M; k++) {
+						if (dp) { row_included[row] = 1; n_sub_rows++; }
+						row++;
+					}
+					for (s = 0; s < r-1; s++) {
+						if (dp && Dn->combs[d-1][s] + 1 <= qnm->N[s]) {
+							row_included[row] = 1;
+							n_sub_rows++;
+						}
+						row++;
+					}
+				}
+			}
+
+			/* Build sub-matrix and sub-RHS */
+			mpq_mat_t A_sub = (mpq_mat_t)mpq_matzeros(n_sub_rows, n_poss_Gk);
+			mpq_vec_t b_sub = (mpq_vec_t) mpq_vec(n_sub_rows, 0, 1);
+			{
+				int sr = 0;
+				for (int orig_row = 0; orig_row < cardGk; orig_row++) {
+					if (!row_included[orig_row]) continue;
+					for (int j = 0; j < n_poss_Gk; j++)
+						mpq_set(A_sub[sr][j],
+						        linsys->A11[orig_row][col_map[j]]);
+					mpq_set(b_sub[sr], b1_rhs[orig_row]);
+					/* Subtract NF column contributions (augmented path) */
+					if (linsys->n_nf_combos > 0) {
+						for (int nj = 0; nj < linsys->n_nf_combos * qnm->M; nj++) {
+							int nf_col = linsys->nf_col_indices[nj];
+							if (mpq_sgn(linsys->A11[orig_row][nf_col]) != 0) {
+								mpq_t nft; mpq_init(nft);
+								mpq_mul(nft, linsys->A11[orig_row][nf_col], b1[nf_col]);
+								mpq_sub(b_sub[sr], b_sub[sr], nft);
+								mpq_clear(nft);
+							}
+						}
+					}
+					sr++;
+				}
+			}
+
+			/* Gaussian elimination with partial pivoting */
+			int sub_singular = 0;
+			for (int col = 0; col < n_poss_Gk; col++) {
+				int piv = -1;
+				for (int row = col; row < n_sub_rows; row++) {
+					if (mpq_sgn(A_sub[row][col]) != 0)
+						{ piv = row; break; }
+				}
+				if (piv < 0) {
+					/* Rank-deficient reachable sub-system: back-
+					 * substituting through the uneliminated columns
+					 * would return an arbitrary particular solution.
+					 * Report it as singular, as comommod does. */
+					if (debug_output) fprintf(stderr, "DEBUG r=%d: impossible-combo sub-system has no pivot in column %d\n", r, col);
+					sub_singular = 1;
+					break;
+				}
+				if (piv != col) {
+					for (int j = 0; j < n_poss_Gk; j++)
+						mpq_swap(A_sub[col][j], A_sub[piv][j]);
+					mpq_swap(b_sub[col], b_sub[piv]);
+				}
+				for (int row = col + 1; row < n_sub_rows; row++) {
+					if (mpq_sgn(A_sub[row][col]) == 0) continue;
+					mpq_t fac; mpq_init(fac);
+					mpq_div(fac, A_sub[row][col], A_sub[col][col]);
+					for (int j = col; j < n_poss_Gk; j++) {
+						mpq_t tmp; mpq_init(tmp);
+						mpq_mul(tmp, fac, A_sub[col][j]);
+						mpq_sub(A_sub[row][j], A_sub[row][j], tmp);
+						mpq_clear(tmp);
+					}
+					mpq_t tmp; mpq_init(tmp);
+					mpq_mul(tmp, fac, b_sub[col]);
+					mpq_sub(b_sub[row], b_sub[row], tmp);
+					mpq_clear(tmp);
+					mpq_clear(fac);
+				}
+			}
+
+			/* Back-substitution */
+			mpq_vec_t x_sub = (mpq_vec_t) mpq_vec(n_poss_Gk, 0, 1);
+			for (int col = n_poss_Gk - 1; col >= 0; col--) {
+				if (mpq_sgn(A_sub[col][col]) == 0) {
+					mpq_set_ui(x_sub[col], 0, 1);
+					continue;
+				}
+				mpq_set(x_sub[col], b_sub[col]);
+				for (int j = col + 1; j < n_poss_Gk; j++) {
+					mpq_t tmp; mpq_init(tmp);
+					mpq_mul(tmp, A_sub[col][j], x_sub[j]);
+					mpq_sub(x_sub[col], x_sub[col], tmp);
+					mpq_clear(tmp);
+				}
+				mpq_div(x_sub[col], x_sub[col], A_sub[col][col]);
+			}
+
+			/* Copy solution back */
+			for (int j = 0; j < n_poss_Gk; j++)
+				mpq_set(b1[col_map[j]], x_sub[j]);
+			for (d = 0; d < Dn->card; d++)
+				if (!combo_possible[d])
+					for (int k = 1; k <= M; k++)
+						mpq_set_ui(b1[hash(Dn, Dn->combs[d], k) - 1], 0, 1);
+
+			/* Cleanup */
+			for (i = 0; i < n_sub_rows; i++) {
+				for (int j = 0; j < n_poss_Gk; j++)
+					mpq_clear(A_sub[i][j]);
+				free(A_sub[i]);
+			}
+			free(A_sub);
+			for (i = 0; i < n_sub_rows; i++) mpq_clear(b_sub[i]);
+			free(b_sub);
+			for (i = 0; i < n_poss_Gk; i++) mpq_clear(x_sub[i]);
+			free(x_sub);
+			for (i = 0; i < cardGk; i++) { mpq_clear(b1_rhs[i]); mpq_clear(a12g[i]); }
+			free(b1_rhs); free(a12g);
+			free(col_map);
+			free(row_included);
+			if (sub_singular) {
+				free(combo_possible);
+				return -1;
+			}
+		}
+		free(combo_possible);
+	}
+	return 0;
+}
+
+/* bincomom: called once per class right after the class system is set up,
+ * with g the basis at n_r = 0.  It may advance g to n_r = target (return
+ * 1), decline (0), or report a singular solve (-1).  NULL in bin/comom. */
+int (*COMOM_ADVANCE)(LS* linsys, combsrep* Dn, int r, long target, mpq_vec_t g,
+                     long int cardG, long int cardGk) = NULL;
+
 static int comom_main(int argc, char**argv)
 {
 	if (!COMOM_CAPTURE) t0=CPUTIME;
@@ -580,340 +935,16 @@ static int comom_main(int argc, char**argv)
 					fflush(stdout);
 				}
 			}
-			/* compute G=B2*g/n */
-			mpq_mspvecmul(G, linsys->B2, g);
-			mpq_t ninv; mpq_init(ninv); mpq_set_si(ninv,1,n[r-1]);
-			for(i=0;i<cardG;i++) mpq_mul(G[i],ninv,G[i]);
-
-			/* Zero G at impossible positions before computing b1.
-			 * This prevents contamination of the RHS for the Gk solve. */
-			if (r >= 2) {
-				for (d = 0; d < Dn->card; d++) {
-					int is_imp = 0;
-					for (s = 0; s <= r-2; s++) {
-						if (Dn->combs[d][s] > qnm->N[s]) {
-							is_imp = 1; break;
-						}
-					}
-					if (is_imp) mpq_set_ui(G[d], 0, 1);
-				}
+			/* the last M+1 steps stay here: they feed the next class's
+			 * initial basis (g_m) and the final marginals */
+			if (nr == 1 && COMOM_ADVANCE && qnm->N[r-1] - (qnm->M + 1) >= 1) {
+				long target = qnm->N[r-1] - (qnm->M + 1);
+				int adv = COMOM_ADVANCE(linsys, Dn, r, target, g, cardG, cardGk);
+				if (adv < 0) goto singular_matrix_detected;
+				if (adv > 0) { nr = (int) target; continue; }
 			}
-
-			/* compute b1=B1*g - A12*G */
-			mpq_mspvecmul(b1,linsys->B1,g);
-			mpq_mspvecmul(b1b,linsys->A12,G);
-			for(i=1;i<=cardGk;i++) mpq_sub(b1[i-1],b1[i-1],b1b[i-1]);
-
-			/* compute Gk via augmented LU (non-filtered path), BTF, or direct LU */
-			if (linsys->n_nf_combos > 0) {
-				/* Overdetermined solve: original A11 rows + NF CE identity rows.
-				 * Build tall matrix and solve via GE. */
-				int M_val = qnm->M;
-				int n_nf = linsys->n_nf_combos;
-				int N_cols = (int)cardGk;
-				int N_tall = N_cols + n_nf * M_val;
-
-				/* Build tall matrix and RHS */
-				mpq_mat_t A_tall = (mpq_mat_t)mpq_matzeros(N_tall, N_cols);
-				mpq_vec_t b_tall = (mpq_vec_t)mpq_vec(N_tall, 0, 1);
-
-				/* First cardGk rows: original A11 */
-				for (int row = 0; row < N_cols; row++) {
-					for (int j = 0; j < N_cols; j++)
-						mpq_set(A_tall[row][j], linsys->A11[row][j]);
-					mpq_set(b_tall[row], b1[row]);
-				}
-
-				/* Last n_nf*M rows: CE identity for NF combos */
-				for (int ni = 0; ni < n_nf; ni++) {
-					int d_idx = linsys->nf_combo_indices[ni];
-					int is_imp = 0;
-					if (r >= 2)
-						for (int ss = 0; ss <= r-2; ss++)
-							if (Dn->combs[d_idx][ss] > qnm->N[ss])
-								{ is_imp = 1; break; }
-					for (int kk = 0; kk < M_val; kk++) {
-						int tall_row = N_cols + ni * M_val + kk;
-						int col = linsys->nf_col_indices[ni * M_val + kk];
-						mpq_set_ui(A_tall[tall_row][col], 1, 1);
-						if (is_imp) {
-							mpq_set_ui(b_tall[tall_row], 0, 1);
-						} else {
-							int h = hash(Dn, Dn->combs[d_idx], kk+1) - 1;
-							mpq_t Lkr; mpq_init(Lkr);
-							mpq_set_z(Lkr, qnm->L[kk][r-1]);
-							mpq_mul(b_tall[tall_row], Lkr, g[h]);
-							mpq_add(b_tall[tall_row], b_tall[tall_row], G[d_idx]);
-							mpq_clear(Lkr);
-						}
-					}
-				}
-
-				/* GE with partial pivoting on tall matrix */
-				mpq_t gf, gt;
-				mpq_init(gf); mpq_init(gt);
-				int rank = 0;
-				int* piv_col = (int*)calloc(N_cols, sizeof(int));
-				for (int j = 0; j < N_cols; j++) piv_col[j] = -1;
-
-				for (int col = 0; col < N_cols && rank < N_cols; col++) {
-					int piv = -1;
-					for (int row = rank; row < N_tall; row++)
-						if (mpq_sgn(A_tall[row][col]) != 0) { piv = row; break; }
-					if (piv < 0) continue;
-					piv_col[rank] = col;
-					if (piv != rank) {
-						for (int j = col; j < N_cols; j++)
-							mpq_swap(A_tall[rank][j], A_tall[piv][j]);
-						mpq_swap(b_tall[rank], b_tall[piv]);
-					}
-					for (int row = rank + 1; row < N_tall; row++) {
-						if (mpq_sgn(A_tall[row][col]) == 0) continue;
-						mpq_div(gf, A_tall[row][col], A_tall[rank][col]);
-						for (int j = col + 1; j < N_cols; j++) {
-							mpq_mul(gt, gf, A_tall[rank][j]);
-							mpq_sub(A_tall[row][j], A_tall[row][j], gt);
-						}
-						mpq_mul(gt, gf, b_tall[rank]);
-						mpq_sub(b_tall[row], b_tall[row], gt);
-						mpq_set_ui(A_tall[row][col], 0, 1);
-					}
-					rank++;
-				}
-				mpq_clear(gf); mpq_clear(gt);
-
-				if (debug_output) {
-					fprintf(stderr, "DEBUG: Overdetermined GE rank=%d/%d\n", rank, N_cols);
-					/* Check consistency: rows rank..N_tall-1 should be zero */
-					int n_incon = 0;
-					for (int row = rank; row < N_tall; row++)
-						if (mpq_sgn(b_tall[row]) != 0) n_incon++;
-					fprintf(stderr, "DEBUG: Inconsistent rows: %d\n", n_incon);
-				}
-
-				/* Back-substitution (use first 'rank' rows) */
-				for (int ii = rank - 1; ii >= 0; ii--) {
-					int pc = piv_col[ii];
-					mpq_set(b1[pc], b_tall[ii]);
-					for (int j = pc + 1; j < N_cols; j++) {
-						if (mpq_sgn(A_tall[ii][j]) == 0) continue;
-						mpq_t tmp; mpq_init(tmp);
-						mpq_mul(tmp, A_tall[ii][j], b1[j]);
-						mpq_sub(b1[pc], b1[pc], tmp);
-						mpq_clear(tmp);
-					}
-					mpq_div(b1[pc], b1[pc], A_tall[ii][pc]);
-				}
-				/* Zero any free columns */
-				{
-					int* is_piv = (int*)calloc(N_cols, sizeof(int));
-					for (int ii = 0; ii < rank; ii++)
-						if (piv_col[ii] >= 0) is_piv[piv_col[ii]] = 1;
-					for (int j = 0; j < N_cols; j++)
-						if (!is_piv[j]) mpq_set_ui(b1[j], 0, 1);
-					free(is_piv);
-				}
-
-				/* Cleanup */
-				for (int row = 0; row < N_tall; row++) {
-					for (int j = 0; j < N_cols; j++)
-						mpq_clear(A_tall[row][j]);
-					free(A_tall[row]);
-				}
-				free(A_tall);
-				for (int row = 0; row < N_tall; row++) mpq_clear(b_tall[row]);
-				free(b_tall);
-				free(piv_col);
-			} else if (linsys->btf) {
-				if (btf_solve(linsys->btf, b1, cardGk) < 0)
-					goto singular_matrix_detected;
-			} else {
-				/* Direct LU back-substitution on full A11 */
-				if (mpq_lubksb(linsys->A11_lu, b1, (int)cardGk, linsys->A11_lu_indices) < 0)
-					goto singular_matrix_detected;
-			}
-
-			/* Fix impossible-combo contamination. */
-			if (r >= 2) {
-				/* Identify possible / impossible combos */
-				int has_impossible = 0;
-				int* combo_possible = (int*)calloc(Dn->card, sizeof(int));
-				int n_possible = 0;
-				for (d = 1; d <= Dn->card; d++) {
-					int is_imp = 0;
-					for (s = 0; s <= r-2; s++) {
-						if (Dn->combs[d-1][s] > qnm->N[s]) {
-							is_imp = 1; break;
-						}
-					}
-					combo_possible[d-1] = !is_imp;
-					if (!is_imp) n_possible++;
-					if (is_imp) has_impossible = 1;
-				}
-
-				if (has_impossible) {
-					int M = qnm->M;
-					int n_poss_Gk = n_possible * M;
-
-					/* Column mapping: sub-system col -> original A11 col */
-					int* col_map = (int*)calloc(n_poss_Gk, sizeof(int));
-					int ci = 0;
-					for (d = 0; d < Dn->card; d++) {
-						if (!combo_possible[d]) continue;
-						for (int k = 1; k <= M; k++)
-							col_map[ci++] = hash(Dn, Dn->combs[d], k) - 1;
-					}
-
-					/* Zero G at impossible positions */
-					for (d = 0; d < Dn->card; d++)
-						if (!combo_possible[d])
-							mpq_set_ui(G[d], 0, 1);
-
-					/* Recompute RHS = B1*g - A12*G  (G zeroed at impossible) */
-					mpq_vec_t b1_rhs = (mpq_vec_t) mpq_vec(cardGk, 0, 1);
-					mpq_vec_t a12g   = (mpq_vec_t) mpq_vec(cardGk, 0, 1);
-					mpq_mspvecmul(b1_rhs, linsys->B1, g);
-					mpq_mspvecmul(a12g,   linsys->A12, G);
-					for (i = 0; i < cardGk; i++)
-						mpq_sub(b1_rhs[i], b1_rhs[i], a12g[i]);
-
-					/* Count included rows */
-					int* row_included = (int*)calloc(cardGk, sizeof(int));
-					int n_sub_rows = 0;
-					{
-						int row = 0;
-						for (d = 1; d <= Dn->card; d++) {
-							if (int_vecsubsum(Dn->combs[d-1], 0, r-1) >= M)
-								continue;
-							int dp = combo_possible[d-1];
-							for (int k = 0; k < M; k++) {
-								if (dp) { row_included[row] = 1; n_sub_rows++; }
-								row++;
-							}
-							for (s = 0; s < r-1; s++) {
-								if (dp && Dn->combs[d-1][s] + 1 <= qnm->N[s]) {
-									row_included[row] = 1;
-									n_sub_rows++;
-								}
-								row++;
-							}
-						}
-					}
-
-					/* Build sub-matrix and sub-RHS */
-					mpq_mat_t A_sub = (mpq_mat_t)mpq_matzeros(n_sub_rows, n_poss_Gk);
-					mpq_vec_t b_sub = (mpq_vec_t) mpq_vec(n_sub_rows, 0, 1);
-					{
-						int sr = 0;
-						for (int orig_row = 0; orig_row < cardGk; orig_row++) {
-							if (!row_included[orig_row]) continue;
-							for (int j = 0; j < n_poss_Gk; j++)
-								mpq_set(A_sub[sr][j],
-								        linsys->A11[orig_row][col_map[j]]);
-							mpq_set(b_sub[sr], b1_rhs[orig_row]);
-							/* Subtract NF column contributions (augmented path) */
-							if (linsys->n_nf_combos > 0) {
-								for (int nj = 0; nj < linsys->n_nf_combos * qnm->M; nj++) {
-									int nf_col = linsys->nf_col_indices[nj];
-									if (mpq_sgn(linsys->A11[orig_row][nf_col]) != 0) {
-										mpq_t nft; mpq_init(nft);
-										mpq_mul(nft, linsys->A11[orig_row][nf_col], b1[nf_col]);
-										mpq_sub(b_sub[sr], b_sub[sr], nft);
-										mpq_clear(nft);
-									}
-								}
-							}
-							sr++;
-						}
-					}
-
-					/* Gaussian elimination with partial pivoting */
-					int sub_singular = 0;
-					for (int col = 0; col < n_poss_Gk; col++) {
-						int piv = -1;
-						for (int row = col; row < n_sub_rows; row++) {
-							if (mpq_sgn(A_sub[row][col]) != 0)
-								{ piv = row; break; }
-						}
-						if (piv < 0) {
-							/* Rank-deficient reachable sub-system: back-
-							 * substituting through the uneliminated columns
-							 * would return an arbitrary particular solution.
-							 * Report it as singular, as comommod does. */
-							if (debug_output) fprintf(stderr, "DEBUG r=%d: impossible-combo sub-system has no pivot in column %d\n", r, col);
-							sub_singular = 1;
-							break;
-						}
-						if (piv != col) {
-							for (int j = 0; j < n_poss_Gk; j++)
-								mpq_swap(A_sub[col][j], A_sub[piv][j]);
-							mpq_swap(b_sub[col], b_sub[piv]);
-						}
-						for (int row = col + 1; row < n_sub_rows; row++) {
-							if (mpq_sgn(A_sub[row][col]) == 0) continue;
-							mpq_t fac; mpq_init(fac);
-							mpq_div(fac, A_sub[row][col], A_sub[col][col]);
-							for (int j = col; j < n_poss_Gk; j++) {
-								mpq_t tmp; mpq_init(tmp);
-								mpq_mul(tmp, fac, A_sub[col][j]);
-								mpq_sub(A_sub[row][j], A_sub[row][j], tmp);
-								mpq_clear(tmp);
-							}
-							mpq_t tmp; mpq_init(tmp);
-							mpq_mul(tmp, fac, b_sub[col]);
-							mpq_sub(b_sub[row], b_sub[row], tmp);
-							mpq_clear(tmp);
-							mpq_clear(fac);
-						}
-					}
-
-					/* Back-substitution */
-					mpq_vec_t x_sub = (mpq_vec_t) mpq_vec(n_poss_Gk, 0, 1);
-					for (int col = n_poss_Gk - 1; col >= 0; col--) {
-						if (mpq_sgn(A_sub[col][col]) == 0) {
-							mpq_set_ui(x_sub[col], 0, 1);
-							continue;
-						}
-						mpq_set(x_sub[col], b_sub[col]);
-						for (int j = col + 1; j < n_poss_Gk; j++) {
-							mpq_t tmp; mpq_init(tmp);
-							mpq_mul(tmp, A_sub[col][j], x_sub[j]);
-							mpq_sub(x_sub[col], x_sub[col], tmp);
-							mpq_clear(tmp);
-						}
-						mpq_div(x_sub[col], x_sub[col], A_sub[col][col]);
-					}
-
-					/* Copy solution back */
-					for (int j = 0; j < n_poss_Gk; j++)
-						mpq_set(b1[col_map[j]], x_sub[j]);
-					for (d = 0; d < Dn->card; d++)
-						if (!combo_possible[d])
-							for (int k = 1; k <= M; k++)
-								mpq_set_ui(b1[hash(Dn, Dn->combs[d], k) - 1], 0, 1);
-
-					/* Cleanup */
-					for (i = 0; i < n_sub_rows; i++) {
-						for (int j = 0; j < n_poss_Gk; j++)
-							mpq_clear(A_sub[i][j]);
-						free(A_sub[i]);
-					}
-					free(A_sub);
-					for (i = 0; i < n_sub_rows; i++) mpq_clear(b_sub[i]);
-					free(b_sub);
-					for (i = 0; i < n_poss_Gk; i++) mpq_clear(x_sub[i]);
-					free(x_sub);
-					for (i = 0; i < cardGk; i++) { mpq_clear(b1_rhs[i]); mpq_clear(a12g[i]); }
-					free(b1_rhs); free(a12g);
-					free(col_map);
-					free(row_included);
-					if (sub_singular) {
-						free(combo_possible);
-						goto singular_matrix_detected;
-					}
-				}
-				free(combo_possible);
-			}
+			if (comom_step(linsys, Dn, r, nr, g, G, b1, b1b, cardG, cardGk, debug_output) < 0)
+				goto singular_matrix_detected;
 
 			/* Save G_1 for final class - MATLAB: G_1=G before G=Gn */
 			/* This happens at the LAST iteration of the LAST class */

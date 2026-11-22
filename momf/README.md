@@ -21,8 +21,8 @@ make -C fpla && make -C momf     # produces bin/momf
 
 | flag | meaning | default |
 |---|---|---|
-| `-P bits` | working precision | 53 (IEEE double mantissa) |
-| `-W bits` | residual precision used by refinement | `2*P` |
+| `-w bits`, `--prec` | working precision (was `-P`) | 53 (IEEE double mantissa) |
+| `--resprec bits` | residual precision used by refinement (was `-W`) | twice the working precision |
 | `-I n` | max Wilkinson/Moler sweeps per block solve | 0 (refinement off) |
 | `-T tol` | stop refining below this relative correction | 0 (run full budget) |
 | `-D` | per-step recursion diagnostics and block condition numbers, on stderr | off |
@@ -31,7 +31,7 @@ make -C fpla && make -C momf     # produces bin/momf
 `-e` (exact numerator/denominator) has no meaning in floating point and
 falls back to printing `G` as a double.
 
-MPFR is used rather than `double` or GMP `mpf` on purpose. At `-P 53`
+MPFR is used rather than `double` or GMP `mpf` on purpose. At `-w 53`
 MPFR reproduces IEEE double *precision* exactly (round-to-nearest, 53-bit
 significand) while leaving the exponent range effectively unbounded. That
 separates the two things the paper's Section 5.2 conflates: the *range*
@@ -46,7 +46,7 @@ on each instance, and reports the floating-point error against the exact
 answer:
 
 ```bash
-python3 momf/sweep.py --base <model.qn> --scale 1 2 3 4 5 --momf-args="-P 53"
+python3 momf/sweep.py --base <model.qn> --scale 1 2 3 4 5 --momf-args="-w 53"
 ```
 
 Metrics: `dlogG` = |log G_fp - log G_exact| (the relative error of `G`),
@@ -141,7 +141,7 @@ converged run itself: every linear system is solved to full working
 precision, and the answer is still wrong.
 
 ```
-$ ./bin/momf tab1_n3.qn -P 53 -I 5 -T 1e-15   # refinement converged
+$ ./bin/momf tab1_n3.qn -w 53 -I 5 -T 1e-15   # refinement converged
 X[1] = 6.228451200152182e-03
 $ ./bin/mom  tab1_n3.qn -t                    # exact
        6.228391782095788e-03
@@ -203,10 +203,10 @@ solve once it has passed the checks above (so it is good to at least
 `P/2` bits), and tier 4 is accurate to about `P` bits.
 
 Checked against `bin/ca` on every model in `models/`, the merge demos and
-600 random models: at `-P 128` every fallback route agrees to `1e-12`; at
+600 random models: at `-w 128` every fallback route agrees to `1e-12`; at
 the default 53 bits to `5e-9`, with `06_large` (`Ntot = 75`) solved by
 interpolation in 20 s. Over all 640 models every value agrees to
-`1.1e-15` at `-P 128`; at 53 bits the remaining differences are the drift
+`1.1e-15` at `-w 128`; at 53 bits the remaining differences are the drift
 of Result 1 on the direct path (e.g. `09_asymmetric`).
 
 The constants `G(N-1_r)` and `G^{+k}(N-1_r)` of a class with `N_r = 0`

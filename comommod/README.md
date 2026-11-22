@@ -21,7 +21,7 @@ Those of `comom` (`-e -l -g -t -q -d`), plus:
 | flag | meaning | default |
 |---|---|---|
 | `-j n` | primes solved concurrently (OpenMP) | 1 |
-| `-b bits` | bit size of the primes drawn | 61 |
+| `--primebits bits` | bit size of the primes drawn (was `-b`) | 61 |
 | `-B`, `--bounded` | bound the denominator during rational reconstruction | **off** |
 | `-W n`, `--witness n` | primes solved but held out of the CRT, used only to verify bounded reconstructions | 1 when `-B`, else 0 |
 | `--denbits n` | denominator bound for `-B`, as a power of two | a third of the modulus so far |
@@ -161,7 +161,7 @@ more than 300 s when tier 4's perturbed solves ran over `Q`.
 
 Bit-for-bit identical to `bin/comom` on `-e`, `-l`, `-t` and `-q` for
 every model in `models/` that `comom` can solve exactly, under every
-combination of `-B`, `-W 2`, `-j 8` and `-b 40`:
+combination of `-B`, `-W 2`, `-j 8` and `--primebits 40`:
 
 ```
 01_single  02_bottleneck  03_think  04_replicated  09_asymmetric

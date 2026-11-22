@@ -19,7 +19,7 @@ Those of `mom` (`-l -e -g -t -q`), plus:
 | flag | meaning | default |
 |---|---|---|
 | `-j n` | primes solved concurrently (OpenMP) | 1 |
-| `-b bits` | bit size of the primes drawn | 61 |
+| `--primebits bits` | bit size of the primes drawn (was `-b`) | 61 |
 | `-B`, `--bounded` | bound the denominator during rational reconstruction | **off** |
 | `-W n`, `--witness n` | primes solved but held out of the CRT, used only to verify bounded reconstructions | 1 when `-B`, else 0 |
 | `--denbits n` | denominator bound for `-B`, as a power of two | 64 |
@@ -97,12 +97,12 @@ made deliberately by the caller rather than silently.
 
 ### Prime supply and exhaustion
 
-Primes are drawn descending from `2^b` (`-b`, default 61) and must stay
+Primes are drawn descending from `2^b` (`--primebits`, default 61) and must stay
 above a floor of `max(3, max_r N_r + 1)`: below the largest class
 population the division by `n_r` is not invertible, and `p = 2` would
 break the Montgomery reduction, which inverts `p` modulo `2^64`.
 
-At `-b 61` exhaustion is unreachable. The prime count scales with the
+At `--primebits 61` exhaustion is unreachable. The prime count scales with the
 number of *digits* of `G`, not with its magnitude: about `0.055` primes
 per decimal digit with `-B`, `0.11` without.
 
@@ -130,13 +130,13 @@ digits. At this size the binding constraint is time, not prime supply:
 720 images of a 5262-step recursion. Memory is dominated by the CRT
 accumulators rather than by the images, which is why `-B` halves it.
 
-With a small `-b` it is reachable, and the solver now reports it:
+With a small `--primebits` it is reachable, and the solver now reports it:
 
 ```
-$ ./bin/mommod exh.qn -e -b 8
+$ ./bin/mommod exh.qn -e --primebits 8
 Error: exhausted the primes of 8 bits after 26 of them (184 bits of modulus).
 The reconstruction needs a larger modulus than this prime size can supply;
-rerun with a larger -b
+rerun with a larger --primebits
 ```
 
 Before the floor was enforced this was silent and fatal in three
@@ -151,7 +151,7 @@ itself:
    nothing to the accumulator, and yet `M` is multiplied by `p` again.
    The residue silently stops being a valid CRT residue for the claimed
    modulus, reconstruction never converges, and the solver **hangs with
-   no output**. This was the observed behaviour at `-b 8`.
+   no output**. This was the observed behaviour at `--primebits 8`.
 2. **Misdiagnosis as a singular system.** Once the primes fall below
    `max_r N_r`, every image fails on a non-invertible `n_r` and is
    counted as unlucky. After 40 consecutive failures the solver reports

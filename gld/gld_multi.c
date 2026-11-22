@@ -31,23 +31,6 @@
  * time exponential in the total population (it hung on models with large Nt).
  */
 
-/* Auto-generate mu from mi: mu[m][k] = min(k+1, mi[m]) */
-void gld_auto_mu(qnmodel *qn)
-{
-	int m, k;
-	if (qn->mu != NULL || qn->Nt <= 0)
-		return;
-	qn->mu = (mpq_t **)malloc(qn->M * sizeof(mpq_t *));
-	for (m = 0; m < qn->M; m++) {
-		qn->mu[m] = (mpq_t *)malloc(qn->Nt * sizeof(mpq_t));
-		for (k = 0; k < qn->Nt; k++) {
-			mpq_init(qn->mu[m][k]);
-			mpq_set_ui(qn->mu[m][k], MIN(k + 1, qn->mi[m]), 1);
-		}
-	}
-	qn->isLD = 1;
-}
-
 void gld_multi(mpq_t G, mpz_t **L, int *N, mpq_t **mu, mpz_t *Z, int M, int R, int Nt)
 {
 	int m, r, j;

@@ -49,9 +49,7 @@
 #include <gmpla.h>
 #include "mom.h"
 #include "lvtab.h"
-#ifdef _OPENMP
-#include <omp.h>
-#endif
+#include "binsplit.h"
 
 /* globals expected by mom's sources */
 int AORSCTR, MULCTR, DIVCTR;
@@ -65,98 +63,8 @@ bool USE_LINBOX = false;
 /* blocksolve calls this only when USE_LINBOX is set, which binmom never does */
 int linbox_solve_dense(mpq_mat_t A, mpq_vec_t b, int N) { (void)A; (void)b; (void)N; return -1; }
 
-static int    LEAF = 8;        /* steps multiplied directly at a leaf */
 static double CROSS = 2.0;     /* binary splitting when N_r >= CROSS * d^2 */
 static int    VERB = 0;
-static int    NTHREADS = 1;
-
-/* ---- dense integer matrices, row-major d x d ---- */
-typedef struct { int d; mpz_t* a; } zmat;
-
-static zmat zm_new(int d) { zmat m; int i; m.d = d; m.a = malloc((size_t)d*d*sizeof(mpz_t)); for (i=0;i<d*d;i++) mpz_init(m.a[i]); return m; }
-static void zm_free(zmat m) { int i; for (i=0;i<m.d*m.d;i++) mpz_clear(m.a[i]); free(m.a); }
-
-/* M(n) = n P' + Q' */
-static zmat zm_step(const zmat* P, const zmat* Q, long n)
-{
-	zmat m = zm_new(P->d);
-	int i;
-	for (i=0;i<P->d*P->d;i++) { mpz_mul_si(m.a[i], P->a[i], n); mpz_add(m.a[i], m.a[i], Q->a[i]); }
-	return m;
-}
-
-/* C = X Y */
-static zmat zm_mul(const zmat* X, const zmat* Y)
-{
-	int d = X->d, i;
-	zmat C = zm_new(d);
-#ifdef _OPENMP
-	#pragma omp parallel for num_threads(NTHREADS) schedule(dynamic,1) if(NTHREADS>1)
-#endif
-	for (i=0;i<d;i++) {
-		int j, k;
-		for (k=0;k<d;k++) {
-			mpz_srcptr x = X->a[i*d+k];
-			if (mpz_sgn(x) == 0) continue;
-			for (j=0;j<d;j++)
-				if (mpz_sgn(Y->a[k*d+j])) mpz_addmul(C.a[i*d+j], x, Y->a[k*d+j]);
-		}
-	}
-	return C;
-}
-
-/* v <- X v */
-static void zm_apply(const zmat* X, mpz_t* v)
-{
-	int d = X->d, i;
-	mpz_t* w = malloc((size_t)d*sizeof(mpz_t));
-	for (i=0;i<d;i++) mpz_init(w[i]);
-#ifdef _OPENMP
-	#pragma omp parallel for num_threads(NTHREADS) schedule(dynamic,1) if(NTHREADS>1)
-#endif
-	for (i=0;i<d;i++) {
-		int k;
-		for (k=0;k<d;k++)
-			if (mpz_sgn(X->a[i*d+k]) && mpz_sgn(v[k])) mpz_addmul(w[i], X->a[i*d+k], v[k]);
-	}
-	for (i=0;i<d;i++) { mpz_swap(v[i], w[i]); mpz_clear(w[i]); }
-	free(w);
-}
-
-/* M(b) ... M(a) */
-static zmat zm_prod(const zmat* P, const zmat* Q, long a, long b)
-{
-	if (b - a + 1 <= LEAF) {
-		zmat acc = zm_step(P, Q, a);
-		long n;
-		for (n=a+1;n<=b;n++) {
-			zmat s = zm_step(P, Q, n), t = zm_mul(&s, &acc);
-			zm_free(s); zm_free(acc); acc = t;
-		}
-		return acc;
-	}
-	long mid = a + (b - a) / 2;
-	zmat lo = zm_prod(P, Q, a, mid), hi = zm_prod(P, Q, mid+1, b);
-	zmat r = zm_mul(&hi, &lo);
-	zm_free(lo); zm_free(hi);
-	return r;
-}
-
-/* v <- M(b) ... M(a) v, sequentially or by binary splitting */
-static void steps_apply(const zmat* P, const zmat* Q, long a, long b, mpz_t* v, int split)
-{
-	if (a > b) return;
-	if (!split || b - a + 1 <= LEAF) {
-		long n;
-		for (n=a;n<=b;n++) { zmat s = zm_step(P, Q, n); zm_apply(&s, v); zm_free(s); }
-		return;
-	}
-	long mid = a + (b - a) / 2;
-	steps_apply(P, Q, a, mid, v, split);
-	zmat hi = zm_prod(P, Q, mid+1, b);
-	zm_apply(&hi, v);
-	zm_free(hi);
-}
 
 /* ---- the class step as integer matrices ---- */
 
@@ -194,13 +102,7 @@ static int class_matrices(LS* A, int cardGk, int cardG, zmat* Pz, zmat* Qz, mpz_
 		mpq_set_ui(e[j], 0, 1);
 	}
 	if (rc == 0) {
-		mpz_set_ui(D, 1);
-		for (i=0;i<d*d;i++) { mpz_lcm(D, D, mpq_denref(P[i])); mpz_lcm(D, D, mpq_denref(Q[i])); }
-		*Pz = zm_new(d); *Qz = zm_new(d);
-		for (i=0;i<d*d;i++) {
-			mpz_divexact(Pz->a[i], D, mpq_denref(P[i])); mpz_mul(Pz->a[i], Pz->a[i], mpq_numref(P[i]));
-			mpz_divexact(Qz->a[i], D, mpq_denref(Q[i])); mpz_mul(Qz->a[i], Qz->a[i], mpq_numref(Q[i]));
-		}
+		bs_integerize(P, Q, d, Pz, Qz, D);
 	}
 	for (i=0;i<d*d;i++) { mpq_clear(P[i]); mpq_clear(Q[i]); }
 	free(P); free(Q);
@@ -215,25 +117,19 @@ static int class_matrices(LS* A, int cardGk, int cardG, zmat* Pz, zmat* Qz, mpz_
 static void class_run(const zmat* P, const zmat* Q, const mpz_t D, long N, int split, mpq_vec_t g, mpq_vec_t gr)
 {
 	int d = P->d, i;
-	mpz_t den0, f;
-	mpz_init_set_ui(den0, 1); mpz_init(f);
-	for (i=0;i<d;i++) mpz_lcm(den0, den0, mpq_denref(g[i]));
+	mpz_t den;
+	mpz_init(den);
 	mpz_t* v = malloc((size_t)d*sizeof(mpz_t));
-	for (i=0;i<d;i++) { mpz_init(v[i]); mpz_divexact(v[i], den0, mpq_denref(g[i])); mpz_mul(v[i], v[i], mpq_numref(g[i])); }
-
-	steps_apply(P, Q, 1, N-1, v, split);      /* g(N-1), unscaled */
-	/* gr = v / (den0 D^(N-1) (N-1)!) */
-	mpz_pow_ui(f, D, (unsigned long)(N-1));
-	{ mpz_t fa; mpz_init(fa); mpz_fac_ui(fa, (unsigned long)(N-1)); mpz_mul(f, f, fa); mpz_clear(fa); }
-	mpz_mul(f, f, den0);
-	for (i=0;i<d;i++) { mpz_set(mpq_numref(gr[i]), v[i]); mpz_set(mpq_denref(gr[i]), f); mpq_canonicalize(gr[i]); }
-
-	steps_apply(P, Q, N, N, v, 0);           /* last step */
-	mpz_mul(f, f, D); mpz_mul_ui(f, f, (unsigned long)N);
-	for (i=0;i<d;i++) { mpz_set(mpq_numref(g[i]), v[i]); mpz_set(mpq_denref(g[i]), f); mpq_canonicalize(g[i]); }
-
+	for (i=0;i<d;i++) mpz_init(v[i]);
+	bs_vec_to_z(g, d, v, den);
+	bs_steps_apply(P, Q, 1, N-1, v, split);  /* g(N-1), unscaled */
+	bs_scale_den(den, D, 1, N-1);
+	bs_vec_from_z(gr, d, v, den);
+	bs_steps_apply(P, Q, N, N, v, 0);        /* last step */
+	bs_scale_den(den, D, N, N);
+	bs_vec_from_z(g, d, v, den);
 	for (i=0;i<d;i++) mpz_clear(v[i]);
-	free(v); mpz_clear(den0); mpz_clear(f);
+	free(v); mpz_clear(den);
 }
 
 /* bin/mom's sequential steps on the sparse blocks, for classes too short
@@ -381,9 +277,9 @@ int main(int argc, char** argv)
 		else if (!strcmp(argv[i],"-q")||!strcmp(argv[i],"--qlen"))  ql = true;
 		else if (!strcmp(argv[i],"-d")||!strcmp(argv[i],"--debug")) db = true;
 		else if (!strcmp(argv[i],"-v")) VERB = 1;
-		else if (!strcmp(argv[i],"-j") && i+1<argc) NTHREADS = atoi(argv[++i]);
+		else if (!strcmp(argv[i],"-j") && i+1<argc) BS_NTHREADS = atoi(argv[++i]);
 		else if (!strcmp(argv[i],"--cross") && i+1<argc) CROSS = atof(argv[++i]);
-		else if (!strcmp(argv[i],"--leaf") && i+1<argc) { LEAF = atoi(argv[++i]); if (LEAF < 1) LEAF = 1; }
+		else if (!strcmp(argv[i],"--leaf") && i+1<argc) { BS_LEAF = atoi(argv[++i]); if (BS_LEAF < 1) BS_LEAF = 1; }
 		else if (!strcmp(argv[i],"--seq")) CROSS = 1e300;
 		else if (!strcmp(argv[i],"-h")||!strcmp(argv[i],"--help")) { usage(argv[0]); return 0; }
 		else if (argv[i][0] != '-') file = argv[i];

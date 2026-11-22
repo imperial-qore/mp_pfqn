@@ -89,7 +89,7 @@ get_solvers_for_model() {
             echo "${CLOSED_SOLVERS[*]}"
             ;;
         closed_ld)
-            # Closed with MU: gld + comomld (comomld only for -e,-l,-g,-q)
+            # Closed with MU: gld + comomld (comomld only for -e,-l,-g)
             echo "$GLD_SOLVER $COMOMLD_SOLVER"
             ;;
         mixed)
@@ -114,8 +114,8 @@ solver_supports_option() {
             [[ "$option" == "-e" || "$option" == "-l" || "$option" == "-g" ]]
             ;;
         comomld)
-            # CoMoM-LD supports -e, -l, -g, -q
-            [[ "$option" == "-e" || "$option" == "-l" || "$option" == "-g" || "$option" == "-q" ]]
+            # CoMoM-LD supports -e, -l, -g (its state probabilities are -P, not -q)
+            [[ "$option" == "-e" || "$option" == "-l" || "$option" == "-g" ]]
             ;;
         mvamx)
             # MVA-MX supports all standard options

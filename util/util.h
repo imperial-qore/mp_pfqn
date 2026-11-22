@@ -32,7 +32,7 @@ typedef struct
 	int *N; /* job populations, N[r]=-1 means open class */
 	mpz_t *Z; /* think times */
 	mpz_t **L; /* service demands */
-	int *mi; /* multiplicities */
+	int *mi; /* multiplicities: identical copies of the station (util/replicas.h) */
 	int hasOpen; /* 1 if LAMBDA section present (open classes) */
 	mpq_t *lambda; /* arrival rates [R], NULL if no open classes */
 	int isLD; /* 1 if MU section present */

@@ -79,4 +79,10 @@ btf_info* btf_decompose(mpq_mat_t A11, combsrep* Dn, int r, int M, int cardGk);
 int btf_factorize(btf_info* btf);
 int btf_solve(btf_info* btf, mpq_vec_t b, int cardGk);
 void btf_free(btf_info* btf);
+
+/* one population step of class r (main.c), and the hook bincomom sets */
+int comom_step(LS* linsys, combsrep* Dn, int r, int nr, mpq_vec_t g, mpq_vec_t G,
+               mpq_vec_t b1, mpq_vec_t b1b, long int cardG, long int cardGk, bool debug_output);
+extern int (*COMOM_ADVANCE)(LS* linsys, combsrep* Dn, int r, long target, mpq_vec_t g,
+                            long int cardG, long int cardGk);
 #endif

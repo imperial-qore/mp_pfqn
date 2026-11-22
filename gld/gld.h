@@ -8,6 +8,5 @@
 void gld_multi(mpq_t G, mpz_t **L, int *N, mpq_t **mu, mpz_t *Z, int M, int R, int Nt);
 
 /* Auto-generate mu from mi: mu[m][k] = min(k+1, mi[m]) */
-void gld_auto_mu(qnmodel *qn);
 
 #endif

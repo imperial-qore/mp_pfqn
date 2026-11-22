@@ -56,6 +56,8 @@ m2 L21 L22 ... L2R  # Queue 2: multiplicity, demands at station 2 per class
 ...
 mM LM1 LM2 ... LMR  # Queue M: multiplicity, demands at station M per class
 ```
+The multiplicity mi is the number of identical copies of station i: mi single-server queues, each with the demands Li1..LiR, every job visiting each of them; the queue lengths reported for the station are totals over its copies. All solvers read mi this way. A station with c servers sharing one waiting line is written with a MU section instead, rates `1 2 ... c c c`.
+
 The demand Lir=Sir*Vir is the product of the mean service time Sir and mean number of visits Vir, both for class-r jobs at station i. See the routing2visits utility to convert a routing probability matrix into the corresponding Vir values.
 
 Optional keyword sections can follow the station lines:
@@ -173,8 +175,8 @@ CoMoM supports the same command-line options as MoM (see table above), except `-
 #### mommod, comommod and momf Solver Options
 
 ```bash
-./bin/mommod   [ -e | -g | -l | -t | -q ] [-j n] [-b bits] [-B] [-W n] models/08_multiclass.qn
-./bin/comommod [ -e | -g | -l | -t | -q | -d ] [-j n] [-b bits] [-B] [-W n] models/08_multiclass.qn
+./bin/mommod   [ -e | -g | -l | -t | -q ] [-j n] [--primebits bits] [-B] [-W n] models/08_multiclass.qn
+./bin/comommod [ -e | -g | -l | -t | -q | -d ] [-j n] [--primebits bits] [-B] [-W n] models/08_multiclass.qn
 ./bin/momf     [ MoM options ] [-P bits] [-I n] [--pivtol bits] models/02_bottleneck.qn
 ```
 
