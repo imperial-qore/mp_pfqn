@@ -56,7 +56,7 @@ The test script runs all 5 solvers (mva, ca, recal, mom, comom) with options `-e
 | `ca/` | Convolution Algorithm | With multi-server station expansion |
 | `recal/` | Recursion by Chain (RECAL) | Efficient chain-based recursion |
 | `mom/` | Method of Moments (MoM) | Exact linear system solve; optional LinBox C++ backend. Singular models are solved exactly by the tiered fallback of `util/singular.h` instead of the old automatic perturbation; tier 4 runs on mommod's modular engine (`mommod/engine.c`, linked as `mom/mmengine.o` with every symbol but the `mmengine.h` API made local), `-j` threads |
-| `comom/` | Class-Oriented MoM (CoMoM) | BTF decomposition for sparse systems |
+| `comom/` | Class-Oriented MoM (CoMoM) | BTF decomposition for sparse systems. Singular models are solved exactly by the tiered fallback of `util/singular.h` (derived models re-solved through `comom_main` in capture mode); `-X` fails instead, `-p` keeps the approximate perturbation |
 | `gmom/` | Generalized MoM (divide-and-conquer, b=1) | Prefix-chain queue-removal branch (one queue per step); overdetermined per-level system solved by exact normal equations; lower replica levels carried through the recursion give G(N)/X/Q; distinct single-server closed queues only. `-p`/`-s` perturbation with analytic descaling, `-b` two-sided (+eps/-eps) bracket, `--force-perturb`, `-X`. See `gmom/README.md` |
 | `safe_comom/` | CoMoM exact on singular models | Hybrid MVA/CoMoM (TSE'09 Appendix A): tiered orchestrator - plain CoMoM, then class-permuted CoMoM, then exact convolution (`ca`) for genuine loading degeneracies. Every tier exact. See `safe_comom/README.md` |
 | `safe_mom/` | MoM exact on singular models | Same tiered construction on the MoM basis: plain `mom -X`, then class-permuted `mom -X`, then exact convolution (`ca`). Adds `-X`/`--no-perturb` to `mom` (fail instead of auto-perturbing). Tier driver shared with `safe_comom` (`util/safe_tiers.c`). See `safe_mom/README.md` |
@@ -81,7 +81,7 @@ The test script runs all 5 solvers (mva, ca, recal, mom, comom) with options `-e
   `pfqn_nonsingular_recclass` in `pfqn_sing.{c,h}`), the tiered exact-wrapper driver
   (`safe_tiers.{c,h}`, used by `safe_comom`, `safe_mom`, `safe_gmom` and `safe_promom`); header-only
   `lvtab.h` (replica-level tables of the full MoM basis, `mom_mixed_think`), `singular.h` (tiered exact
-  fallback for singular MoM/CoMoM systems, shared by `mom`, `momf`, `mommod`, `comommod`) and
+  fallback for singular MoM/CoMoM systems, shared by `mom`, `momf`, `mommod`, `comom`, `comommod`) and
   `singular_marg.h` (the same tiers for per-station marginal distributions, interpolating the unnormalized
   marginals; used by `promom` and `procomom`)
 
@@ -118,7 +118,7 @@ m1 L11 L12 ... L1R   # station 1: multiplicity, demands per class
 All solvers share: `-l` (log NC), `-e` (exact NC num/den), `-g` (NC as double), `-t` (throughputs), `-q` (queue lengths), `-d` (all metrics exact rational).
 
 MoM/CoMoM additionally support: `-p digit` (perturbation), `-s seed` (perturbation seed).
-`mom` also supports `-X`/`--no-perturb`: fail on a singular system instead of auto-perturbing.
+`mom`, `comom`, `gmom`, `promom` and `procomom` also support `-X`/`--no-perturb`: fail on a singular system instead of running the exact fallback (or, for `gmom`, auto-perturbing).
 
 ## Build System Details
 

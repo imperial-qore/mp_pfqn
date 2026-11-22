@@ -13,6 +13,11 @@
  * relation to TSE'09 Appendix A. */
 
 static char BINDIR[4096];
+/* last run_solver call: did it report a singular system (as opposed to
+ * failing for another reason, e.g. a model outside the solver's domain),
+ * and the last line of its stderr */
+static int  LAST_SING = 0;
+static char LAST_ERR[256] = "";
 
 /* run "<BINDIR>/<solver> <model> <flags>"; capture stdout into out (cap
  * bytes); set *singular if the run reports a singular system or fails.
@@ -50,6 +55,17 @@ static int run_solver(const char* wrapper, const char* solver, const char* model
 	                 strstr((b),"Error")||strstr((b),"NaN")||strstr((b),"nan"))
 	*singular = (rc != 0) || HITS(out) || HITS(err);
 	#undef HITS
+	#define SING(b) (strstr((b),"singular")||strstr((b),"Singular")|| \
+	                 strstr((b),"perturbation")||strstr((b),"Perturbation"))
+	LAST_SING = SING(out) || SING(err);
+	#undef SING
+	{
+		/* last non-empty stderr line, for the Tier-3 message */
+		int m = (int)strlen(err);
+		while (m > 0 && (err[m-1] == '\n' || err[m-1] == '\r' || err[m-1] == ' ')) err[--m] = '\0';
+		char* l = strrchr(err, '\n');
+		snprintf(LAST_ERR, sizeof(LAST_ERR), "%s", l ? l+1 : err);
+	}
 	return n;
 }
 
@@ -275,6 +291,11 @@ int safe_tiers_main(const safe_cfg* cfg, int argc, char** argv)
 	/* Tier 1: the primary solver as given */
 	run_solver(cfg->name, cfg->solver, model, run_flags, out, sizeof(out), &sing);
 	if (!sing) { fputs(out, stdout); return 0; }
+	/* why Tier 1 failed: a singular system, or a model the solver refuses
+	 * (gmom: one class, multiserver stations), where Tier 2 cannot help
+	 * and "singular" would be the wrong word */
+	int t1_sing = LAST_SING;
+	char t1_err[256]; snprintf(t1_err, sizeof(t1_err), "%s", LAST_ERR);
 
 	/* Tier 2: the primary solver over class permutations */
 	qnmodel* qn = readmodel((char*)model);
@@ -285,7 +306,7 @@ int safe_tiers_main(const safe_cfg* cfg, int argc, char** argv)
 		fprintf(stderr, "%s: open/mixed model is out of scope\n", cfg->name);
 		return 1;
 	}
-	if (!qn->isLD) {
+	if (!qn->isLD && t1_sing) {
 		if (recclass_search(cfg, qn, flag, is_t, is_q)) return 0;
 	}
 
@@ -297,16 +318,24 @@ int safe_tiers_main(const safe_cfg* cfg, int argc, char** argv)
 		if (qn->isLD)
 			fprintf(stderr, "%s: load-dependent model is outside %s's domain\n",
 			        cfg->name, cfg->solver);
-		else
+		else if (t1_sing)
 			fprintf(stderr, "%s: %s singular under every class order and no exact\n"
 			                "  fallback exists for this output; no answer\n",
 			        cfg->name, cfg->solver);
+		else
+			fprintf(stderr, "%s: %s cannot solve this model (%s) and no exact\n"
+			                "  fallback exists for this output; no answer\n",
+			        cfg->name, cfg->solver, t1_err);
 		return 1;
 	}
 
 	/* Tier 3: exact convolution (always exact) */
-	fprintf(stderr, "%s: %s singular under every class order; using exact %s (Tier 3)\n",
-	        cfg->name, cfg->solver, cfg->fallback);
+	if (t1_sing)
+		fprintf(stderr, "%s: %s singular under every class order; using exact %s (Tier 3)\n",
+		        cfg->name, cfg->solver, cfg->fallback);
+	else
+		fprintf(stderr, "%s: %s cannot solve this model (%s); using exact %s (Tier 3)\n",
+		        cfg->name, cfg->solver, t1_err, cfg->fallback);
 	run_solver(cfg->name, cfg->fallback, model, flag, out, sizeof(out), &sing);
 	if (sing) { fprintf(stderr, "%s: %s fallback failed\n", cfg->name, cfg->fallback); return 1; }
 	fputs(out, stdout);

@@ -8,6 +8,7 @@
 #include <time.h>
 #include <gmpla.h>
 #include "comom.h"
+#include "singular.h"
 
 // Define global variables declared in headers
 int AORSCTR;
@@ -19,6 +20,17 @@ double DIVTIME;
 double t0,t1;
 struct rusage ruse;
 qnmodel* qnm;
+
+/* Exact fallback for singular models (util/singular.h).  When COMOM_CAPTURE
+ * is set, comom_main solves COMOM_MODEL instead of reading a file, stores
+ * the exported constants there (G, G(N-1_r), G^{+k}(N-1_r) in the
+ * SG_NRES layout), prints nothing and returns 0, or 1 on a singular
+ * system without perturbing. */
+static mpq_t* COMOM_CAPTURE = NULL;
+static qnmodel* COMOM_MODEL = NULL;
+static int comom_main(int argc, char**argv);
+static int comom_fallback(qnmodel* q, bool log_output, bool normconst_output, bool normconst_g_output,
+                          bool throughput_output, bool queue_output, bool debug_output);
 
 void printcompact(int*n,int R, double elapsed_time)
 {
@@ -36,9 +48,9 @@ void printcompact(int*n,int R, double elapsed_time)
 	fflush(stdout);
 }
 
-int main(int argc, char**argv)
+static int comom_main(int argc, char**argv)
 {
-	t0=CPUTIME;
+	if (!COMOM_CAPTURE) t0=CPUTIME;
 	int i,r,nr,s,d;
 	int *n;
 	combsrep* Dn=NULL;
@@ -57,10 +69,11 @@ int main(int argc, char**argv)
 	int perturbation_seed = 23000;
 	char* model_file = NULL;
 	bool auto_perturbation = false;
+	bool no_perturb = false;
 	
 	if(argc < 2)
 	{
-		printf("USAGE: %s [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-d|--debug] [-p digit] [-s seed] model.qn\n", argv[0]);
+		printf("USAGE: %s [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-d|--debug] [-p digit] [-s seed] [-X] model.qn\n", argv[0]);
 		printf("  -l, --log        : Print only log of normalizing constant as double\n");
 		printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
 		printf("  -g, --nc         : Print normalizing constant as double\n");
@@ -70,6 +83,7 @@ int main(int argc, char**argv)
 		printf("  -h, --help       : Print this help message\n");
 		printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
 		printf("  -s seed          : Set perturbation seed (default: 23000)\n");
+		printf("  -X, --no-perturb : Fail on a singular system instead of the exact fallback\n");
 		return -1;
 	}
 	
@@ -86,6 +100,8 @@ int main(int argc, char**argv)
 			queue_output = true;
 		} else if(strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--debug") == 0) {
 			debug_output = true; // -d now prints basis normalizing constants
+		} else if(strcmp(argv[i], "-X") == 0 || strcmp(argv[i], "--no-perturb") == 0) {
+			no_perturb = true;
 		} else if(strcmp(argv[i], "-p") == 0) {
 			if(i + 1 < argc) {
 				perturbation_digit = atoi(argv[++i]);
@@ -105,7 +121,7 @@ int main(int argc, char**argv)
 				return -1;
 			}
 		} else if(strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-			printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-d|--debug] [-p digit] [-s seed] model.qn\n", argv[0]);
+			printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-d|--debug] [-p digit] [-s seed] [-X] model.qn\n", argv[0]);
 			printf("  -v, --verbose    : Print exact ratios for all performance measures\n");
 			printf("  -l, --log        : Print only log of normalizing constant as double\n");
 			printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
@@ -115,6 +131,7 @@ int main(int argc, char**argv)
 			printf("  -h, --help       : Print this help message\n");
 			printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
 			printf("  -s seed          : Set perturbation seed (default: 23000)\n");
+			printf("  -X, --no-perturb : Fail on a singular system instead of the exact fallback\n");
 			return 0;
 		} else if(argv[i][0] == '-') {
 			// Skip unknown options silently
@@ -124,7 +141,7 @@ int main(int argc, char**argv)
 	}
 	
 	if(model_file == NULL) {
-		printf("USAGE: %s [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-d|--debug] [-p digit] [-s seed] model.qn\n", argv[0]);
+		printf("USAGE: %s [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-d|--debug] [-p digit] [-s seed] [-X] model.qn\n", argv[0]);
 		printf("  -l, --log        : Print only log of normalizing constant as double\n");
 		printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
 		printf("  -g, --nc         : Print normalizing constant as double\n");
@@ -134,13 +151,17 @@ int main(int argc, char**argv)
 		printf("  -h, --help       : Print this help message\n");
 		printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
 		printf("  -s seed          : Set perturbation seed (default: 23000)\n");
+		printf("  -X, --no-perturb : Fail on a singular system instead of the exact fallback\n");
 		return -1;
 	}
 	
-	qnm=(qnmodel*)readmodel(model_file);
-	qn_require_closed(qnm, "comom", 0);
+	if (COMOM_MODEL)
+		qnm = COMOM_MODEL;
+	else {
+		qnm=(qnmodel*)readmodel(model_file);
+		qn_require_closed(qnm, "comom", 0);
+	}
 	
-solve_attempt:
 	// Apply perturbation if requested
 	mpz_t scale_factor;
 	mpz_init(scale_factor);
@@ -1008,6 +1029,24 @@ solve_attempt:
 	mpq_t G_total;
 	mpq_init(G_total);
 	mpq_set(G_total, g[finalCardGk]);
+
+	if (COMOM_CAPTURE) {
+		/* the constants the report below reads, in the SG_NRES layout */
+		int R = qnm->R, M = qnm->M;
+		mpq_set(COMOM_CAPTURE[0], G_total);
+		for (int s = 0; s < R; s++) {
+			bool last = (s == R-1) && g_prev != NULL;
+			mpq_set(COMOM_CAPTURE[1+s], last ? g_prev[finalCardGk] : marginal_G[s]);
+			for (int k = 0; k < M; k++)
+				mpq_set(COMOM_CAPTURE[SG_IDX_GK(R,k,s)], last ? g_prev[k] : marginal_Gk[k][s]);
+			if (qnm->N[s] == 0) {
+				mpq_set_ui(COMOM_CAPTURE[1+s], 0, 1);
+				for (int k = 0; k < M; k++) mpq_set_ui(COMOM_CAPTURE[SG_IDX_GK(R,k,s)], 0, 1);
+			}
+		}
+		mpq_clear(G_total);
+		return 0;
+	}
 	
 	mpf_set_q(fval, G_total);
 	double logG = log(mpf_get_d(fval));
@@ -1362,96 +1401,25 @@ solve_attempt:
 	return 0;
 
 singular_matrix_detected:
-	// If singular and no perturbation yet, apply automatic perturbation at digit 20
+	if (COMOM_CAPTURE) return 1;     /* derived model of the fallback below */
 	if (!auto_perturbation && perturbation_digit == 0) {
-		// If exact normalizing constant was requested, don't auto-perturb
-		if (normconst_output) {
+		// -X: exact-only probe for bin/safe_comom, fail fast
+		if (no_perturb) {
 			fprintf(stderr, "\nError: Model cannot be solved exactly by the CoMoM solver.\n");
-			fprintf(stderr, "The system of equations is singular. No exact normalizing constant available.\n");
+			fprintf(stderr, "The system of equations is singular; -X suppresses the singular fallback.\n");
 			mpz_clear(scale_factor);
 			return 1;
 		}
-		fprintf(stderr, "\nWarning: Model cannot be solved exactly by the CoMoM solver.\n");
-		fprintf(stderr, "The system of equations is singular. Automatically applying perturbation at digit 20.\n");
-		perturbation_digit = 20;
-		auto_perturbation = true;
-		
-		// Store original parameters if not already stored
-		if (original_L == NULL) {
-			// Check for potential overflow in allocation
-			if (qnm->M < 0 || qnm->R < 0 || 
-			    qnm->M > SIZE_MAX / sizeof(mpz_t*) || 
-			    qnm->R > SIZE_MAX / sizeof(mpz_t)) {
-				fprintf(stderr, "Error: Model dimensions too large for allocation\n");
-				exit(EXIT_FAILURE);
-			}
-			size_t r_size = (size_t)qnm->R;
-			size_t m_size = (size_t)qnm->M;
-			original_L = (mpz_t**)calloc(m_size, sizeof(mpz_t*));
-			original_Z = (mpz_t*)calloc(r_size, sizeof(mpz_t));
-			for(int i = 0; i < qnm->M; i++) {
-				original_L[i] = (mpz_t*)calloc(r_size, sizeof(mpz_t));
-				for(int j = 0; j < qnm->R; j++) {
-					mpz_init(original_L[i][j]);
-					mpz_set(original_L[i][j], qnm->L[i][j]);
-				}
-			}
-			for(int j = 0; j < qnm->R; j++) {
-				mpz_init(original_Z[j]);
-				mpz_set(original_Z[j], qnm->Z[j]);
-			}
-		}
-		
-		// Re-read the model to reset to original values
-		qnm=(qnmodel*)readmodel(model_file);
-		
-		// Clear and reset variables for retry
+		/* Singular CoMoM system: solve it exactly through other class
+		 * orders, merged stations or classes, or interpolation of the
+		 * exact limit of a perturbation (util/singular.h), as mom and
+		 * comommod do.  This replaces the earlier automatic perturbation
+		 * at digit 20 (approximate, and no answer at all for -e). */
 		mpz_clear(scale_factor);
-		// Free allocated memory for g_m and marginal arrays before retry
-		if (g_m) {
-			for(int i = 0; i <= qnm->M; i++) {
-				if(g_m[i]) {
-					// Clear all mpq_t values in g_m[i] before freeing
-					for (int k = 0; k < max_size; k++) {
-						mpq_clear(g_m[i][k]);
-					}
-					free(g_m[i]);
-				}
-			}
-			free(g_m);
-		}
-		if (marginal_G) {
-			for (int i = 0; i < qnm->R; i++) {
-				mpq_clear(marginal_G[i]);
-			}
-			free(marginal_G);
-		}
-		if (marginal_Gk) {
-			for (int k = 0; k < qnm->M; k++) {
-				if (marginal_Gk[k]) {
-					for (int r = 0; r < qnm->R; r++) {
-						mpq_clear(marginal_Gk[k][r]);
-					}
-					free(marginal_Gk[k]);
-				}
-			}
-			free(marginal_Gk);
-		}
-		
-		// Jump back to retry with perturbation
-		goto solve_attempt;
-		
-	} else if (auto_perturbation) {
-		// Automatic perturbation already tried and still singular
-		fprintf(stderr, "\nError: Model is still singular even with automatic perturbation at digit 20.\n");
-		fprintf(stderr, "Please try running manually with a different perturbation digit.\n");
-		fprintf(stderr, "\nExample invocations:\n");
-		fprintf(stderr, "  %s %s -p 25     # Apply perturbation at 25th digit\n", argv[0], model_file);
-		fprintf(stderr, "  %s %s -p 30     # Apply perturbation at 30th digit\n", argv[0], model_file);
-		fprintf(stderr, "  %s %s -p 15 -s 12345  # Different perturbation at 15th digit with custom seed\n\n", argv[0], model_file);
-		mpz_clear(scale_factor);
-		return 1;
-	} else {
+		return comom_fallback(qnm, log_output, normconst_output, normconst_g_output,
+		                      throughput_output, queue_output, debug_output);
+	}
+	{
 		// Manual perturbation was used but still singular
 		fprintf(stderr, "\nError: Model is still singular even with perturbation at digit %d.\n", perturbation_digit);
 		fprintf(stderr, "Please try running manually with a different perturbation digit.\n");
@@ -1464,3 +1432,114 @@ singular_matrix_detected:
 	}
 }
 
+
+/* ---- exact fallback for singular models (util/singular.h) ---- */
+
+/* Exact CoMoM solve of a derived model: the exported constants go to out[]
+ * instead of being printed.  0 on success, 1 if its system is singular. */
+static int comom_sg_direct(qnmodel* q, mpq_t* out, void* ctx)
+{
+	char a0[] = "comom", a1[] = "-e", a2[] = "(derived model)";
+	char* av[] = { a0, a1, a2, NULL };
+	qnmodel* saved = qnm;
+	int rc;
+	(void)ctx;
+	COMOM_CAPTURE = out; COMOM_MODEL = q;
+	rc = comom_main(3, av);
+	COMOM_CAPTURE = NULL; COMOM_MODEL = NULL;
+	qnm = saved;
+	return rc == 0 ? 0 : 1;
+}
+
+static void put_double(const mpq_t q, mpf_t f) { mpf_set_q(f, q); printf("%.15e", mpf_get_d(f)); }
+
+/* X_r = G(N-1_r)/G and Q_kr = m_k L_kr G^{+k}(N-1_r)/G, as comom forms them */
+static void sg_measure(qnmodel* q, mpq_t* ex, int k, int r, mpq_t out)
+{
+	int R = q->R;
+	if (k < 0) { mpq_div(out, ex[1+r], ex[0]); return; }
+	if (mpz_sgn(q->L[k][r]) == 0) { mpq_set_ui(out, 0, 1); return; }
+	mpq_t w; mpq_init(w);
+	mpq_div(out, ex[SG_IDX_GK(R,k,r)], ex[0]);
+	mpq_set_z(w, q->L[k][r]); mpq_mul(out, out, w);
+	mpq_set_si(w, q->mi[k], 1);  mpq_mul(out, out, w);
+	mpq_clear(w);
+}
+
+static int comom_fallback(qnmodel* q, bool log_output, bool normconst_output, bool normconst_g_output,
+                          bool throughput_output, bool queue_output, bool debug_output)
+{
+	int R = q->R, M = q->M, nres = SG_NRES(q), k, r;
+	bool report = !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output;
+	mpq_t* ex = sg_mpq_arr(nres);
+	char tier[256];
+	sg_ops ops = { comom_sg_direct, NULL, NULL, NULL };
+	sg_qn_fix_nt(q);
+	int rc = sg_solve_tiered(q, ex, tier, sizeof tier, &ops, 1);
+	if (rc != 0) {
+		fprintf(stderr, "\nError: the CoMoM system is singular for this model, and every exact fallback\n"
+		                "failed (other class orders, merged stations or classes, interpolation).\n"
+		                "The normalizing constant may be zero or undefined; bin/ca solves any\n"
+		                "well-posed model by convolution.  -p digit gives a perturbed approximation.\n");
+		sg_mpq_arr_free(ex, nres);
+		return 1;
+	}
+	fprintf(stderr, "comom: singular CoMoM system, solved exactly via %s\n", tier);
+
+	mpf_t f; mpf_init(f);
+	mpq_t v, tot; mpq_init(v); mpq_init(tot);
+	if (log_output)
+		printf("%.15e\n", mpq_log(ex[0]));
+	else if (normconst_output)
+		gmp_printf("%Zd\n%Zd\n", mpq_numref(ex[0]), mpq_denref(ex[0]));
+	else if (normconst_g_output) { put_double(ex[0], f); printf("\n"); }
+	else if (throughput_output)
+		for (r = 0; r < R; r++) { sg_measure(q, ex, -1, r, v); put_double(v, f); printf("\n"); }
+	else if (queue_output)
+		for (k = 0; k < M; k++) {
+			for (r = 0; r < R; r++) {
+				sg_measure(q, ex, k, r, v); put_double(v, f);
+				if (r < R-1) printf(" ");
+			}
+			printf("\n");
+		}
+	else if (report) {
+		printf("\nSingular CoMoM system, solved exactly via %s\n", tier);
+		printf("\n========== Performance Metrics ==========\n");
+		if (debug_output) gmp_printf("G = %Qd\n", ex[0]);
+		else {
+			printf("G = "); put_double(ex[0], f); printf("\n");
+			printf("log(G) = %.15e\n", mpq_log(ex[0]));
+		}
+		printf("\nX (throughputs):\n");
+		for (r = 0; r < R; r++) {
+			sg_measure(q, ex, -1, r, v);
+			if (debug_output) gmp_printf("X[%d] = %Qd\n", r+1, v);
+			else { printf("X[%d] = ", r+1); put_double(v, f); printf("\n"); }
+		}
+		printf("\nQ (mean queue lengths):\n");
+		for (k = 0; k < M; k++) {
+			printf("Q[%d] =", k+1);
+			mpq_set_ui(tot, 0, 1);
+			for (r = 0; r < R; r++) {
+				sg_measure(q, ex, k, r, v);
+				mpq_add(tot, tot, v);
+				if (debug_output) gmp_printf("\t%Qd", v);
+				else { printf("\t"); put_double(v, f); }
+			}
+			if (debug_output) gmp_printf("\t(total: %Qd)\n", tot);
+			else { printf("\t(total: "); put_double(tot, f); printf(")\n"); }
+		}
+		printf("=========================================\n");
+		t1 = CPUTIME;
+		printf("Elapsed time (CoMoM): %.6f s\n", t1-t0);
+	}
+	mpq_clear(v); mpq_clear(tot); mpf_clear(f);
+	sg_mpq_arr_free(ex, nres);
+	return 0;
+}
+
+int main(int argc, char**argv)
+{
+	return comom_main(argc, argv);
+}

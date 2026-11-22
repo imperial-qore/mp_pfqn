@@ -25,7 +25,7 @@ is shared with `bin/safe_mom` and lives in `util/safe_tiers.{c,h}`.
 
 | tier | method | handles |
 |---|---|---|
-| 1 | plain CoMoM (`bin/comom`) | non-singular models |
+| 1 | plain CoMoM (`bin/comom -X`) | non-singular models |
 | 2 | CoMoM with a different recursion class (O(R) search) | singularities that depend only on which class is processed last |
 | 3 | exact convolution (`bin/ca`) | genuine loading degeneracies no class order removes |
 
@@ -33,9 +33,10 @@ is shared with `bin/safe_mom` and lives in `util/safe_tiers.{c,h}`.
   processing a non-degenerate class last. Since the recursion class's
   loadings do not enter the coefficient matrix, only the choice of last
   class matters, so safe_comom tries each class as the recursion class --
-  O(R) orders, not O(R!). Each is probed with the fast `comom -e` path
-  (which errors instantly on a singular system rather than running the slow
-  perturbation fallback); only the winning order is solved with the
+  O(R) orders, not O(R!). Each is probed with the fast `comom -e -X` path
+  (which errors instantly on a singular system; `-X` skips comom's own
+  exact fallback of `util/singular.h`, so the tiers here decide, as
+  `safe_mom` does with `mom -X`); only the winning order is solved with the
   requested flag. `G(N)` is invariant to
   class order, so `-e`/`-g`/`-l` need no remapping; `-t`, `-q`, `-d` and
   the default report are mapped back to the original class order (in the

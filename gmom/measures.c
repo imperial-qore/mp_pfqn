@@ -139,10 +139,9 @@ void gmom_measures(qnmodel* qn, mpq_vec_t G, mpq_vec_t Gk,
 
 	if (cap) {
 		/* -b: hand every measure back to the caller, print nothing */
-		mpf_t f; mpf_init(f); mpf_set_q(f, G0s);
 		cap->G    = mpq_get_d(G0s);
-		cap->logG = log(mpf_get_d(f));
-		mpf_clear(f);
+		/* mpq_log: log(mpf_get_d) is inf once G exceeds ~1e308 */
+		cap->logG = mpq_log(G0s);
 		for (_c = 0; _c < R; _c++) {
 			mpq_div(tmp, G[inv[_c]+1], G[0]);
 			if (scaled) mpq_mul(tmp, tmp, qscale);

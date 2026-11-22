@@ -8,7 +8,9 @@
  * handled by an MVA/convolution-style recursion.
  *
  * Realised as a tiered orchestrator over the exact solvers already in the
- * tree (bin/comom, then comom under permuted class orders, then bin/ca);
+ * tree (bin/comom -X, then comom -X under permuted class orders, then
+ * bin/ca; -X skips comom's own util/singular.h fallback, as safe_mom does
+ * with mom -X);
  * the tier machinery is shared with safe_mom and lives in
  * util/safe_tiers.c.
  *
@@ -21,8 +23,8 @@
 static const safe_cfg CFG = {
 	.name         = "safe_comom",
 	.solver       = "comom",
-	.solver_flags = "",     /* comom has no auto-perturbation to suppress */
-	.probe_flags  = "-e",   /* errors instantly on a singular system */
+	.solver_flags = "-X",     /* skip comom's own exact fallback: the tiers here decide */
+	.probe_flags  = "-e -X",  /* cheap exact-only probe: fails at once if singular */
 	.fallback     = "ca",
 	.permuted_flags = "-t -q -d", /* indexed by class; -d also remaps the text report */
 	.usage =

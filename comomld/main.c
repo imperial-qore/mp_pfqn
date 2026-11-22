@@ -76,6 +76,7 @@ int main(int argc, char **argv)
 	}
 
 	qnmodel *qn = readmodel(model_file);
+	qn_require_closed(qn, "comomld", 1);
 	if (!log_output && !normconst_output && !normconst_g_output && !prob_output)
 		printmodel(qn);
 
@@ -96,29 +97,22 @@ int main(int argc, char **argv)
 	int status = comomrm_ld(G, prob, qn);
 
 	if (status != 0) {
-		/* Model unsupported by CoMoM-LD: G is undefined. Emit NaN so it is
-		 * not mistaken for a valid normalizing constant (was silently 0). */
-		if (log_output || normconst_output || normconst_g_output || prob_output) {
-			printf("NaN\n");
-		} else {
-			printf("========== CoMoM-LD Normalizing Constant ==========\n");
-			printf("G = NaN\n");
-			printf("log(G) = NaN\n");
-		}
+		/* Model unsupported by CoMoM-LD (comomrm_ld has said why): G is
+		 * undefined.  Fail like every other solver does outside its domain,
+		 * rather than printing NaN with exit status 0 (which in turn had
+		 * replaced a silent G = 0). */
+		fprintf(stderr, "comomld: model outside the CoMoM-LD domain; no result\n");
 		for (int k = 0; k <= Nt; k++)
 			mpq_clear(prob[k]);
 		free(prob);
 		mpq_clear(G);
 		freemodel(qn);
-		return 0;
+		return 1;
 	}
 
 	/* Compute logG */
-	mpf_t G_mpf;
-	mpf_init(G_mpf);
-	mpf_set_q(G_mpf, G);
-	double logG = log(mpf_get_d(G_mpf));
-	mpf_clear(G_mpf);
+	/* mpq_log: log(mpf_get_d(G)) is inf once G exceeds ~1e308 */
+	double logG = mpq_sgn(G) > 0 ? mpq_log(G) : log(0.0);
 
 	if (log_output) {
 		printf("%.15e\n", logG);
