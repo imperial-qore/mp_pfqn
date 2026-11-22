@@ -229,6 +229,9 @@ static int solve_procomom(qnmodel* qnm, combsrep* Dn, int sumN,
 				mpq_matvecmul(tmp1, AtDC, pk[n-1], basisSize);
 				mpq_matvecmul(tmp2, AtDD, pklast[n-1], basisSize);
 
+				/* n, not n + mi(M) - 1: q(n) is the marginal at ONE copy of
+				 * the reference station, whose other replicas sit in the
+				 * basis (the mi' weights of genpmatrix), as in promom. */
 				mpq_set_si(n_q, n, 1);
 				for (i = 0; i < basisSize; i++) {
 					mpq_t term;
@@ -383,6 +386,7 @@ int main(int argc, char** argv)
 	}
 
 	qnm = (qnmodel*)readmodel(model_file);
+	qn_require_closed(qnm, "procomom", 0);
 	if (queue_output || prob_output)
 		show_progress = false;
 
@@ -502,6 +506,7 @@ solve_attempt:;
 			if (ret < 0) {
 				/* Swap back before handling error */
 				swap_stations(qnm, k-1, M-1);
+				free(qbuf);
 				goto singular_matrix_detected;
 			}
 
@@ -566,6 +571,7 @@ solve_attempt:;
 			int ret = solve_procomom(qnm, Dn, sumN, dist, basisSize, 0);
 			if (ret < 0) {
 				swap_stations(qnm, k-1, M-1);
+				free(pbuf);
 				goto singular_matrix_detected;
 			}
 			swap_stations(qnm, k-1, M-1);

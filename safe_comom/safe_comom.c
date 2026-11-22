@@ -24,7 +24,7 @@ static const safe_cfg CFG = {
 	.solver_flags = "",     /* comom has no auto-perturbation to suppress */
 	.probe_flags  = "-e",   /* errors instantly on a singular system */
 	.fallback     = "ca",
-	.permuted_flags = "-t -q",   /* both are indexed by class */
+	.permuted_flags = "-t -q -d", /* indexed by class; -d also remaps the text report */
 	.usage =
 	  "  CoMoM that always returns the exact answer, via the hybrid\n"
 	  "  MVA/CoMoM of TSE'09 Appendix A: plain CoMoM, then CoMoM with a\n"

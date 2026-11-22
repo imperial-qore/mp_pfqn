@@ -20,7 +20,7 @@ make
 make clean && make
 ```
 
-Binaries are placed in `bin/`: `mva`, `ca`, `recal`, `mom`, `momf`, `mommod`, `comom`, `procomom`, `rndmodel`, `routing2visits`.
+Binaries are placed in `bin/`: `mva`, `ca`, `recal`, `mom`, `momf`, `mommod`, `comom`, `comommod`, `procomom`, `rndmodel`, `routing2visits`.
 
 **`bool` in headers**: `util/util.h` includes `<stdbool.h>` unconditionally. It must
 not go back to defining `bool` as `unsigned int`: sources differ in whether they
@@ -55,9 +55,9 @@ The test script runs all 5 solvers (mva, ca, recal, mom, comom) with options `-e
 | `mva/` | Mean Value Analysis | Classical iterative approach |
 | `ca/` | Convolution Algorithm | With multi-server station expansion |
 | `recal/` | Recursion by Chain (RECAL) | Efficient chain-based recursion |
-| `mom/` | Method of Moments (MoM) | Exact linear system solve; optional LinBox C++ backend |
+| `mom/` | Method of Moments (MoM) | Exact linear system solve; optional LinBox C++ backend. Singular models are solved exactly by the tiered fallback of `util/singular.h` instead of the old automatic perturbation; tier 4 runs on mommod's modular engine (`mommod/engine.c`, linked as `mom/mmengine.o` with every symbol but the `mmengine.h` API made local), `-j` threads |
 | `comom/` | Class-Oriented MoM (CoMoM) | BTF decomposition for sparse systems |
-| `gmom/` | Generalized MoM (divide-and-conquer, b=1) | Prefix-chain queue-removal branch (one queue per step); overdetermined per-level system solved by exact normal equations; mdecrease recovers G(N)/X/Q; distinct single-server closed queues only. `-p`/`-s` perturbation with analytic descaling, `-b` two-sided (+eps/-eps) bracket, `--force-perturb`, `-X`. See `gmom/README.md` |
+| `gmom/` | Generalized MoM (divide-and-conquer, b=1) | Prefix-chain queue-removal branch (one queue per step); overdetermined per-level system solved by exact normal equations; lower replica levels carried through the recursion give G(N)/X/Q; distinct single-server closed queues only. `-p`/`-s` perturbation with analytic descaling, `-b` two-sided (+eps/-eps) bracket, `--force-perturb`, `-X`. See `gmom/README.md` |
 | `safe_comom/` | CoMoM exact on singular models | Hybrid MVA/CoMoM (TSE'09 Appendix A): tiered orchestrator - plain CoMoM, then class-permuted CoMoM, then exact convolution (`ca`) for genuine loading degeneracies. Every tier exact. See `safe_comom/README.md` |
 | `safe_mom/` | MoM exact on singular models | Same tiered construction on the MoM basis: plain `mom -X`, then class-permuted `mom -X`, then exact convolution (`ca`). Adds `-X`/`--no-perturb` to `mom` (fail instead of auto-perturbing). Tier driver shared with `safe_comom` (`util/safe_tiers.c`). See `safe_mom/README.md` |
 | `safe_gmom/` | Generalized MoM exact on singular models | Same tiers on gmom's b=1 basis: `gmom -X`, class-permuted `gmom -X`, then `ca`. Adds `-X`/`--no-perturb` to `gmom`. Tier 2 never fires (gmom picks the class order itself via its exact b=1 oracle); Tier 3 also absorbs gmom's domain limits (R=1, multiserver, load-dependent). Open/mixed reported as out of scope. See `safe_gmom/README.md` |
@@ -67,8 +67,9 @@ The test script runs all 5 solvers (mva, ca, recal, mom, comom) with options `-e
 | `safe_promom/` | ProMoM exact on class-order singularities | Tier wrapper over `util/safe_tiers`: plain `promom`, then class-permuted `promom`. Tier 3 is `camarg` (exact convolution marginals), not `ca`, which returns means rather than distributions. Tier 2 recovers `08_multiclass` and `11_swapped`. See `safe_promom/README.md` |
 | `clw/` | Choudhury-Leung-Whitt (CLW) | Generating-function inversion; single-server + IS. Floating-point (G/logG as doubles, not exact) |
 | `clwld/` | CLW with load-dependent stations | Bertozzi-McKenna per-center transforms; multiserver and load-dependent. Floating-point output |
-| `momf/` | MoM in fixed-precision floating point | MPFR at a settable working precision, optional Wilkinson/Moler iterative refinement. Built to measure whether the exact arithmetic is necessary; see `momf/README.md` |
-| `mommod/` | Multi-modular MoM | Whole recursion replayed in `Z/p` for many word-size primes, CRT plus rational reconstruction at the end, OpenMP over primes (`-j`). `-B` halves the prime count via denominator-bounded reconstruction, verified against witness primes held out of the CRT (`-W`); off by default since it is probabilistic. See `mommod/README.md` |
+| `momf/` | MoM in fixed-precision floating point | MPFR at a settable working precision, optional Wilkinson/Moler iterative refinement. Built to measure whether the exact arithmetic is necessary. Singular models go through the `util/singular.h` tiers; LU pivots below 2^-(P/2) count as singular (`--pivtol`), and tier 4 raises the precision until two rounds agree; see `momf/README.md` |
+| `mommod/` | Multi-modular MoM | Whole recursion replayed in `Z/p` for many word-size primes, CRT plus rational reconstruction at the end, OpenMP over primes (`-j`). `-B` halves the prime count via denominator-bounded reconstruction, verified against witness primes held out of the CRT (`-W`); off by default since it is probabilistic. Singular models are solved exactly by a tiered fallback: other class orders, merging identical stations or proportional classes, then interpolation of the exact limit of a perturbation (tiers 1-3 shared in `util/singular.h`, tier 4 per prime). See `mommod/README.md` |
+| `comommod/` | Multi-modular CoMoM | The `comom` class-oriented recursion replayed in `Z/p` for many word-size primes, CRT plus rational reconstruction at the end, OpenMP over primes (`-j`). Same flags as `mommod`, except that `-B`'s denominator bound defaults to a third of the modulus: CoMoM denominators grow with the population instead of staying a few dozen bits wide. Singular models are solved exactly by the same tiered fallback as `mommod`. See `comommod/README.md` |
 
 ### Shared Libraries
 
@@ -77,8 +78,10 @@ The test script runs all 5 solvers (mva, ca, recal, mom, comom) with options `-e
 - **`zpla/`** — the same API over `Z/p` in machine words (`zp_*`), Montgomery arithmetic, CRT and rational reconstruction
 - **`util/`** — Model I/O (`readmodel`), population enumeration (`nextpop`, `popindex`), combinatorics (`nck`),
   the shared b=1 level builder and singularity oracle (`setup1`, `pfqn_recursion_singular`,
-  `pfqn_nonsingular_recclass` in `pfqn_sing.{c,h}`), and the tiered exact-wrapper driver
-  (`safe_tiers.{c,h}`, used by `safe_comom`, `safe_mom`, `safe_gmom` and `safe_promom`)
+  `pfqn_nonsingular_recclass` in `pfqn_sing.{c,h}`), the tiered exact-wrapper driver
+  (`safe_tiers.{c,h}`, used by `safe_comom`, `safe_mom`, `safe_gmom` and `safe_promom`); header-only
+  `lvtab.h` (replica-level tables of the full MoM basis, `mom_mixed_think`) and `singular.h` (tiered exact
+  fallback for singular MoM/CoMoM systems, shared by `mom`, `momf`, `mommod`, `comommod`)
 
 ### Core Data Structure (`util/util.h`)
 
@@ -120,6 +123,7 @@ MoM/CoMoM additionally support: `-p digit` (perturbation), `-s seed` (perturbati
 - Top-level `Makefile` orchestrates builds of all subdirectories sequentially
 - Each subdirectory has its own `Makefile` that compiles `.c` files and links against shared `util/` and `gmpla/` objects
 - `mom/` links with `g++` (for LinBox C++ integration); all others use `gcc`
+- `mom/` also links `mmengine.o`, built by its Makefile from `mommod/` objects (`make -C ../mommod <objs>`) plus `zpla.o` via `ld -r` and `objcopy --keep-global-symbol` (only the `mommod/mmengine.h` API stays global, since both solvers define `setupls`, `blocksolve`, `mdecrease`, ...); plain C, no extra C++ compile
 - Compiler flags: `-g -Wall -O4` plus GMP/MPFR include/link paths
 - Dependencies can live in `deps/local/` (manual build) or system paths
 

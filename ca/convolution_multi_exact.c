@@ -10,7 +10,7 @@
 
 #define CPUTIME (getrusage(RUSAGE_SELF,&ruse), ruse.ru_utime.tv_sec + ruse.ru_stime.tv_sec + 1e-6 * (ruse.ru_utime.tv_usec + ruse.ru_stime.tv_usec))
 
-void convolution_multi_exact(mpq_t *g, mpf_t *X, mpf_t **Q)
+void convolution_multi_exact(mpq_t *g, mpq_t *X, mpq_t **Q)
 {
 	struct rusage ruse;
 	double t_start = CPUTIME;
@@ -33,7 +33,7 @@ void convolution_multi_exact(mpq_t *g, mpf_t *X, mpf_t **Q)
 	// Check if any think times are non-zero
 	int hasZ = 0;
 	for (r=1; r<=R; r++) {
-		if (qnm->Z[r-1] > 0) {
+		if (mpz_sgn(qnm->Z[r-1]) > 0) {
 			hasZ = 1;
 			break;
 		}
@@ -146,9 +146,10 @@ void convolution_multi_exact(mpq_t *g, mpf_t *X, mpf_t **Q)
 		mpq_set_ui(G[curindex][0], 1, 1);
 		for (r=1;r<=R;r++)
 		{
-			if (n[r-1]!=0 && qnm->Z[r-1] > 0)
+			if (n[r-1]!=0)
 			{
-				// G[0,n] = prod(Z[r]^n[r] / n[r]!)
+				// G[0,n] = prod(Z[r]^n[r] / n[r]!); a class with Z[r]=0
+				// contributes 0^n[r] = 0 (no job can sit at the delay)
 				mpq_t zr_pow; mpq_init(zr_pow);
 				mpq_set_ui(zr_pow, 1, 1);
 
@@ -226,30 +227,21 @@ void convolution_multi_exact(mpq_t *g, mpf_t *X, mpf_t **Q)
 	// Compute throughputs X[s] = G(N-1s)/G(N)
 	if (X != NULL) {
 		for (r=1; r<=R; r++) {
+			// A class with no jobs has zero throughput (N-1r is outside
+			// the population lattice)
+			if (N[r-1] == 0) {
+				mpq_set_ui(X[r-1], 0, 1);
+				continue;
+			}
 			// Create N-1r population vector
 			N[r-1]--;
 			int index_1r = popindex(N, R, planesizes);
 			N[r-1]++; // restore N
 
 			if (index_1r >= 0 && g != NULL && g[0] != NULL) {
-				// X[r-1] = G(N-1r) / G(N)
-				mpq_t g_1r;
-				mpq_init(g_1r);
+				// X[r-1] = G(N-1r) / G(N), exact
 				int final_idx = hasZ ? Meff : Meff-1;
-				mpq_set(g_1r, G[index_1r][final_idx]);
-
-				// Convert to mpf_t and compute ratio
-				mpf_t g_1r_f, g_n_f;
-				mpf_init(g_1r_f);
-				mpf_init(g_n_f);
-				mpf_set_q(g_1r_f, g_1r);
-				mpf_set_q(g_n_f, g[0]);
-
-				mpf_div(X[r-1], g_1r_f, g_n_f);
-
-				mpq_clear(g_1r);
-				mpf_clear(g_1r_f);
-				mpf_clear(g_n_f);
+				mpq_div(X[r-1], G[index_1r][final_idx], g[0]);
 			}
 		}
 	}
@@ -406,8 +398,7 @@ void convolution_multi_exact(mpq_t *g, mpf_t *X, mpf_t **Q)
 						mpq_set_ui(q_exact, 0, 1);
 					}
 
-					// Convert to mpf_t
-					mpf_set_q(Q[k][r], q_exact);
+					mpq_set(Q[k][r], q_exact);
 
 					mpq_clear(q_exact);
 					mpq_clear(G_k_N_minus_er);
@@ -424,7 +415,7 @@ void convolution_multi_exact(mpq_t *g, mpf_t *X, mpf_t **Q)
 
 				} else {
 					// If N[r] = 0, Q[k][r] = 0
-					mpf_set_ui(Q[k][r], 0);
+					mpq_set_ui(Q[k][r], 0, 1);
 				}
 			}
 		}

@@ -71,6 +71,13 @@ int main(int argc, char **argv)
 		return -1;
 	}
 
+	/* The MVA-LD-MX recursion does not compute a normalizing constant, so
+	   refuse the G options instead of printing a placeholder value. */
+	if (log_output || normconst_output || normconst_g_output) {
+		fprintf(stderr, "%s: options -l, -e and -g are not supported (MVA-LD-MX does not compute the normalizing constant); use -t, -q or -d\n", argv[0]);
+		return 1;
+	}
+
 	qn = readmodel(model_file);
 	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output && !exact_output)
 		printmodel(qn);
@@ -104,14 +111,8 @@ int main(int argc, char **argv)
 	double logG = mvaldmx_solve(qn, X, Q);
 
 	/* Output results */
-	if (log_output) {
-		printf("%.15e\n", logG);
-	} else if (normconst_output) {
-		/* MVA-LD-MX does not compute a normalizing constant directly */
-		printf("0\n1\n");
-	} else if (normconst_g_output) {
-		printf("%.15e\n", 0.0);
-	} else if (throughput_output) {
+	(void)logG;
+	if (throughput_output) {
 		for (r = 0; r < qn->R; r++) {
 			mpf_t xval;
 			mpf_init(xval);

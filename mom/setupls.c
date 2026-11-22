@@ -5,6 +5,80 @@
 #include <gmpla.h>
 #include "mom.h"
 
+/* Singularity test for a dense rational block, used on the LinBox path.
+ *
+ * LinBox's Dixon solver returns some particular solution for a singular
+ * but consistent system without reporting an error, and on that path the
+ * blocks are never LU-factored, so without this check a singular block
+ * silently gives a wrong answer and the perturbation fallback never runs.
+ *
+ * First the rank is computed modulo a ~62-bit prime: full rank mod p proves
+ * the block nonsingular over Q.  Rank deficiency mod p means singular over
+ * Q or an unlucky prime; that case (vanishingly rare for a nonsingular
+ * block) is settled exactly by LU-factoring a copy.  Returns 1 if singular. */
+static int mpq_block_is_singular(mpq_mat_t A, int n)
+{
+	int i, j, c, piv, singular = 0;
+	mpz_t p, x, inv;
+	mpz_t **a;
+
+	mpz_init_set_str(p, "4611686018427387847", 10); /* prime < 2^62 */
+	mpz_init(x); mpz_init(inv);
+	a = (mpz_t**)malloc(n * sizeof(mpz_t*));
+	for (i = 0; i < n; i++) {
+		a[i] = (mpz_t*)malloc(n * sizeof(mpz_t));
+		for (j = 0; j < n; j++) {
+			mpz_init(a[i][j]);
+			if (!singular) {
+				if (!mpz_invert(inv, mpq_denref(A[i][j]), p)) { singular = -1; continue; } /* p | den: use exact path */
+				mpz_mul(x, mpq_numref(A[i][j]), inv);
+				mpz_mod(a[i][j], x, p);
+			}
+		}
+	}
+	if (singular == 0) {
+		for (c = 0; c < n && !singular; c++) {
+			for (piv = c; piv < n && mpz_sgn(a[piv][c]) == 0; piv++) ;
+			if (piv == n) { singular = -1; break; }
+			if (piv != c) { mpz_t *tmp = a[piv]; a[piv] = a[c]; a[c] = tmp; }
+			mpz_invert(inv, a[c][c], p);
+			for (i = c+1; i < n; i++) {
+				if (mpz_sgn(a[i][c]) == 0) continue;
+				mpz_mul(x, a[i][c], inv);
+				mpz_mod(x, x, p);
+				for (j = c; j < n; j++) {
+					mpz_submul(a[i][j], x, a[c][j]);
+					mpz_mod(a[i][j], a[i][j], p);
+				}
+			}
+		}
+	}
+	for (i = 0; i < n; i++) {
+		for (j = 0; j < n; j++) mpz_clear(a[i][j]);
+		free(a[i]);
+	}
+	free(a);
+	mpz_clear(p); mpz_clear(x); mpz_clear(inv);
+
+	if (singular == -1) {
+		/* inconclusive mod p: decide exactly on a copy (ludcmp works in place) */
+		mpq_mat_t B = (mpq_mat_t)malloc(n * sizeof(mpq_t*));
+		for (i = 0; i < n; i++) {
+			B[i] = (mpq_t*)malloc(n * sizeof(mpq_t));
+			for (j = 0; j < n; j++) { mpq_init(B[i][j]); mpq_set(B[i][j], A[i][j]); }
+		}
+		int *idx = mpq_ludcmp(B, n);
+		singular = (idx == NULL);
+		free(idx);
+		for (i = 0; i < n; i++) {
+			for (j = 0; j < n; j++) mpq_clear(B[i][j]);
+			free(B[i]);
+		}
+		free(B);
+	}
+	return singular;
+}
+
 /* setuls - setup the linear system for the current class */
 LS* setupls(mpz_t** L, int* n, mpz_t *Z, int* mi, int m, int r)
 {
@@ -216,43 +290,20 @@ LS* setupls_progress(mpz_t** L, int* n, mpz_t *Z, int* mi, int m, int r, double 
 		t0=CPUTIME;
 		if (USE_LINBOX) {
 			/* Skip LU decomposition — LinBox will solve from the original matrix.
-			 * Set sentinel so blocksolve knows the block is valid. */
-			ls->C[t+k].lu_indices=(int*)1;
+			 * Set sentinel so blocksolve knows the block is valid, unless the
+			 * block is singular (LinBox would not report it). */
+			ls->C[t+k].lu_indices = mpq_block_is_singular(ls->C[t+k].diag,nck(r-1,r-h)*r) ? NULL : (int*)1;
 		} else if (show_progress) {
 			ls->C[t+k].lu_indices=(int*)mpq_ludcmp_progress(ls->C[t+k].diag,nck(r-1,r-h)*r, setup_start, n, r, show_progress);
 		} else {
 			ls->C[t+k].lu_indices=(int*)mpq_ludcmp(ls->C[t+k].diag,nck(r-1,r-h)*r);
 		}
-		if (!USE_LINBOX && ls->C[t+k].lu_indices == NULL) {
-			// Singular matrix encountered during LU decomposition
-			// Free allocated memory before returning
-			int ii, jj;
-			for (ii = 0; ii < t+k+1; ii++) {
-				if (ls->C[ii].diag) {
-					for (jj = 0; jj < nck(r-1,r-h)*r; jj++) {
-						free(ls->C[ii].diag[jj]);
-					}
-					free(ls->C[ii].diag);
-				}
-				if (ls->C[ii].nondiag) {
-					if (ls->C[ii].nondiag->coeff) {
-						int jj;
-						for (jj = 0; jj < ls->C[ii].nondiag->nnz; jj++) {
-							mpq_clear(ls->C[ii].nondiag->coeff[jj]);
-						}
-						free(ls->C[ii].nondiag->coeff);
-					}
-					if (ls->C[ii].nondiag->pos_row)
-						free(ls->C[ii].nondiag->pos_row);
-					if (ls->C[ii].nondiag->pos_col)
-						free(ls->C[ii].nondiag->pos_col);
-					free(ls->C[ii].nondiag);
-				}
-			}
-			free(ls->C);
-			free(ls);
-			free(Ik.combs);	
-			free(I.combs);	
+		if (ls->C[t+k].lu_indices == NULL) {
+			/* Singular block.  The structure is abandoned without freeing it:
+			 * the earlier cleanup freed every block with the size of the
+			 * current one and touched sparse blocks not yet allocated, which
+			 * crashed (e.g. models/08_multiclass.qn in momf).  The leak is
+			 * bounded by one linear system per failed attempt. */
 			return NULL;
 		}
 //		if(DEBUG) mpq_matprint(ls->C[t+k].diag,nck(r-1,r-h)*r,nck(r-1,r-h)*r);

@@ -9,10 +9,10 @@ The mp_pfqn library offers fast C solvers for product-form queueing networks usi
   - Method of Moments (MoM) [4]
   - Class-Oriented Method of Moments (CoMoM) [5]
   - Generalized Method of Moments (gmom, divide-and-conquer, b=1) [9]
-  - safe_comom: CoMoM with exact hybrid MVA/CoMoM fallback for singular models [5]
+  - CoMoM with exact hybrid MVA/CoMoM fallback for singular models [5]
 - Load-dependent solvers:
   - Generalized Load-Dependent (GLD) normalizing constant [6]
-  - CoMoM-LD for load-dependent repairman models
+  - CoMoM-LD for load-dependent repairman models [10]
 - Mixed open/closed network solvers:
   - MVA-MX for mixed networks [7]
   - MVA-LD-MX for mixed networks with load-dependent stations [8]
@@ -85,7 +85,10 @@ Examples are available under the models/ folder.
 ./bin/ca model.qn       # Convolution Algorithm
 ./bin/recal model.qn    # Recursion by Chain Algorithm
 ./bin/mom model.qn      # Method of Moments
+./bin/momf model.qn     # Method of Moments in fixed-precision floating point (MPFR)
+./bin/mommod model.qn   # Multi-modular Method of Moments (Z/p images, CRT, OpenMP -j)
 ./bin/comom model.qn    # Class-Oriented Method of Moments
+./bin/comommod model.qn # Multi-modular Class-Oriented Method of Moments
 ./bin/gmom model.qn     # Generalized (divide-and-conquer) Method of Moments
 ./bin/safe_comom model.qn # CoMoM, exact even on singular (degenerate) models
 
@@ -153,7 +156,11 @@ RECAL supports the same command-line options as MVA (see table above).
 | `-d` | `--exact` | Print all performance metrics in full exact precision (integer or rational) |
 | `-p digit` | | Apply perturbation at the specified digit (e.g., `-p 5`) |
 | `-s seed` | `--seed` | Random seed for perturbation (default: 23000) |
+| `-j n` | | Threads for the modular interpolation of singular models (default 1) |
+| `--linbox` | | Use the LinBox Dixon p-adic lifting solver |
 | `-h` | `--help` | Print help message |
+
+When the MoM system is singular, `mom` solves the model exactly through other class orders, merged identical stations, merged proportional classes, or interpolation of the exact limit of a perturbation, the last on `mommod`'s modular engine; the route is noted on stderr. See `mommod/README.md`, **Singular models**.
 
 #### CoMoM Solver Options
 
@@ -161,7 +168,17 @@ RECAL supports the same command-line options as MVA (see table above).
 ./bin/comom [options] models/02_bottleneck_study.qn
 ```
 
-CoMoM supports the same command-line options as MoM (see table above). The Class-Oriented Method of Moments provides an efficient algorithm specifically designed for multiclass models with large population sizes.
+CoMoM supports the same command-line options as MoM (see table above), except `-j` and `--linbox`. The Class-Oriented Method of Moments provides an efficient algorithm specifically designed for multiclass models with large population sizes.
+
+#### mommod, comommod and momf Solver Options
+
+```bash
+./bin/mommod   [ -e | -g | -l | -t | -q ] [-j n] [-b bits] [-B] [-W n] models/08_multiclass.qn
+./bin/comommod [ -e | -g | -l | -t | -q | -d ] [-j n] [-b bits] [-B] [-W n] models/08_multiclass.qn
+./bin/momf     [ MoM options ] [-P bits] [-I n] [--pivtol bits] models/02_bottleneck.qn
+```
+
+`mommod` and `comommod` replay the MoM and CoMoM recursions in `Z/p` for many word-size primes and recover the exact rationals by CRT, with `-j` primes solved concurrently. `momf` runs MoM in MPFR floating point at a settable precision. All three, like `mom`, solve singular models through the shared tiered fallback (`momf` to its working precision). See `mommod/README.md`, `comommod/README.md` and `momf/README.md`.
 
 #### gmom Solver Options
 
@@ -169,19 +186,7 @@ CoMoM supports the same command-line options as MoM (see table above). The Class
 ./bin/gmom [ -e | -g | -l | -t | -q | --validate ] models/02_bottleneck.qn
 ```
 
-`gmom` implements the generalized (divide-and-conquer, b=1) Method of
-Moments: the model on the prefix `{1..m}` of queues is built from the model
-on `{1..m-1}` plus one queue-removal (subtractive-convolution) branch, and
-the overdetermined per-level system is solved by exact normal equations.
-It supports `-e` (exact `G(N)` num/den), `-g` (`G(N)` double), `-l`
-(`log G`), `-t` (throughputs), `-q` (queue lengths), and `--validate`
-(check the whole moment basis against exact convolution), and `-p digit` /
-`-s seed` (perturbation for degenerate models, as in MoM/CoMoM). It
-requires at least two classes and closed, distinct single-server stations;
-open/mixed, load-dependent (`MU`), and multiserver (`mi>1`) models are
-rejected. `G`, `X`, and `Q` match `ca` bit-for-bit on the supported
-models; degenerate models are handled by class reorder (exact) or
-perturbation (approximate, `-e` refuses).
+`gmom` implements the generalized (divide-and-conquer, b=1) Method of Moments. It supports the same options as MoM, plus `--validate` to check the whole moment basis against exact convolution. It requires at least two classes and closed, distinct single-server stations. See `gmom/README.md`.
 
 #### safe_comom Solver Options
 
@@ -189,15 +194,7 @@ perturbation (approximate, `-e` refuses).
 ./bin/safe_comom [ -e | -g | -l | -t | -q ] models/08_multiclass.qn
 ```
 
-`safe_comom` returns the exact `G(N)`, `X`, `Q` even for degenerate models
-whose CoMoM coefficient matrix is singular, where `bin/comom` errors out.
-It applies the hybrid MVA/CoMoM of Casale (IEEE TSE 2009), Appendix A, as
-a tiered exact orchestrator: plain CoMoM; then CoMoM after permuting the
-class order (removing singularities that depend on the recursion class);
-then exact convolution (`ca`) for genuine loading degeneracies that no
-order removes. Every tier is exact, so the result matches `comom` on
-non-singular models and `ca` on singular ones. See
-`safe_comom/README.md`.
+`safe_comom` returns the exact `G(N)`, `X` and `Q` also for degenerate models whose CoMoM coefficient matrix is singular, where `bin/comom` errors out. It applies the hybrid MVA/CoMoM of [5], Appendix A, as a tiered exact orchestrator. See `safe_comom/README.md`.
 
 #### Examples
 
@@ -225,7 +222,7 @@ non-singular models and `ca` on singular ones. See
 ```
 **Notes**: 
 - The `-d`/`--exact` option is available in all solvers and prints performance metrics (throughputs, queue lengths, normalizing constants) in full exact precision as rational numbers (e.g., `1/3` instead of `0.333333`). This is useful for verification and when exact values are required.
-- The perturbation option (`-p`) is available in both the MoM and CoMoM solvers and is useful when the exact solution fails due to singular systems. It introduces small randomized numerical perturbations to enable approximate solutions. When perturbation is applied, model parameters are displayed as original integer values with separate perturbation annotations (e.g., `50 eps=1.0e-05`). The `-s` option allows you to specify a random seed for reproducible perturbations.
+- `mom`, `momf`, `mommod` and `comommod` solve models with a singular MoM/CoMoM system exactly, through other class orders, merged stations or classes, or interpolation of the exact limit of a perturbation (`util/singular.h`); the route is noted on stderr. The perturbation option (`-p`) remains available in the MoM and CoMoM solvers for an approximate solution. It introduces small randomized numerical perturbations to enable approximate solutions. When perturbation is applied, model parameters are displayed as original integer values with separate perturbation annotations (e.g., `50 eps=1.0e-05`). The `-s` option allows you to specify a random seed for reproducible perturbations.
 
 ## References
 
@@ -238,6 +235,8 @@ non-singular models and `ca` on singular ones. See
 [4]: Casale (2006), *An efficient algorithm for the exact analysis of multiclass queueing networks with large population sizes,* Proc. of ACM SIGMETRICS 2006.
 
 [5]: Casale, G. (2009), *CoMoM: Efficient Class-Oriented Evaluation of Multiclass Performance Models,* IEEE Trans. Softw. Eng. 35, 2 (March 2009), 162–177.
+
+[10]: Casale, G., Gao, Y., Niu, Z., and Zhu, L. (2024), *LN: A Flexible Algorithmic Framework for Layered Queueing Network Analysis,* ACM Trans. Model. Comput. Simul. 34, 3 (July 2024), Article 17.
 
 ## License
 

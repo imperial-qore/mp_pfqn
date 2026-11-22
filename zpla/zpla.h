@@ -45,6 +45,7 @@ long int int_matmatchrow(int** mat, long int nrows, long int ncols,int* row);
 void int_matprint(int** mat, int n, int m);
 int* int_vec(int n, int value);
 void int_vecprint(int* vec, int n);
+int int_vecsubsum(int* v, int from, int to);
 
 /* Residues are held in Montgomery form (a*2^64 mod p) so that the modular
  * multiply in the inner loop is three 64x64 multiplies rather than a

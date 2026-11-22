@@ -138,6 +138,7 @@ int main(int argc, char**argv)
 	}
 	
 	qnm=(qnmodel*)readmodel(model_file);
+	qn_require_closed(qnm, "comom", 0);
 	
 solve_attempt:
 	// Apply perturbation if requested
@@ -799,13 +800,22 @@ solve_attempt:
 					}
 
 					/* Gaussian elimination with partial pivoting */
+					int sub_singular = 0;
 					for (int col = 0; col < n_poss_Gk; col++) {
 						int piv = -1;
 						for (int row = col; row < n_sub_rows; row++) {
 							if (mpq_sgn(A_sub[row][col]) != 0)
 								{ piv = row; break; }
 						}
-						if (piv < 0) break;
+						if (piv < 0) {
+							/* Rank-deficient reachable sub-system: back-
+							 * substituting through the uneliminated columns
+							 * would return an arbitrary particular solution.
+							 * Report it as singular, as comommod does. */
+							if (debug_output) fprintf(stderr, "DEBUG r=%d: impossible-combo sub-system has no pivot in column %d\n", r, col);
+							sub_singular = 1;
+							break;
+						}
 						if (piv != col) {
 							for (int j = 0; j < n_poss_Gk; j++)
 								mpq_swap(A_sub[col][j], A_sub[piv][j]);
@@ -869,6 +879,10 @@ solve_attempt:
 					free(b1_rhs); free(a12g);
 					free(col_map);
 					free(row_included);
+					if (sub_singular) {
+						free(combo_possible);
+						goto singular_matrix_detected;
+					}
 				}
 				free(combo_possible);
 			}
@@ -941,6 +955,37 @@ solve_attempt:
 				//mpq_vecdup(g_m[1], g, cardG+cardGk);
 			}
 		}
+
+		/* N_R = 0: the loop above never ran, so the marginals of classes
+		 * 1..R-1 were never extracted.  g still holds the class-R basis at
+		 * n_R = 0, i.e. G(N - comb) with N = (N_1..N_{R-1},0), which is
+		 * exactly the population the extraction above reads at nr = N_R. */
+		if (r == qnm->R && qnm->N[r-1] == 0) {
+			int * comb = calloc(sizeof(int),r);
+			for (int s = 1; s <= r; s++)
+				comb[s-1]=Dn->combs[0][s-1];
+			for (int s = 1; s <= qnm->R-1; s++) {
+				comb[s-1]++;
+				int index = hash(Dn, comb, 0) - 1;
+				mpq_set(marginal_G[s-1], g[index]);
+				for (int k = 1; k <= qnm->M; k++) {
+					index = hash(Dn, comb, k) - 1;
+					mpq_set(marginal_Gk[k-1][s-1], g[index]);
+				}
+				comb[s-1]--;
+			}
+			free(comb);
+		}
+		/* A class with no jobs has zero throughput and queue length; its
+		 * basis slot G(N-e_s) is an unreachable population. */
+		if (r == qnm->R) {
+			for (int s = 1; s <= qnm->R-1; s++) {
+				if (qnm->N[s-1] != 0) continue;
+				mpq_set_ui(marginal_G[s-1], 0, 1);
+				for (int k = 0; k < qnm->M; k++)
+					mpq_set_ui(marginal_Gk[k][s-1], 0, 1);
+			}
+		}
 		class_elapsed = CPUTIME - class_start;
 
 		if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
@@ -990,7 +1035,13 @@ solve_attempt:
 	}
 	
 	mpf_set_q(fval, G_scaled);
-	logG = log(mpf_get_d(fval));
+	/* log(mpf_get_d) is kept whenever G fits a double so the output stays
+	 * byte-identical to the other solvers; beyond ~1e308 it would print
+	 * inf, so the exact rational is used instead (as comommod does). */
+	{
+		double dG = mpf_get_d(fval);
+		logG = (dG > 0.0 && !isinf(dG)) ? log(dG) : mpq_log(G_scaled);
+	}
 	
 	if (log_output) {
 		printf("%.15e\n", logG);

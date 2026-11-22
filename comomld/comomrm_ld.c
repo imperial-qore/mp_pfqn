@@ -57,6 +57,24 @@ int comomrm_ld(mpq_t G, mpq_t *prob, qnmodel *qn)
 		}
 	}
 
+	/* A station whose rates match an infinite server for every population
+	 * up to Nt is indistinguishable from one here (a single-server queue
+	 * when Nt=1, a multi-server station with mi >= Nt), so absorbing it is
+	 * exact for G.  But if every station matched, absorbing them all would
+	 * leave no station to report prob[] for and force prob[0]=1.  Keep one
+	 * as the queueing station instead: the recursion below handles
+	 * mu[k]=k+1 exactly.  The one with the fewest servers is kept (a
+	 * genuine queue rather than a delay encoded with many servers), ties
+	 * going to the lowest index. */
+	if (M > 0 && num_inf == M) {
+		int keep = 0;
+		for (m = 1; m < M; m++)
+			if (qn->mi[m] < qn->mi[keep])
+				keep = m;
+		is_inf[keep] = 0;
+		num_inf--;
+	}
+
 	int M_q = M - num_inf;
 
 	/* Compute effective Z: Z_eff[r] = Z[r] + sum of L[m][r] over IS stations */
@@ -78,25 +96,21 @@ int comomrm_ld(mpq_t G, mpq_t *prob, qnmodel *qn)
 	/* Find the single queueing station index */
 	int q_idx = -1;
 	if (M_q == 0) {
-		/* No queueing stations: model has only delays.
-		 * G = prod_r Z_eff[r]^N[r] / prod_r N[r]!  (multinomial of delays)
-		 * Actually for pure delay network:
-		 * G = Nt! / prod(N[r]!) * prod(Z_eff[r]^N[r])
-		 * All jobs are always at the delay station, prob[Nt] = 1 (if station existed)
-		 * But there's no queueing station, so prob[0] = 1.
+		/* No stations at all (only reachable with M == 0, see above): the
+		 * model is the think time alone.  An infinite server contributes
+		 * G = prod_r Z_eff[r]^N[r] / N[r]!, with no multinomial Nt! factor
+		 * (jobs at a delay do not queue, so their order does not count).
+		 * There is no queueing station, so prob[0] = 1.
 		 */
 		mpz_t num, factval;
 		mpz_init(num);
 		mpz_init(factval);
 
-		/* G_num = Nt! * prod(Z_eff[r]^N[r]) -- but Z_eff are rationals */
+		/* G_num = prod(Z_eff[r]^N[r]) -- Z_eff are rationals */
 		mpq_t G_val, Z_pow;
 		mpq_init(G_val);
 		mpq_init(Z_pow);
-
-		/* Nt! */
-		mpz_fac_ui(num, Nt);
-		mpq_set_z(G_val, num);
+		mpq_set_ui(G_val, 1, 1);
 
 		for (r = 0; r < R; r++) {
 			/* Z_eff[r]^N[r] */

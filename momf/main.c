@@ -7,6 +7,8 @@
 #include <time.h>
 #include <fpla.h>
 #include "momf.h"
+#include "lvtab.h"
+#include "singular.h"
 
 /* Define global variables from profiling.h */
 int AORSCTR;
@@ -21,6 +23,8 @@ struct rusage ruse;
 /* Define global variables from mom.h */
 qnmodel* qnm;
 bool INTERACTIVE,RANDGEN,CANON,ZSCALE,DEBUG,VERBOSE;
+mpq_t* MOM_CAPTURE = NULL;
+int MOM_CAPTURE_BAD = 0;
 
 /* Wilkinson/Moler refinement controls (declared in momf.h) */
 int    REFINE_ITERS  = 0;
@@ -138,6 +142,45 @@ void apply_perturbation_to_model(qnmodel* qnm, int perturbation_digit, int pertu
 	free(perm);
 }
 
+/* Lower replica levels 0..r-2 of the full MoM basis: see util/lvtab.h. */
+static void lv_free(fp_vec_t v, long n)
+{
+	long t;
+	if (!v) return;
+	for (t=0;t<=n;t++) fp_clear(v[t]);
+	free(v);
+}
+
+/* Advance levels 0..r-2 from population n-1_r to n by the class-r
+ * population constraint.  glow points at the old level r-1 (second part
+ * of g), which must not yet be overwritten. */
+static void lower_step(qnmodel* qnm, lvtab* T, int r, fp_vec_t* low, fp_t* glow, long nr)
+{
+	int l, i, j, s, m = T->m;
+	fp_t acc, c, w, zr;
+	fp_init(acc); fp_init(c); fp_init(w); fp_init(zr);
+	fp_set_z(zr, qnm->Z[r-1]);
+	for (l=0;l<=r-2;l++) {
+		fp_t* above = (l+1 == r-1) ? glow : low[l+1];
+		for (i=0;i<T->card[l];i++) {
+			for (s=0;s<r;s++) {
+				fp_mul(acc, zr, low[l][i*r+s]);
+				for (j=0;j<m;j++) {
+					if (mpz_sgn(qnm->L[j][r-1]) == 0) continue;
+					fp_set_z(c, qnm->L[j][r-1]);
+					fp_set_si(w, qnm->mi[j] + T->cb[l][i][j], 1);
+					fp_mul(c, c, w);
+					fp_mul(w, c, above[T->up[l][i*m+j]*r+s]);
+					fp_add(acc, acc, w);
+				}
+				fp_set_si(w, nr, 1);
+				fp_div(low[l][i*r+s], acc, w);
+			}
+		}
+	}
+	fp_clear(acc); fp_clear(c); fp_clear(w); fp_clear(zr);
+}
+
 int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool log_output, 
                 bool normconst_output, bool normconst_g_output, bool throughput_output, 
                 bool queue_output, bool debug_output, bool bounds_output, 
@@ -162,6 +205,11 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 	n=(int*)int_vec(qnm->R,0); /* current population vector */
 	int m=qnm->M;
 	Ntot=0;
+	int R=qnm->R, l;
+	int full = mom_mixed_think(qnm); /* else the mdecrease descent is exact */
+	lvtab* T = full ? lvtab_new(m,R) : NULL;
+	fp_vec_t *low  = (fp_vec_t*)calloc(R>1?R-1:1,sizeof(fp_vec_t)); /* levels 0..r-2 */
+	fp_vec_t *lowr = (fp_vec_t*)calloc(R>1?R-1:1,sizeof(fp_vec_t)); /* their snapshot at N-1_r */
 	
 	/* solve the linear system for all classes */
 	for(r=1;r<=qnm->R;r++)
@@ -185,7 +233,7 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 			b2=(fp_vec_t)fp_vec(m,0,1);
 			/* the norm.consts for n=(0,0,...,0) are equal to 1 */
 			g=(fp_vec_t)fp_vec(m+1,1,1); 
-			gr=(fp_vec_t)fp_vec(m+1,1,1);
+			gr=(fp_vec_t)fp_vec(m+1,0,1); /* G(n-1_1)=0 at n=0: stays 0 if N_1=0 */
 			Gk=(fp_vec_t)fp_vec(m,1,1);
 			G=(fp_vec_t)fp_vec(1,1,1);
 		}
@@ -199,6 +247,24 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 				return -1; // Signal singular matrix
 			}
 			setup_elapsed = CPUTIME - setup_start;
+			/* seed levels 0..r-2 for class r: entries for classes
+			 * 1..r-2 carry over, the class r-1 entry is G(n-1_{r-1})
+			 * taken from the snapshot at N-1_{r-1} */
+			{
+				int cardGk_old = nck(m+r-2,r-1)*(r-1);
+				for (l=0;full && l<=r-2;l++) {
+					fp_t* old  = (l == r-2) ? g  + cardGk_old : low[l];
+					fp_t* snap = (l == r-2) ? gr + cardGk_old : lowr[l];
+					fp_vec_t nw = (fp_vec_t)fp_vec(T->card[l]*r,0,1);
+					for (i=0;i<T->card[l];i++) {
+						for (s=0;s<=r-2;s++) fp_set(nw[i*r+s], old[i*(r-1)+s]);
+						fp_set(nw[i*r+r-1], snap[i*(r-1)]);
+					}
+					if (l < r-2) { lv_free(low[l],T->card[l]*(r-1)); lv_free(lowr[l],T->card[l]*(r-1)); }
+					low[l]  = nw;
+					lowr[l] = (fp_vec_t)fp_vec(T->card[l]*r,0,1); /* stays 0 if N_r=0 */
+				}
+			}
 			for (t=0;t<nck(m+r-2,r-1)*(r-1);t++)
 			{
 				fp_clear(b[t]);
@@ -234,8 +300,6 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 			gr=(fp_vec_t)fp_vec(cardGk+cardG,0,1);
 			copy_Gk_in_g(Gk,g);
 			copy_G_in_g(G,g);
-			/* annihilate unused normalizing constants (classes 0..r-2 only; class r-1 has no G component) */
-			for(s=0;s<r-1;s++) if(mpz_cmp_ui(qnm->Z[s], 0) == 0) for(t=0;t<nck(m+r-2,r-1);t++) fp_set_si(g[cardGk+t*r+1+s],0,1);
 		}
 		/* start solving the sequence of linear systems */
 		for (n[r-1]=1;n[r-1]<=qnm->N[r-1];n[r-1]++) /* for all population of class r */ 
@@ -247,13 +311,17 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 			}
 			/** at this point g is equal to gr **/
 			/* if this is the last iteration, save gr */
-			if(n[r-1]==qnm->N[r-1]) fp_vecdup(gr,g,cardGk+cardG);
+			if(n[r-1]==qnm->N[r-1]) {
+				fp_vecdup(gr,g,cardGk+cardG);
+				for (l=0;full && l<=r-2;l++) fp_vecdup(lowr[l],low[l],T->card[l]*r);
+			}
 
 			/* compute G=B2r*gr/nr */
 
 			fp_mspvecmul(G,A->B2r,g);
 			fp_t ninv; fp_init(ninv); fp_set_si(ninv,1,n[r-1]); 
 			for(t=0;t<cardG;t++) fp_mul(G[t],ninv,G[t]);
+			if (full) lower_step(qnm,T,r,low,g+cardGk,n[r-1]);
 
 			/* compute b=B1r*gr - A12*G */
 			fp_mspvecmul(b,A->B1r,g);
@@ -280,8 +348,6 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 			copy_Gk_in_g(Gk,g);
 			copy_G_in_g(G,g);
 			free_Gk();
-			/* annihilate unused normalizing constants (classes 0..r-2 only; class r-1 has no G component) */
-			for(s=0;s<r-1;s++) if(mpz_cmp_ui(qnm->Z[s], 0) == 0) for(t=0;t<nck(m+r-2,r-1);t++) fp_set_si(g[cardGk+t*r+1+s],0,1);
 			/* G,g and gr are not freed because we need them at the next cycle */	
 		}
 		n[r-1]=qnm->N[r-1];
@@ -295,11 +361,179 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output && !bounds_output) {
 		printf("\n");
 	}
-	mdecrease(qnm,G,Gk,g,gr,verbose_output,log_output,normconst_output,normconst_g_output,throughput_output,queue_output,debug_output,bounds_output,scale_factor);
+	if (!full) mdecrease(qnm,G,Gk,g,gr,verbose_output,log_output,normconst_output,normconst_g_output,throughput_output,queue_output,debug_output,bounds_output,scale_factor);
+	else
+	/* read levels 0 and 1 at N into the layout perfindices expects:
+	 * G = [G(N), G(N-1_1..R)], Gk[k] = [G^{+k}(N), G^{+k}(N-1_1..R)] */
+	{
+		fp_t *L0, *S0, *L1, *S1;
+		int cardGkR = nck(m+R-1,R)*R;
+		L0 = (R >= 2) ? low[0]  : g + cardGkR;
+		S0 = (R >= 2) ? lowr[0] : gr + cardGkR;
+		L1 = (R >= 3) ? low[1]  : (R == 2 ? g + cardGkR  : g);
+		S1 = (R >= 3) ? lowr[1] : (R == 2 ? gr + cardGkR : gr);
+		fp_vec_t G0 = (fp_vec_t)fp_vec(R+1,0,1);
+		fp_vec_t G1 = (fp_vec_t)fp_vec(m*(R+1),0,1);
+		for (s=0;s<R;s++) fp_set(G0[s], L0[s]);
+		fp_set(G0[R], S0[0]);
+		for (k=0;k<m;k++) {
+			for (s=0;s<R;s++) fp_set(G1[k*(R+1)+s], L1[k*R+s]);
+			fp_set(G1[k*(R+1)+R], S1[k*R]);
+		}
+		perfindices(qnm,G0,G1,verbose_output,log_output,normconst_output,normconst_g_output,throughput_output,queue_output,debug_output,bounds_output,scale_factor);
+		lv_free(G0,R+1); lv_free(G1,m*(R+1));
+	}
+	if (full) for (l=0;l<R-1;l++) { lv_free(low[l],T->card[l]*R); lv_free(lowr[l],T->card[l]*R); }
+	free(low); free(lowr);
+	lvtab_free(T);
 	fp_clear(tmp);
 	fp_clear(tmp2);
 	
 	return 0; // Success
+}
+
+/* Solve of a derived model for the tiered fallback (util/singular.h): the
+ * constants are captured in out[], converted exactly from the working
+ * precision, instead of printed.  0 on success, 1 if the MoM system of q
+ * is singular or the result is not finite. */
+static int sg_direct(qnmodel* q, mpq_t* out, void* ctx)
+{
+	mpz_t one; int rc;
+	(void)ctx;
+	mpz_init_set_ui(one, 1);
+	MOM_CAPTURE = out; MOM_CAPTURE_BAD = 0;
+	rc = solve_model(q, 0, NULL, false, false, false, false, false, true, false, false,
+	                 0, 0, false, one, NULL, NULL);
+	MOM_CAPTURE = NULL;
+	mpz_clear(one);
+	return (rc == 0 && !MOM_CAPTURE_BAD) ? 0 : 1;
+}
+
+/* A singular system is singular in floating point only when a pivot
+ * rounds to exactly zero, which rounding usually prevents: the solve then
+ * "succeeds" with garbage scaled by the reciprocal of a rounding error.
+ * Tiers 1-3 therefore reject relative LU pivots below 2^-(P/2), and accept
+ * a solve only if a second solve at about twice the working precision
+ * (same pivot threshold) agrees with it to half the working precision;
+ * otherwise it counts as singular and the next tier is tried.  Entries
+ * that vanish identically (N_r = 0) are set to zero exactly. */
+static int sg_direct_checked(qnmodel* q, mpq_t* out, void* ctx)
+{
+	int nres = SG_NRES(q), u, k, rc;
+	mpfr_prec_t w0 = FP_WPREC, r0 = FP_RPREC;
+	mpq_t* hi = sg_mpq_arr(nres);
+	int piv0 = FP_PIVTOL_BITS;
+	if (FP_PIVTOL_BITS < (int)(w0/2)) FP_PIVTOL_BITS = (int)(w0/2);
+	rc = sg_direct(q, out, ctx);
+	if (rc == 0)
+	{
+		FP_WPREC = 2*w0 + 64;
+		FP_RPREC = 2*r0 + 64;
+		if (FP_RPREC < FP_WPREC) FP_RPREC = FP_WPREC;
+		mpfr_set_default_prec(FP_WPREC);
+		rc = sg_direct(q, hi, ctx);
+		FP_WPREC = w0; FP_RPREC = r0;
+		mpfr_set_default_prec(w0);
+	}
+	FP_PIVTOL_BITS = piv0;
+	for (u=0; rc==0 && u<q->R; u++) if (q->N[u] == 0)
+	{
+		mpq_set_ui(out[1+u], 0, 1); mpq_set_ui(hi[1+u], 0, 1);
+		for (k=0;k<q->M;k++) { mpq_set_ui(out[SG_IDX_GK(q->R,k,u)], 0, 1); mpq_set_ui(hi[SG_IDX_GK(q->R,k,u)], 0, 1); }
+	}
+	if (rc == 0)
+	{
+		mpq_t d, lim; mpq_init(d); mpq_init(lim);
+		for (u=0; u<nres; u++)
+		{
+			mpq_sub(d, out[u], hi[u]); mpq_abs(d, d);
+			mpq_abs(lim, hi[u]);
+			mpq_div_2exp(lim, lim, (mp_bitcnt_t)(w0/2));
+			if (mpq_cmp(d, lim) > 0) { rc = 1; break; }
+		}
+		mpq_clear(d); mpq_clear(lim);
+	}
+	sg_mpq_arr_free(hi, nres);
+	return rc;
+}
+
+/* Tier 4 in floating point.  Two errors reach the extrapolated value:
+ * the cancellation of the Lagrange sum at t=0, which amplifies the error
+ * of the perturbed solves by 2^amp (amp from sg_interp_exact_amp), and
+ * the fixed-precision drift of the MoM recursion itself.  The perturbed
+ * models are therefore solved at the working precision P plus extra bits,
+ * and the result is accepted only once a run at more extra bits agrees
+ * with the previous one to P bits and amp is covered by the extra, so
+ * the value returned is accurate to about the working precision. */
+static int SG_EXTRA_BITS = 0;
+static int sg_interp_round(qnmodel* q, mpq_t* out, long extra, double* amp)
+{
+	mpfr_prec_t w0 = FP_WPREC, r0 = FP_RPREC;
+	sg_ops inner = { sg_direct, NULL, NULL, NULL };
+	int rc, piv0 = FP_PIVTOL_BITS;
+	if (piv0 > 0) FP_PIVTOL_BITS = (int)((w0 + extra)/2);   /* the threshold follows the precision */
+	FP_WPREC = w0 + extra;
+	FP_RPREC = r0 + extra;
+	if (FP_RPREC < FP_WPREC) FP_RPREC = FP_WPREC;
+	mpfr_set_default_prec(FP_WPREC);
+	rc = sg_interp_exact_amp(q, out, &inner, amp);
+	FP_PIVTOL_BITS = piv0;
+	FP_WPREC = w0; FP_RPREC = r0;
+	mpfr_set_default_prec(w0);
+	return rc;
+}
+
+static int sg_agree(const mpq_t* a, const mpq_t* b, int n, long bits)
+{
+	int u, ok = 1;
+	mpq_t d, lim; mpq_init(d); mpq_init(lim);
+	for (u=0; u<n && ok; u++)
+	{
+		mpq_sub(d, a[u], b[u]); mpq_abs(d, d);
+		mpq_abs(lim, b[u]); mpq_div_2exp(lim, lim, (mp_bitcnt_t)bits);
+		if (mpq_cmp(d, lim) > 0) ok = 0;
+	}
+	mpq_clear(d); mpq_clear(lim);
+	return ok;
+}
+
+static int sg_interp_fp(qnmodel* q, mpq_t* out, void* ctx)
+{
+	long P = (long)FP_WPREC, extra = 64;
+	int nres = SG_NRES(q), it, rc;
+	double amp = 0.0, amp2 = 0.0;
+	mpq_t* prev = sg_mpq_arr(nres);
+	(void)ctx;
+	rc = sg_interp_round(q, prev, extra, &amp);
+	for (it = 0; rc == 0 && it < 8; it++)
+	{
+		long next = 2*extra + P;
+		if (next < (long)amp + 64) next = (long)amp + 64;
+		rc = sg_interp_round(q, out, next, &amp2);
+		if (rc != 0) break;
+		if (amp2 + 16 <= (double)next && sg_agree(prev, out, nres, P)) { extra = next; break; }
+		extra = next; amp = amp2;
+		{ int u; for (u=0;u<nres;u++) mpq_set(prev[u], out[u]); }
+		if (it == 7) rc = 1;
+	}
+	SG_EXTRA_BITS = (int)extra;
+	sg_mpq_arr_free(prev, nres);
+	return rc;
+}
+
+/* Print the reconstructed constants through perfindices, in the layout it
+ * expects (see mom/main.c). */
+static void report_exact(qnmodel* q, mpq_t* ex, bool verbose_output, bool log_output,
+                         bool normconst_output, bool normconst_g_output, bool throughput_output,
+                         bool queue_output, bool debug_output, mpz_t scale_factor)
+{
+	int R = q->R, M = q->M, i, k;
+	fp_vec_t G0 = (fp_vec_t)fp_vec(R+1,0,1);
+	fp_vec_t G1 = (fp_vec_t)fp_vec(M*(R+1),0,1);
+	for (i=0;i<=R;i++) mpfr_set_q(G0[i], ex[i], MPFR_RNDN);
+	for (k=0;k<M;k++) for (i=0;i<R;i++) mpfr_set_q(G1[k*(R+1)+1+i], ex[SG_IDX_GK(R,k,i)], MPFR_RNDN);
+	perfindices(q,G0,G1,verbose_output,log_output,normconst_output,normconst_g_output,throughput_output,queue_output,debug_output,false,scale_factor);
+	lv_free(G0,R+1); lv_free(G1,M*(R+1));
 }
 
 int main(int argc, char**argv)
@@ -325,6 +559,7 @@ int main(int argc, char**argv)
 	long residual_prec = 0;    /* 0 -> twice the working precision */
 	int  refine_iters = 0;     /* 0 -> plain fixed-precision MoM */
 	double refine_tol = 0.0;   /* 0 -> always run the full sweep budget */
+	long pivtol_bits = -1;     /* -1 -> half the working precision, 0 -> off */
 
 	if(argc < 2)
 	{
@@ -342,6 +577,8 @@ int main(int argc, char**argv)
 		printf("  -P bits          : Working floating-point precision (default: 53, i.e. IEEE double)\n");
 		printf("  -W bits          : Residual precision for iterative refinement (default: 2*P)\n");
 		printf("  -I n             : Wilkinson/Moler refinement sweeps per block solve (default: 0 = off)\n");
+		printf("  --pivtol bits    : Treat LU pivots below 2^-bits (relative to their row) as singular\n");
+		printf("                     (default: P/2; 0 = exact zero only, the earlier behavior)\n");
 		printf("  -T tol           : Stop refining when the relative correction falls below tol (default: 0)\n");
 		return -1;
 	}
@@ -376,6 +613,8 @@ int main(int argc, char**argv)
 			printf("  -P bits          : Working floating-point precision (default: 53, i.e. IEEE double)\n");
 			printf("  -W bits          : Residual precision for iterative refinement (default: 2*P)\n");
 			printf("  -I n             : Wilkinson/Moler refinement sweeps per block solve (default: 0 = off)\n");
+		printf("  --pivtol bits    : Treat LU pivots below 2^-bits (relative to their row) as singular\n");
+		printf("                     (default: P/2; 0 = exact zero only, the earlier behavior)\n");
 			printf("  -T tol           : Stop refining when the relative correction falls below tol (default: 0)\n");
 				return 0;
 		} else if(strcmp(argv[i], "-p") == 0) {
@@ -394,6 +633,13 @@ int main(int argc, char**argv)
 				perturbation_seed = atoi(argv[++i]);
 			} else {
 				printf("Error: -s option requires a seed argument\n");
+				return -1;
+			}
+		} else if(strcmp(argv[i], "--pivtol") == 0) {
+			if(i + 1 < argc) {
+				pivtol_bits = atol(argv[++i]);
+			} else {
+				printf("Error: --pivtol option requires a bit count\n");
 				return -1;
 			}
 		} else if(strcmp(argv[i], "-D") == 0 || strcmp(argv[i], "--diag") == 0) {
@@ -452,6 +698,8 @@ int main(int argc, char**argv)
 		printf("  -P bits          : Working floating-point precision (default: 53, i.e. IEEE double)\n");
 		printf("  -W bits          : Residual precision for iterative refinement (default: 2*P)\n");
 		printf("  -I n             : Wilkinson/Moler refinement sweeps per block solve (default: 0 = off)\n");
+		printf("  --pivtol bits    : Treat LU pivots below 2^-bits (relative to their row) as singular\n");
+		printf("                     (default: P/2; 0 = exact zero only, the earlier behavior)\n");
 		printf("  -T tol           : Stop refining when the relative correction falls below tol (default: 0)\n");
 		return -1;
 	}
@@ -465,6 +713,11 @@ int main(int argc, char**argv)
 	/* Install the arithmetic precision before anything allocates an
 	 * mpfr_t: fp_init sizes every value from FP_WPREC. */
 	FP_WPREC = (mpfr_prec_t) working_prec;
+	/* A singular system shows up in floating point as a pivot made of
+	 * rounding error rather than an exact zero; reject relative pivots
+	 * below 2^-(P/2) so that such a model reaches the singular-model
+	 * fallback instead of returning garbage. */
+	FP_PIVTOL_BITS = (int)(pivtol_bits < 0 ? working_prec/2 : pivtol_bits);
 	FP_RPREC = (mpfr_prec_t) (residual_prec > 0 ? residual_prec : 2*working_prec);
 	if (FP_RPREC < FP_WPREC) FP_RPREC = FP_WPREC;
 	mpfr_set_default_prec(FP_WPREC);
@@ -472,6 +725,7 @@ int main(int argc, char**argv)
 	REFINE_TOL   = refine_tol;
 
 	qnm=(qnmodel*)readmodel(model_file);
+	qn_require_closed(qnm, "momf", 0);
 	
 	// Store original parameters for printing
 	mpz_t** original_L = NULL;
@@ -528,74 +782,32 @@ int main(int argc, char**argv)
 
 	// If singular and no perturbation yet, apply automatic perturbation
 	if (result == -1 && !auto_perturbation && perturbation_digit == 0) {
-		// If exact normalizing constant was requested, don't auto-perturb
-		// since the perturbed result won't match the exact answer
-		if (normconst_output) {
-			fprintf(stderr, "\nError: Model cannot be solved exactly by the MoM solver.\n");
-			fprintf(stderr, "The system of equations is singular. No exact normalizing constant available.\n");
+		/* Singular MoM system: other class orders, merged stations or
+		 * classes, or interpolation of the limit of a perturbation
+		 * (util/singular.h), in place of the earlier automatic
+		 * perturbation at digit 20.  Tiers 1-3 are exact transformations;
+		 * tier 4 runs at raised precision (sg_interp_fp). */
+		bool report = !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output;
+		int nres = SG_NRES(qnm);
+		mpq_t* exact = sg_mpq_arr(nres);
+		char tier[256];
+		sg_ops ops = { sg_direct_checked, sg_interp_fp, NULL, NULL };
+		int rc = sg_solve_tiered(qnm, exact, tier, sizeof tier, &ops, 1);
+		if (rc != 0) {
+			fprintf(stderr, "\nError: the MoM system is singular for this model, and every fallback\n"
+			                "failed (other class orders, merged stations or classes, interpolation).\n"
+			                "The normalizing constant may be zero or undefined; bin/ca solves any\n"
+			                "well-posed model by convolution.  -p digit gives a perturbed approximation.\n");
 			return 1;
 		}
-		fprintf(stderr, "\nWarning: Model cannot be solved exactly by the MoM solver.\n");
-		fprintf(stderr, "The system of equations is singular. Automatically applying perturbation at digit 20.\n\n");
-		perturbation_digit = 20;
-		auto_perturbation = true;
-
-		// Store original parameters if not already stored
-		if (original_L == NULL) {
-			original_L = (mpz_t**)malloc(qnm->M * sizeof(mpz_t*));
-			for(int i = 0; i < qnm->M; i++) {
-				original_L[i] = (mpz_t*)malloc(qnm->R * sizeof(mpz_t));
-				for(int j = 0; j < qnm->R; j++) {
-					mpz_init(original_L[i][j]);
-					mpz_set(original_L[i][j], qnm->L[i][j]);
-				}
-			}
-			original_Z = (mpz_t*)malloc(qnm->R * sizeof(mpz_t));
-			for(int j = 0; j < qnm->R; j++) {
-				mpz_init(original_Z[j]);
-				mpz_set(original_Z[j], qnm->Z[j]);
-			}
-		}
-
-		// Apply perturbation
-		mpz_clear(scale_factor);
-		mpz_init(scale_factor);
-		mpz_set_ui(scale_factor, 1);  // Reset to 1 before applying perturbation
-		apply_perturbation_to_model(qnm, perturbation_digit, perturbation_seed, scale_factor);
-
-		// Print model with perturbation info
-		if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output) {
-			printmodel_with_perturbation(qnm, perturbation_digit, scale_factor, perturbation_seed, original_L, original_Z);
-		}
-
-		// Retry with perturbation
-		result = solve_model(qnm, argc, argv, verbose_output, log_output,
-		                    normconst_output, normconst_g_output, throughput_output,
-		                    queue_output, debug_output, bounds_output,
-		                    perturbation_digit, perturbation_seed, auto_perturbation,
-		                    scale_factor, original_L, original_Z);
-		if (result == -1) {
-			fprintf(stderr, "\nError: Model is still singular even with automatic perturbation at digit 20.\n");
-			fprintf(stderr, "Please try running manually with a different perturbation digit.\n");
-			fprintf(stderr, "\nExample invocations:\n");
-			fprintf(stderr, "  %s %s -p 25     # Apply perturbation at 25th digit\n", argv[0], model_file);
-			fprintf(stderr, "  %s %s -p 30     # Apply perturbation at 30th digit\n", argv[0], model_file);
-			fprintf(stderr, "  %s %s -p 15 -s 12345  # Different perturbation at 15th digit with custom seed\n\n", argv[0], model_file);
-			return 1;
-		}
-
-		// After successful solve with automatic perturbation, restore original model parameters
-		// so that the output is computed relative to the original (unperturbed) model
-		if (auto_perturbation && original_L != NULL) {
-			for(int i = 0; i < qnm->M; i++) {
-				for(int j = 0; j < qnm->R; j++) {
-					mpz_set(qnm->L[i][j], original_L[i][j]);
-				}
-			}
-			for(int j = 0; j < qnm->R; j++) {
-				mpz_set(qnm->Z[j], original_Z[j]);
-			}
-		}
+		if (SG_EXTRA_BITS && strncmp(tier, "interpolation", 13) == 0)
+			fprintf(stderr, "momf: singular MoM system, solved via %s at %ld+%d bits\n", tier, (long)FP_WPREC, SG_EXTRA_BITS);
+		else
+			fprintf(stderr, "momf: singular MoM system, solved via %s\n", tier);
+		if (report) printf("\nSingular MoM system, solved via %s\n", tier);
+		report_exact(qnm, exact, verbose_output, log_output, normconst_output, normconst_g_output,
+		             throughput_output, queue_output, debug_output, scale_factor);
+		sg_mpq_arr_free(exact, nres);
 	} else if (result == -1) {
 		fprintf(stderr, "\nError: Model cannot be solved even with perturbation.\n");
 		return 1;

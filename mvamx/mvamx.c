@@ -189,6 +189,12 @@ static double closed_mva_mpq(int M, int Rc, int *Nc, mpz_t *Zc,
 	/* Compute final queue lengths at the full population Nc */
 	for (m = 0; m < M; m++) {
 		for (r = 0; r < Rc; r++) {
+			/* A class with no jobs has X_r=0 and Q_{m,r}=0, and N-1_r is
+			   outside the population lattice. */
+			if (Nc[r] == 0) {
+				mpq_set_ui(Qc[m][r], 0, 1);
+				continue;
+			}
 			int *n_minus = (int*)malloc(Rc * sizeof(int));
 			for (int i = 0; i < Rc; i++)
 				n_minus[i] = Nc[i];
@@ -219,14 +225,8 @@ static double closed_mva_mpq(int M, int Rc, int *Nc, mpz_t *Zc,
 	free(n);
 	free(planesizes);
 
-	/* Compute logG from final G */
-	mpf_t G_mpf;
-	mpf_init(G_mpf);
-	mpf_set_q(G_mpf, Gc);
-	double logG = log(mpf_get_d(G_mpf));
-	mpf_clear(G_mpf);
-
-	return logG;
+	/* Compute logG from final G (mpq_log does not overflow when G > DBL_MAX) */
+	return mpq_log(Gc);
 }
 
 double mvamx(qnmodel *qn, mpq_t *X, mpq_t **Q, mpq_t G)
@@ -349,15 +349,17 @@ double mvamx(qnmodel *qn, mpq_t *X, mpq_t **Q, mpq_t G)
 	}
 
 	/* ---- Step 3: Open-class cycle times and queue lengths ---- */
-	/* CN[m][r] = L[m][r] * (1 + sum_c Qc[m][c]) / (1 - UNt[m])
+	/* CN[m][r] = L[m][r] * (mi[m] + sum_c Qc[m][c]) / (1 - UNt[m])
+	   (a station of multiplicity mi is mi replicated queues, each with
+	   demand L[m][r]; this matches the mi + q term of the closed part)
 	   Q[m][r]  = CN[m][r] * lambda[r]                              */
 	for (int i = 0; i < numOpen; i++) {
 		r = openIdx[i];
 		for (m = 0; m < M; m++) {
-			/* one_plus_sumQc = 1 + sum_c Qc[m][c] */
+			/* one_plus_sumQc = mi[m] + sum_c Qc[m][c] */
 			mpq_t one_plus_sumQc;
 			mpq_init(one_plus_sumQc);
-			mpq_set_ui(one_plus_sumQc, 1, 1);
+			mpq_set_ui(one_plus_sumQc, qn->mi[m], 1);
 
 			if (Qc != NULL) {
 				for (int c = 0; c < numClosed; c++) {

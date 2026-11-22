@@ -85,6 +85,7 @@ int main(int argc,char ** argv)
 	}
 	
 	qnmodel* qn = (qnmodel*)readmodel(model_file);
+	qn_require_closed(qn, "recal", 0);
 	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output && !exact_output) {
 		printmodel(qn);
 	}
@@ -110,7 +111,7 @@ int main(int argc,char ** argv)
 	}
 	
 	double G = mpq_get_d(G_exact);
-	double logG = log(G);
+	double logG = mpq_log(G_exact); /* no overflow when G > DBL_MAX */
 	
 	if (log_output) {
 		printf("%.15e\n", logG);

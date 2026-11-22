@@ -79,6 +79,12 @@ int main(int argc, char **argv)
 	}
 
 	qn = (qnmodel*)readmodel(model_file);
+	if (qn->isLD) {
+		/* the MU section would be silently ignored */
+		fprintf(stderr, "mvamx: MU (load-dependent) section present; use mvaldmx for load-dependent stations\n");
+		freemodel(qn);
+		return 1;
+	}
 	if (!log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output && !exact_output) {
 		printmodel(qn);
 	}

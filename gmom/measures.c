@@ -5,33 +5,22 @@
 #include <gmpla.h>
 #include "gmom.h"
 
-/* Recover plain G(N), throughputs X_r and queue lengths Q_kr from the
- * gmom moment basis, by the mdecrease replica-descent of the original MoM
- * (mom/mdecrease.c) plus perfindices.
- *
- * gmom's top basis vlM is the level-(R-1) basis of the full M-queue model:
- * vlM[t*R+s] = G(M+delta_t, N-1_s) for delta_t = multichoose(M,R-1)[t] and
- * s=0..R-1 (s=0 is N).  grM is the same basis one population step back,
- * so grM[t*R+0] = G(M+delta_t, N-1_R) supplies the missing class-R
- * decrement.  The descent peels replicas off queue 0 via the convolution
- * expression and fills the class decrements via the population
- * constraints, exactly as the original MoM, but starts one level lower
- * (R-1 instead of R) because the generalized basis is more compact.
- */
-void gmom_measures(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM,
-                   int out_e, int out_g, int out_l, int out_t, int out_q, int* cperm, mpz_t scale_factor,
-                   gmom_out* cap)
+/* Downward replica pass of the original MoM (mom/mdecrease.c), started at
+ * level R-1 because gmom's basis is one level more compact.  vlM is the
+ * level-(R-1) basis of the full model, vlM[t*R+s] = G(M+delta_t, N-1_s),
+ * and grM the same one population step back, so grM[t*R] = G(M+delta_t,
+ * N-1_R).  Returns level 0 in *Gout and level 1 in *Gkout, in the layout
+ * gmom_measures takes.  Exact only when think times are not mixed (see
+ * mom_mixed_think in util/lvtab.h); main.c uses the full basis otherwise. */
+void gmom_descend(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM, mpq_vec_t* Gout, mpq_vec_t* Gkout)
 {
 	int M = qn->M, R = qn->R;
-	/* cperm[j] = original class at permuted position j; inv[c] = permuted
-	 * position of original class c.  X/Q are printed in ORIGINAL order. */
-	int inv[64], _c; for (_c = 0; _c < R; _c++) inv[_c] = _c;
-	if (cperm) for (_c = 0; _c < R; _c++) inv[cperm[_c]] = _c;
 	mpz_t** L = qn->L; mpz_t* Z = qn->Z; int* N = qn->N; int* mi = qn->mi;
 	int t, i, s, l, j;
 	mpq_t tmp, tmp2; mpq_init(tmp); mpq_init(tmp2);
 
 	int Ntot = 0; for (s = 0; s < R; s++) Ntot += N[s];
+
 
 	/* level-(R-1) Gk with R+1 components */
 	int L1 = R - 1;
@@ -107,6 +96,32 @@ void gmom_measures(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM,
 	/* G is level-0: G[0]=G(N), G[s]=G(N-1_s).  Gk is level-1 (single
 	 * replica per queue): Gk[(k-1)*(R+1)+r] = G(M+1_k, N-1_r). */
 
+	mpq_clear(tmp); mpq_clear(tmp2);
+	*Gout = G; *Gkout = Gk;
+}
+
+/* Print G(N), throughputs X_r and queue lengths Q_kr from levels 0 and 1
+ * of the full gmom basis at N, in the layout
+ *   G[0] = G(N), G[s] = G(N-1_s),
+ *   Gk[(k-1)*(R+1)+s] = G(M+1_k, N-1_s)   (s=0 is N).
+ * main.c gets them from gmom_descend, or, when think times are mixed,
+ * from the lower levels carried through the recursion (util/lvtab.h).
+ * With cap non-NULL (-b) every measure goes into cap and nothing prints. */
+void gmom_measures(qnmodel* qn, mpq_vec_t G, mpq_vec_t Gk,
+                   int out_e, int out_g, int out_l, int out_t, int out_q, int* cperm, mpz_t scale_factor,
+                   gmom_out* cap)
+{
+	int M = qn->M, R = qn->R;
+	/* cperm[j] = original class at permuted position j; inv[c] = permuted
+	 * position of original class c.  X/Q are printed in ORIGINAL order. */
+	int inv[64], _c; for (_c = 0; _c < R; _c++) inv[_c] = _c;
+	if (cperm) for (_c = 0; _c < R; _c++) inv[cperm[_c]] = _c;
+	mpz_t** L = qn->L; int* N = qn->N; int* mi = qn->mi;
+	int i, s;
+	mpq_t tmp, tmp2; mpq_init(tmp); mpq_init(tmp2);
+
+	int Ntot = 0; for (s = 0; s < R; s++) Ntot += N[s];
+
 	/* Undo the perturbation scaling (mom/perfindices convention):
 	 *   G      is degree Ntot in the demands  -> divide by scale^Ntot;
 	 *   X_r    = G(N-1_r)/G(N)                 -> multiply by scale;
@@ -146,8 +161,7 @@ void gmom_measures(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM,
 	}
 
 	if (out_l) {
-		mpf_t f; mpf_init(f); mpf_set_q(f, G0s);
-		printf("%.15e\n", log(mpf_get_d(f))); mpf_clear(f);
+		printf("%.15e\n", mpq_log(G0s)); /* no overflow for G > 1e308 */
 	} else if (out_e) {
 		mpq_canonicalize(G0s);
 		mpz_t num, den; mpz_init(num); mpz_init(den);

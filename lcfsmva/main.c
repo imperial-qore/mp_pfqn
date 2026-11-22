@@ -96,6 +96,7 @@ int main(int argc, char **argv)
 	}
 
 	qn = (qnmodel*)readmodel(model_file);
+	qn_require_closed(qn, "lcfsmva", 0);
 
 	/* Validate model constraints for LCFS MVA */
 	if (qn->M != 2) {

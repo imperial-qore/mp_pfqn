@@ -30,8 +30,8 @@ Those of `mom` (`-l -e -g -t -q`), plus:
 Plain Wang reconstruction splits the modulus evenly between numerator and
 denominator, so it needs `2B` bits of modulus to recover a `B`-bit value
 even when the denominator is only a few bits wide. Every quantity
-exported here is of that kind: `mdecrease` divides only by populations,
-station multiplicities and think times. Bounding the denominator recovers
+exported here is of that kind: the recursion divides only by class
+populations and the pivots of the population-independent diagonal blocks. Bounding the denominator recovers
 the value from about `B` bits and therefore from **half as many primes**,
 which is the largest single speedup available to this solver.
 
@@ -64,8 +64,15 @@ made deliberately by the caller rather than silently.
 ## Design
 
 - **`zpla/`** is a linear-algebra layer over `Z/p` mirroring the `gmpla`
-  `mpq_*` API, so `setupls.c`, `blocksolve.c` and `mdecrease.c` are
-  transliterations of the `mom` sources rather than reimplementations.
+  `mpq_*` API, so `setupls.c` and `blocksolve.c` are transliterations of
+  the `mom` sources rather than reimplementations.
+- **Full basis, no downward pass.** Replica levels `0..r-2` are carried
+  through the class-`r` recursion alongside the two top levels, each
+  advanced by the class-`r` population constraint (Casale, Perf. Eval. 2011,
+  Def. 1 and App. C). `G(N)`, `G(N-1_s)` and `G^{+k}` are read off levels 0
+  and 1 at the end. This replaces `mdecrease`, whose `Z_s=0` branch used an
+  identity that only holds when no class has a positive think time, so it
+  was wrong for models mixing zero and positive think times.
   Residues are held in **Montgomery form**: the inner-loop multiply is
   three 64x64 products instead of a 128-by-64 hardware division.
 - **Pivoting** in `zp_ludcmp` is by first nonzero. Over a finite field
@@ -73,9 +80,8 @@ made deliberately by the caller rather than silently.
   serves.
 - **Unlucky primes** (some diagonal block singular mod `p`) are detected
   and discarded. A matrix that is singular over `Q` is singular modulo
-  every prime, and is reported after 40 consecutive failures. This is
-  strictly better behaviour than `mom`, which silently substitutes a
-  perturbed model.
+  every prime and shows up as 40 consecutive failures; such a model is
+  then solved exactly by the fallbacks in **Singular models** below.
 - **Termination** is not by an a priori height bound. Primes are added
   until `G` reconstructs to the same rational twice, then the full set of
   constants is reconstructed and must reproduce itself at a later prime
@@ -161,9 +167,56 @@ itself:
 
 Bit-for-bit identical to `bin/mom` on `-e`, `-t` and `-q` for every
 non-singular model in `models/`, plus the paper's Table 1 model at
-several populations. On the singular models the two differ by design:
-`mom` auto-perturbs and returns an approximation, `mommod` reports the
-singularity.
+several populations. On the singular models both now go through the
+fallbacks below and agree there too.
+
+## Singular models
+
+When the MoM system is singular over `Q`, `mommod` tries the following,
+cheapest first. Tiers 1 to 3 and the driver live in `util/singular.h` and
+are shared with `comommod`, `mom` and `momf`; each solver supplies only
+its own solve and, optionally, its own tier 4. The modular engine itself
+(`solve_mod`, `crt_solve`, the tiers) is in `engine.c` behind the small
+API of `mmengine.h`, and `main.c` holds only the command line and output.
+`mom` links the engine for its tier 4: interpolation over `Q` took 371 s
+on `12_expanded` (21 exact solves with long rationals), the per-prime
+version takes 8 s. Every tier is exact; the route taken is noted on stderr
+(and in the default report, and in `-v`).
+
+1. **Other class orders.** The system can be singular for one class
+   processed last and not for another. Up to 24 orders are tried and the
+   results are mapped back.
+2. **Merged stations.** Stations with identical demand rows are folded
+   into one station with the summed multiplicity (a multiplicity-`m`
+   station is `m` identical queues). `G` and `G(N-1_r)` are unchanged and
+   `G^{+k}(N-1_r)` is that of the folded station.
+3. **Merged classes.** Classes with `L_kr = c L_ks` at every station and
+   `Z_r = c Z_s` enter the generating function only through
+   `x_s + c x_r`, so the group is solved as one class at the summed
+   population and expanded by `G(N) = G'(n) prod (sum N_i)!/prod N_i! prod c_i^{N_i}`
+   (same factor at `N-1_i` for the other constants).
+   Tiers 1 to 3 are applied again to each reduced model.
+4. **Interpolation.** Every exported constant is a homogeneous polynomial
+   of degree at most `Ntot` in `(L, Z)` jointly, so along
+   `(L, Z) + t (DL, DZ)` it is a polynomial in `t` whose value at `t = 0`
+   is the original constant. Each prime solves the perturbed model at
+   `t = 1, 2, ...`, skipping the finitely many singular `t`, and
+   evaluates the Lagrange interpolant through `Ntot+1` points at `t = 0`
+   in `Z/p`; the CRT then reconstructs the exact value. Both `L` and `Z`
+   must move (with `Z = 0` the system can be singular for every demand
+   matrix), and the direction is drawn from `1..10^6`, since small
+   integers create coincidences that are themselves degeneracies. Cost
+   is `Ntot+1` solves per prime.
+
+A model none of these solve has an undefined normalizing constant (for
+example a class with population, no think time and zero demand
+everywhere), and `mommod` reports an error.
+
+Validated against `bin/ca` on every model in `models/` (all singular
+ones included: `08` and `11` via class order, the others via
+interpolation; `06_large` with `Ntot = 75` takes 16 s on one thread, 6.6 s
+on four), on the merge examples, and on 600 random models covering every
+tier, all exact.
 
 ## A latent bug in `mom` that this exposed
 

@@ -37,9 +37,12 @@ int main(int argc, char **argv)
 		else if (strcmp(argv[i], "-h") == 0) {
 			printf("USAGE: %s [-l] [-g] [-h] model.qn\n", argv[0]);
 			return 0;
+		} else if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "-s") == 0) {
+			/* perturbation options of mom/comom: accepted and ignored */
+			if (i + 1 < argc) i++;
 		} else if (argv[i][0] == '-') {
-			if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "-s") == 0)
-				if (i + 1 < argc) i++;
+			fprintf(stderr, "%s: unsupported option '%s' (%s computes the normalizing constant only: use -l or -g)\n", argv[0], argv[i], "clw");
+			return 1;
 		} else {
 			model_file = argv[i];
 		}
@@ -52,6 +55,7 @@ int main(int argc, char **argv)
 	}
 
 	qnmodel *qn = readmodel(model_file);
+	qn_require_closed(qn, "clw", 0);
 	if (!log_output && !normconst_g_output)
 		printmodel(qn);
 

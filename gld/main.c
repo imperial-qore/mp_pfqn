@@ -40,10 +40,12 @@ int main(int argc, char **argv)
 		else if (strcmp(argv[i], "-h") == 0) {
 			printf("USAGE: %s [-l] [-e] [-g] [-h] model.qn\n", argv[0]);
 			return 0;
+		} else if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "-s") == 0) {
+			/* perturbation options of mom/comom: accepted and ignored */
+			if (i + 1 < argc) i++;
 		} else if (argv[i][0] == '-') {
-			/* skip unknown options */
-			if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "-s") == 0)
-				if (i + 1 < argc) i++;
+			fprintf(stderr, "%s: unsupported option '%s' (gld computes the normalizing constant only: use -l, -e or -g)\n", argv[0], argv[i]);
+			return 1;
 		} else {
 			model_file = argv[i];
 		}
@@ -55,6 +57,7 @@ int main(int argc, char **argv)
 	}
 
 	qnmodel *qn = readmodel(model_file);
+	qn_require_closed(qn, "gld", 1);
 	if (!log_output && !normconst_output && !normconst_g_output)
 		printmodel(qn);
 
@@ -67,12 +70,8 @@ int main(int argc, char **argv)
 
 	gld_multi(G, qn->L, qn->N, qn->mu, qn->Z, qn->M, qn->R, qn->Nt);
 
-	/* Compute logG */
-	mpf_t G_mpf;
-	mpf_init(G_mpf);
-	mpf_set_q(G_mpf, G);
-	double logG = log(mpf_get_d(G_mpf));
-	mpf_clear(G_mpf);
+	/* Compute logG (mpq_log does not overflow when G > DBL_MAX) */
+	double logG = mpq_log(G);
 
 	if (log_output) {
 		printf("%.15e\n", logG);

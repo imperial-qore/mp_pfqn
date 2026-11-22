@@ -79,37 +79,116 @@ static void write_perm(const char* path, qnmodel* qn, int* perm)
 	fclose(f);
 }
 
-/* print a -t/-q result captured from a permuted run, mapped back to the
- * original class order.  perm[j]=orig class at permuted position j.
- * -t has R rows of 1 value (one throughput per line); -q has M rows of R
- * values. */
-static void print_unpermuted(const char* out, int R, int M, int* perm, int is_q)
+/* Output modes that carry per-class values (ported from main's safe_comom).
+ * OUT_RAW: class-order invariant, printed verbatim. */
+enum { OUT_RAW = 0, OUT_T, OUT_Q, OUT_TEXT };
+
+/* print a result captured from a permuted run, mapped back to the original
+ * class order.  perm[j] = original class at permuted position j.
+ *   OUT_T    : R lines, one throughput each
+ *   OUT_Q    : M lines of R values
+ *   OUT_TEXT : default / -d report.  The model echo (printed in permuted
+ *              order) is replaced by printmodel() of the original model, the
+ *              "X[j] = v" lines and the values of the "Q[k] =\tv..\t(total)"
+ *              lines are reordered; everything else passes through.
+ * Returns 0 on success, -1 if the output does not have the expected shape
+ * (nothing is printed in that case). */
+static int print_unpermuted(const char* out, qnmodel* qn, int* perm, int mode)
 {
-	/* inverse permutation: inv[orig] = permuted position */
-	int inv[64]; int i;
+	int R = qn->R, M = qn->M, i;
+	int* inv = (int*)malloc((size_t)R * sizeof(int)); /* inv[orig] = permuted position */
 	for (i = 0; i < R; i++) inv[perm[i]] = i;
 
-	/* parse all whitespace-separated doubles */
-	int cap = (is_q ? M*R : R);
-	char* vals[4096]; int nv = 0;
-	char* buf = strdup(out);
-	char* tok = strtok(buf, " \t\n");
-	while (tok && nv < cap) { vals[nv++] = strdup(tok); tok = strtok(NULL, " \t\n"); }
-	free(buf);
-
-	if (is_q) {
-		int k, c;
-		for (k = 0; k < M; k++) {
-			for (c = 0; c < R; c++) {
-				printf("%s%s", vals[k*R + inv[c]], c<R-1?" ":"");
+	if (mode == OUT_T || mode == OUT_Q) {
+		int cap = (mode == OUT_Q ? M*R : R), nv = 0;
+		char** vals = (char**)calloc((size_t)cap, sizeof(char*));
+		char* buf = strdup(out);
+		char* tok = strtok(buf, " \t\n");
+		while (tok && nv < cap) { vals[nv++] = tok; tok = strtok(NULL, " \t\n"); }
+		if (nv != cap || tok != NULL) { free(vals); free(buf); free(inv); return -1; }
+		if (mode == OUT_Q) {
+			int k, c;
+			for (k = 0; k < M; k++) {
+				for (c = 0; c < R; c++)
+					printf("%s%s", vals[k*R + inv[c]], c<R-1?" ":"");
+				printf("\n");
 			}
-			printf("\n");
+		} else {
+			int c;
+			for (c = 0; c < R; c++) printf("%s\n", vals[inv[c]]);
 		}
-	} else {
-		int c;
-		for (c = 0; c < R; c++) printf("%s\n", vals[inv[c]]);
+		free(vals); free(buf); free(inv);
+		return 0;
 	}
-	for (i = 0; i < nv; i++) free(vals[i]);
+
+	/* OUT_TEXT: split into lines, rewrite into a buffer, print at the end */
+	char* buf = strdup(out);
+	int nlines = 0, cap_lines = 64;
+	char** line = (char**)malloc((size_t)cap_lines * sizeof(char*));
+	{
+		char* p = buf;
+		while (*p) {
+			char* e = strchr(p, '\n');
+			if (nlines == cap_lines) { cap_lines *= 2; line = (char**)realloc(line, (size_t)cap_lines * sizeof(char*)); }
+			line[nlines++] = p;
+			if (!e) break;
+			*e = '\0'; p = e + 1;
+		}
+	}
+	/* X lines: the R consecutive "X[j] = " lines; values in permuted order */
+	int x0 = -1;
+	for (i = 0; i < nlines; i++) if (!strncmp(line[i], "X[", 2)) { x0 = i; break; }
+	int ok = (x0 >= 0 && x0 + R <= nlines);
+	for (i = 0; ok && i < R; i++) {
+		char want[32]; snprintf(want, sizeof(want), "X[%d] = ", i+1);
+		if (strncmp(line[x0+i], want, strlen(want))) ok = 0;
+	}
+	/* Q lines: "Q[k] =" then R tab-separated values then "\t(total: ..)" */
+	int q0 = -1;
+	for (i = 0; i < nlines; i++) if (!strncmp(line[i], "Q[", 2)) { q0 = i; break; }
+	if (ok && !(q0 >= 0 && q0 + M <= nlines)) ok = 0;
+	char*** qv = NULL;
+	if (ok) {
+		qv = (char***)calloc((size_t)M, sizeof(char**));
+		for (i = 0; ok && i < M; i++) {
+			int nt = 0;
+			qv[i] = (char**)calloc((size_t)R + 2, sizeof(char*));
+			char* t = strtok(line[q0+i], "\t");
+			while (t && nt < R + 2) { qv[i][nt++] = t; t = strtok(NULL, "\t"); }
+			if (nt != R + 2 || t != NULL || strncmp(qv[i][R+1], "(total:", 7)) ok = 0;
+		}
+	}
+	if (ok) {
+		int in_header = 0;
+		for (i = 0; i < nlines; i++) {
+			if (!in_header && !strncmp(line[i], "The queueing network model has", 30)) {
+				in_header = 1;
+				fflush(stdout);
+				printmodel(qn);          /* same routine the solvers use, original order */
+				fflush(stdout);
+				continue;
+			}
+			if (in_header) {             /* the echo ends at its blank line */
+				if (line[i][0] == '\0') { in_header = 0; printf("\n"); }
+				continue;
+			}
+			if (i >= x0 && i < x0 + R) {
+				int c = i - x0;          /* original class c, permuted position inv[c] */
+				printf("X[%d] = %s\n", c+1, line[x0 + inv[c]] + strcspn(line[x0 + inv[c]], "=") + 2);
+			} else if (i >= q0 && i < q0 + M) {
+				int k = i - q0, c;
+				printf("%s", qv[k][0]);
+				for (c = 0; c < R; c++) printf("\t%s", qv[k][1 + inv[c]]);
+				printf("\t%s\n", qv[k][R+1]);
+			} else {
+				int last_nl = (i < nlines-1) || (out[0] && out[strlen(out)-1] == '\n');
+				printf("%s%s", line[i], last_nl ? "\n" : "");
+			}
+		}
+	}
+	if (qv) { for (i = 0; i < M; i++) free(qv[i]); free(qv); }
+	free(line); free(buf); free(inv);
+	return ok ? 0 : -1;
 }
 
 /* Recursion-class search (the appendix's reorder idea).  The recursion
@@ -122,10 +201,14 @@ static void print_unpermuted(const char* out, int R, int M, int* perm, int is_q)
 static int recclass_search(const safe_cfg* cfg, qnmodel* qn, const char* flag,
                            int is_t, int is_q)
 {
-	/* a wrapper whose outputs carry no class index needs no un-permutation */
+	/* a wrapper whose outputs carry no class index needs no un-permutation;
+	 * "-d" in permuted_flags also remaps the default/-d text report */
 	const char* pf = cfg->permuted_flags ? cfg->permuted_flags : "-t -q";
-	if (!strstr(pf, "-t")) is_t = 0;
-	if (!strstr(pf, "-q")) is_q = 0;
+	int is_text = (!flag[0] || !strcmp(flag, "-d") || !strcmp(flag, "--debug"));
+	int mode = OUT_RAW;
+	if (is_t && strstr(pf, "-t")) mode = OUT_T;
+	else if (is_q && strstr(pf, "-q")) mode = OUT_Q;
+	else if (is_text && strstr(pf, "-d")) mode = OUT_TEXT;
 	int R = qn->R, c, j;
 	int perm[64];
 	char run_flags[256];
@@ -144,8 +227,12 @@ static int recclass_search(const safe_cfg* cfg, qnmodel* qn, const char* flag,
 		run_solver(cfg->name, cfg->solver, tmp, run_flags, out, sizeof(out), &sing);
 		unlink(tmp);
 		if (!sing) {
-			if (is_t || is_q) print_unpermuted(out, R, qn->M, perm, is_q);
-			else fputs(out, stdout);
+			if (mode == OUT_RAW) fputs(out, stdout);
+			else if (print_unpermuted(out, qn, perm, mode) < 0) {
+				fprintf(stderr, "%s: unexpected %s output under class order; trying the next one\n",
+				        cfg->name, cfg->solver);
+				continue;
+			}
 			return 1;
 		}
 	}
@@ -154,10 +241,17 @@ static int recclass_search(const safe_cfg* cfg, qnmodel* qn, const char* flag,
 
 int safe_tiers_main(const safe_cfg* cfg, int argc, char** argv)
 {
-	const char* flag = ""; int is_t = 0, is_q = 0;
+	const char* flag = ""; int is_t = 0, is_q = 0, nflags = 0;
 	char* model = NULL; int i;
 	for (i = 1; i < argc; i++) {
 		if (argv[i][0] == '-') {
+			/* the solvers print only one output, so several flags would be
+			 * misread when un-permuting a Tier-2 run */
+			if (++nflags > 1) {
+				fprintf(stderr, "%s: give at most one output option (got '%s' and '%s')\n",
+				        cfg->name, flag, argv[i]);
+				return 1;
+			}
 			flag = argv[i];
 			if (!strcmp(argv[i], "-t") || !strcmp(argv[i], "--tput")) is_t = 1;
 			if (!strcmp(argv[i], "-q") || !strcmp(argv[i], "--qlen")) is_q = 1;

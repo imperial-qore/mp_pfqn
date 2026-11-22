@@ -30,6 +30,7 @@ void int_vecprint(int* vec, int n);
 
 extern mpfr_prec_t FP_WPREC; /* working precision, bits */
 extern mpfr_prec_t FP_RPREC; /* residual precision, bits */
+extern int FP_PIVTOL_BITS;   /* >0: fp_ludcmp rejects relative pivots below 2^-bits */
 
 typedef mpfr_t  fp_t;
 typedef mpfr_t* fp_vec_t;
