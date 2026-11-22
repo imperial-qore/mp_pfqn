@@ -2,7 +2,7 @@ CC = gcc
 LD = gcc
 CFLAGS = -g -O4 -I../deps/local/include -I. -I../include/ -I../gmpla/ -I../util/ -Wall 
 #LDFLAGS = -lgmp -lm -L. -L../lib/ 
-LDFLAGS = -L../deps/local/lib -lgmp -lmpfr -lm -L. -L../lib/
+LDFLAGS = -fopenmp -L../deps/local/lib -lgmp -lmpfr -lm -L. -L../lib/
 #LDFLAGS = -static -L./gmp-4.1.4/.libs/ -lgmp -lm  -L../lib/
 
 SRCS = main.c setupls.c hash.c mpq_ludcmp_progress.c btf_decompose.c btf_solve.c
@@ -16,8 +16,26 @@ RM = /bin/rm -f
 
 all: comom
 
-comom: ${OBJS} util
-	${LD} ${OBJS} ${GMPLAOBJS} ${UTILOBJS} -o ../bin/comom ${LDFLAGS} 
+comom: ${OBJS} util ccengine.o
+	${LD} ${OBJS} ccengine.o ${GMPLAOBJS} ${UTILOBJS} -o ../bin/comom ${LDFLAGS} 
+
+# The multi-modular engine of comommod, used for tier 4 of the singular-model
+# fallback (as bin/mom uses mommod's).  comommod's sources reuse names that
+# comom defines too (setupls, hash, btf_*, qnm, ...), so they are linked into
+# one relocatable object whose symbols are all made local except the
+# ccengine.h API.
+CCOBJS = ../comommod/engine.o ../comommod/globals.o ../comommod/image.o ../comommod/setupls.o ../comommod/combs.o ../comommod/btf_decompose.o ../comommod/btf_solve.o
+CCAPI = comommod_config comommod_stats comommod_solve_tiered comommod_interp
+
+.PHONY: ccobjs
+ccobjs:
+	$(MAKE) -C ../comommod $(notdir $(CCOBJS))
+	$(MAKE) -C ../zpla
+
+ccengine.o: ccobjs
+	ld -r -o ccengine_raw.o $(CCOBJS) ../zpla/zpla.o
+	objcopy $(addprefix --keep-global-symbol=,$(CCAPI)) ccengine_raw.o ccengine.o
+	${RM} ccengine_raw.o
 
 util:  ${UTILOBJS}
 
@@ -28,4 +46,4 @@ cleanbase:
 	${RM} ${OBJS}
 
 clean: 
-	${RM} ${OBJS} ${DEPS} 
+	${RM} ${OBJS} ${DEPS} ccengine.o 

@@ -9,6 +9,7 @@
 #include <gmpla.h>
 #include "comom.h"
 #include "singular.h"
+#include "../comommod/ccengine.h"
 
 // Define global variables declared in headers
 int AORSCTR;
@@ -27,6 +28,7 @@ qnmodel* qnm;
  * SG_NRES layout), prints nothing and returns 0, or 1 on a singular
  * system without perturbing. */
 static mpq_t* COMOM_CAPTURE = NULL;
+static int COMOM_THREADS = 1;   /* -j: primes solved concurrently in tier 4 */
 static qnmodel* COMOM_MODEL = NULL;
 static int comom_main(int argc, char**argv);
 static int comom_fallback(qnmodel* q, bool log_output, bool normconst_output, bool normconst_g_output,
@@ -73,7 +75,7 @@ static int comom_main(int argc, char**argv)
 	
 	if(argc < 2)
 	{
-		printf("USAGE: %s [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-d|--debug] [-p digit] [-s seed] [-X] model.qn\n", argv[0]);
+		printf("USAGE: %s [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-d|--debug] [-p digit] [-s seed] [-X] [-j n] model.qn\n", argv[0]);
 		printf("  -l, --log        : Print only log of normalizing constant as double\n");
 		printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
 		printf("  -g, --nc         : Print normalizing constant as double\n");
@@ -84,6 +86,7 @@ static int comom_main(int argc, char**argv)
 		printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
 		printf("  -s seed          : Set perturbation seed (default: 23000)\n");
 		printf("  -X, --no-perturb : Fail on a singular system instead of the exact fallback\n");
+		printf("  -j n             : Threads for the per-prime interpolation tier of the fallback\n");
 		return -1;
 	}
 	
@@ -102,6 +105,8 @@ static int comom_main(int argc, char**argv)
 			debug_output = true; // -d now prints basis normalizing constants
 		} else if(strcmp(argv[i], "-X") == 0 || strcmp(argv[i], "--no-perturb") == 0) {
 			no_perturb = true;
+		} else if(strcmp(argv[i], "-j") == 0) {
+			if (i + 1 < argc) COMOM_THREADS = atoi(argv[++i]);
 		} else if(strcmp(argv[i], "-p") == 0) {
 			if(i + 1 < argc) {
 				perturbation_digit = atoi(argv[++i]);
@@ -121,7 +126,7 @@ static int comom_main(int argc, char**argv)
 				return -1;
 			}
 		} else if(strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-			printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-d|--debug] [-p digit] [-s seed] [-X] model.qn\n", argv[0]);
+			printf("USAGE: %s [-v|--verbose] [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-d|--debug] [-p digit] [-s seed] [-X] [-j n] model.qn\n", argv[0]);
 			printf("  -v, --verbose    : Print exact ratios for all performance measures\n");
 			printf("  -l, --log        : Print only log of normalizing constant as double\n");
 			printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
@@ -132,6 +137,7 @@ static int comom_main(int argc, char**argv)
 			printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
 			printf("  -s seed          : Set perturbation seed (default: 23000)\n");
 			printf("  -X, --no-perturb : Fail on a singular system instead of the exact fallback\n");
+			printf("  -j n             : Threads for the per-prime interpolation tier of the fallback\n");
 			return 0;
 		} else if(argv[i][0] == '-') {
 			// Skip unknown options silently
@@ -141,7 +147,7 @@ static int comom_main(int argc, char**argv)
 	}
 	
 	if(model_file == NULL) {
-		printf("USAGE: %s [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-d|--debug] [-p digit] [-s seed] [-X] model.qn\n", argv[0]);
+		printf("USAGE: %s [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen] [-h|--help] [-d|--debug] [-p digit] [-s seed] [-X] [-j n] model.qn\n", argv[0]);
 		printf("  -l, --log        : Print only log of normalizing constant as double\n");
 		printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
 		printf("  -g, --nc         : Print normalizing constant as double\n");
@@ -152,6 +158,7 @@ static int comom_main(int argc, char**argv)
 		printf("  -p digit         : Apply perturbation at the specified digit (e.g., -p 5)\n");
 		printf("  -s seed          : Set perturbation seed (default: 23000)\n");
 		printf("  -X, --no-perturb : Fail on a singular system instead of the exact fallback\n");
+		printf("  -j n             : Threads for the per-prime interpolation tier of the fallback\n");
 		return -1;
 	}
 	
@@ -1473,7 +1480,12 @@ static int comom_fallback(qnmodel* q, bool log_output, bool normconst_output, bo
 	bool report = !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output;
 	mpq_t* ex = sg_mpq_arr(nres);
 	char tier[256];
-	sg_ops ops = { comom_sg_direct, NULL, NULL, NULL };
+	/* Tier 4 runs on comommod's engine: the Ntot+1 perturbed solves of
+	 * interpolation done over Q would each be a full exact CoMoM solve with
+	 * long rationals, while per prime in Z/p they are word-size
+	 * recursions, combined by CRT into the same exact value. */
+	comommod_config(COMOM_THREADS, 61, 0, 0, 0);
+	sg_ops ops = { comom_sg_direct, comommod_interp, NULL, " per prime" };
 	sg_qn_fix_nt(q);
 	int rc = sg_solve_tiered(q, ex, tier, sizeof tier, &ops, 1);
 	if (rc != 0) {

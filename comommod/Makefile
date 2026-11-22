@@ -3,7 +3,7 @@ LD = gcc
 CFLAGS = -g -O4 -fopenmp -I../deps/local/include -I. -I../include/ -I../zpla/ -I../gmpla/ -I../util/ -Wall
 LDFLAGS = -fopenmp -L../deps/local/lib -lgmp -lm -L. -L../lib/
 
-SRCS = main.c image.c setupls.c combs.c btf_decompose.c btf_solve.c
+SRCS = main.c engine.c globals.c image.c setupls.c combs.c btf_decompose.c btf_solve.c
 OBJS = $(SRCS:.c=.o)
 DEPS = $(SRCS:.c=.d)
 

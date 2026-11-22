@@ -133,10 +133,7 @@ default.
 
 ## Singular models
 
-`comom` auto-perturbs when its coefficient matrix is singular, multiplying
-the demands by `10^20` and adding a permutation, and returns an
-approximation with a warning on stderr; with `-e` it refuses instead.
-`comommod` solves such models exactly with the same tiered fallback as
+`comommod` solves models with a singular coefficient matrix exactly with the same tiered fallback as
 `mommod` (`util/singular.h`, described in `mommod/README.md`): other
 class orders, merged identical stations, merged proportional classes,
 then interpolation of the exact limit of a perturbation, done per prime
@@ -149,6 +146,16 @@ To make this possible the prime loop moved out of `main()` into
 now also gives up after 40 failures; it used to spin forever on a
 singular model. The class bases depend on `M`, so a model with merged
 stations builds its own.
+
+**Engine bundle.** The prime loop, reconstruction and the tiers live in
+`engine.c` (globals in `globals.c`), behind the API of `ccengine.h`
+(`comommod_config`, `comommod_stats`, `comommod_solve_tiered`,
+`comommod_interp`); `main.c` only parses options and prints. `bin/comom`
+links the same objects as one relocatable `ccengine.o` with every other
+symbol made local (as `bin/mom` links mommod's `mmengine.o`) and uses
+`comommod_interp` for tier 4 of its own singular fallback: `comom -q` on
+`12_expanded` (solved by interpolation) now takes 12 s in all, against
+more than 300 s when tier 4's perturbed solves ran over `Q`.
 
 ## Validation
 
