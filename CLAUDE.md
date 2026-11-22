@@ -20,7 +20,7 @@ make
 make clean && make
 ```
 
-Binaries are placed in `bin/`: `mva`, `ca`, `recal`, `mom`, `momf`, `mommod`, `comom`, `comommod`, `procomom`, `rndmodel`, `routing2visits`.
+Binaries are placed in `bin/`: `mva`, `ca`, `recal`, `mom`, `mommod`, `comom`, `comommod`, `procomom`, `rndmodel`, `routing2visits`.
 
 **`bool` in headers**: `util/util.h` includes `<stdbool.h>` unconditionally. It must
 not go back to defining `bool` as `unsigned int`: sources differ in whether they
@@ -62,16 +62,14 @@ The test script runs all 5 solvers (mva, ca, recal, mom, comom) with options `-e
 | `procomom/` | ProCoMoM | Marginal queue-length probabilities |
 | `clw/` | Choudhury-Leung-Whitt (CLW) | Generating-function inversion; single-server + IS. Floating-point (G/logG as doubles, not exact) |
 | `clwld/` | CLW with load-dependent stations | Bertozzi-McKenna per-center transforms; multiserver and load-dependent. Floating-point output |
-| `momf/` | MoM in fixed-precision floating point | MPFR at a settable working precision, optional Wilkinson/Moler iterative refinement. Built to measure whether the exact arithmetic is necessary. Singular models go through the `util/singular.h` tiers; LU pivots below 2^-(P/2) count as singular (`--pivtol`), and tier 4 raises the precision until two rounds agree; see `momf/README.md` |
 | `mommod/` | Multi-modular MoM | Whole recursion replayed in `Z/p` for many word-size primes, CRT plus rational reconstruction at the end, OpenMP over primes (`-j`). `-B` halves the prime count via denominator-bounded reconstruction, verified against witness primes held out of the CRT (`-W`); off by default since it is probabilistic. Singular models are solved exactly by a tiered fallback: other class orders, merging identical stations or proportional classes, then interpolation of the exact limit of a perturbation (tiers 1-3 shared in `util/singular.h`, tier 4 per prime). See `mommod/README.md` |
 | `comommod/` | Multi-modular CoMoM | The `comom` class-oriented recursion replayed in `Z/p` for many word-size primes, CRT plus rational reconstruction at the end, OpenMP over primes (`-j`). Same flags as `mommod`, except that `-B`'s denominator bound defaults to a third of the modulus: CoMoM denominators grow with the population instead of staying a few dozen bits wide. Singular models are solved exactly by the same tiered fallback as `mommod`. See `comommod/README.md` |
 
 ### Shared Libraries
 
 - **`gmpla/`** — GMP linear algebra: dense matrices (`mpq_mat_t`), sparse matrices (`mpq_msp_t`), LU decomposition (`mpq_ludcmp`/`mpq_lubksb`), LinBox interface
-- **`fpla/`** — the same API over MPFR floats at a run-time settable precision (`fp_*`), plus iterative refinement
 - **`zpla/`** — the same API over `Z/p` in machine words (`zp_*`), Montgomery arithmetic, CRT and rational reconstruction
-- **`util/`** — Model I/O (`readmodel`), population enumeration (`nextpop`, `popindex`), combinatorics (`nck`); header-only `lvtab.h` (replica-level tables of the full MoM basis, `mom_mixed_think`) and `singular.h` (tiered exact fallback for singular MoM/CoMoM systems, shared by `mom`, `momf`, `mommod`, `comommod`)
+- **`util/`** — Model I/O (`readmodel`), population enumeration (`nextpop`, `popindex`), combinatorics (`nck`); header-only `lvtab.h` (replica-level tables of the full MoM basis, `mom_mixed_think`) and `singular.h` (tiered exact fallback for singular MoM/CoMoM systems, shared by `mom`, `mommod`, `comommod`)
 
 ### Core Data Structure (`util/util.h`)
 
@@ -119,3 +117,7 @@ MoM/CoMoM additionally support: `-p digit` (perturbation), `-s seed` (perturbati
 ## Commit Convention
 
 Use conventional commits: `feat:`, `fix:`, `chore:`, etc.
+
+## Development-only solvers
+
+`momf` (MoM in MPFR fixed precision, with its `fpla/` library) lives on the `momf-dev` branch only, outside the production releases cut from `main` and `dev`. `momf-dev` follows `dev` by merging `dev` into it; the commit that removed `momf` from `dev` is recorded there as merged (`git merge -s ours`), so those merges keep `momf`.
