@@ -35,6 +35,10 @@
  *
  * The n-1 term is at the same level and the same component as the value
  * being computed, so each level is swept with n ascending.
+ *
+ * The Z_s = 0 identity sums the PC over ALL classes, so it needs every Z to
+ * be zero.  With mixed think times main.c does not call this descent and
+ * carries the lower levels through the sweep instead (lowlv_*).
  */
 int qdecrease(qnmodel* qnm, mpq_vec_t* gk, mpq_vec_t* g, mpq_vec_t* grv,
               int sumN, mpq_t* dist)

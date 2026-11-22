@@ -82,6 +82,24 @@ sum_j m'_j q(m+1_j, Q, n) = (|Q| - n + |m| - 1) q(m, Q, n)
 mom's divisor `|Q| + |m|`, less the `n` jobs pinned at the reference copy and
 less that copy itself.
 
+The identity is the PC summed over every class, so it holds only when every
+`Z` is zero. With mixed think times the sum keeps the terms
+`Z_u q(m, Q-1_u, n)`, two decrements below `N`, which the top two levels do
+not carry; the descent then returned wrong (even negative) probabilities
+without any warning. For mixed think times the sweep therefore carries levels
+`0..r-2` as well, as `mom` does, each advanced along class `r` by the class-`r`
+PC with its `n`-coupled term,
+
+```
+nr q_l(i, P-1_s, n) = Z_r q_l(i, P-1_s-1_r, n)
+                    + sum_j m'_j L_jr q_{l+1}(i+1_j, P-1_s-1_r, n)
+                    + n L_Mr q_l(i, P-1_s-1_r, n-1)
+```
+
+with every right-hand term at the previous point, and `q(N, n)` is read from
+level 0 directly, with no descent. Models whose think times are all zero or
+all positive keep the cheaper descent.
+
 ## Structure
 
 The per-step system therefore has exactly procomom's shape,
@@ -109,7 +127,8 @@ count identity `ce + cardi*(r-1) = cardk*r` is mom's `A12` row count.
   `n = 0..sum(Ncur)` at each step, with the class transition handled as mom
   handles it (the old top level becomes the new level-`(r-1)` block).
 - `qdecrease.c` is `mom/mdecrease.c` carrying the `n` index, descending to
-  level 0 where the base component is `q(N,n)`.
+  level 0 where the base component is `q(N,n)`. It is skipped for mixed think
+  times, where `main.c` carries the lower levels instead (`lowlv_*`).
 
 Dropping every `n`-coupled term recovers mom's own recursion, which is the
 structural check that the port is faithful.
