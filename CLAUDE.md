@@ -45,6 +45,10 @@ a few percent of runs. See `mommod/README.md`.
 ```
 
 The test script runs all 5 solvers (mva, ca, recal, mom, comom) with options `-e`, `-l`, `-t`, `-q` on each `.qn` model file, then diffs outputs for parity. Timeout is 120s per test. Errors are logged to `test_errors_*.log`.
+Models with a fractional multiplicity on a station line (`models/2[5-9]_frac_*.qn`) run on `mom`, `comom`,
+`gcomom` and `gmom` (gmom only when R >= 2) and are diffed against `gld` (`-e`, `-l`) and `mvaldmx` (`-t`, `-q`) on
+the equivalent load-dependent model, MU rates `t/(t+e-1)`, which the script writes on the fly. `gmom -e`
+refusing `28_frac_singular` is expected: its unflagged run refuses an exact G on a singular model.
 
 ## Architecture
 

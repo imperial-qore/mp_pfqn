@@ -8,6 +8,9 @@
 #   Closed + MU         -> gld, comomld
 #   Mixed (LAMBDA)      -> mvamx
 #   Mixed + MU          -> mvaldmx
+#   Fractional mi       -> mom, comom, gcomom, gmom, checked against gld (-e,-l)
+#                          and mvaldmx (-t,-q) on the load-dependent companion
+#                          model, rates t/(t+e-1) (see CLAUDE.md)
 #
 # Usage:
 #   ./run_unit_tests.sh                          # Run all models with all options
@@ -41,8 +44,43 @@ MVAMX_SOLVER="./bin/mvamx"
 MVALDMX_SOLVER="./bin/mvaldmx"
 COMOMLD_SOLVER="./bin/comomld"
 
+# Solvers that accept fractional multiplicities (qn_allow_rational_mi)
+FRAC_SOLVERS=("./bin/mom" "./bin/comom" "./bin/gcomom" "./bin/gmom")
+
 # Log file
 ERROR_LOG="test_errors_$(date +%Y%m%d_%H%M%S).log"
+
+# True if some station line (5 .. 4+M) has a fractional multiplicity p/q
+has_fractional_mi() {
+    local M=$(sed -n '4p' "$1")
+    sed -n "5,$((4 + M))p" "$1" | awk '$1 ~ /\// {f=1} END {exit !f}'
+}
+
+# The load-dependent model equivalent to a fractional one: each station
+# with multiplicity e = p/q becomes one station with MU rates
+# t/(t+e-1) = tq/(tq+p-q), t = 1..Nt; the generating function
+# (1 - sum_r L_r x_r)^(-e) is the same, so G, X and Q are identical.
+write_ld_companion() {
+    awk 'function gcd(a,b,  c){while(b){c=b;b=a%b;a=c}return a}
+         NR==2 {Nt=0; for(i=1;i<=NF;i++) Nt+=$i}
+         NR==4 {M=$1}
+         NR>=5 && NR<=4+M {
+             n=split($1,f,"/"); p[NR]=f[1]; q[NR]=(n>1?f[2]:1)
+             $1=1
+         }
+         {print}
+         END {
+             print "MU"
+             for(k=5;k<=4+M;k++){
+                 line=""
+                 for(t=1;t<=Nt;t++){
+                     a=t*q[k]; b=t*q[k]+p[k]-q[k]; g=gcd(a,b); a/=g; b/=g
+                     line=line (t>1?" ":"") (b==1?a:a "/" b)
+                 }
+                 print line
+             }
+         }' "$1" > "$2"
+}
 
 # Function to detect model type by checking for LAMBDA/MU keywords
 detect_model_type() {
@@ -52,7 +90,9 @@ detect_model_type() {
     grep -q "^LAMBDA" "$model" && has_lambda=1
     grep -q "^MU" "$model" && has_mu=1
 
-    if [ $has_lambda -eq 1 ] && [ $has_mu -eq 1 ]; then
+    if has_fractional_mi "$model"; then
+        echo "closed_frac"
+    elif [ $has_lambda -eq 1 ] && [ $has_mu -eq 1 ]; then
         echo "mixed_ld"
     elif [ $has_lambda -eq 1 ]; then
         echo "mixed"
@@ -99,6 +139,10 @@ get_solvers_for_model() {
         mixed_ld)
             # Mixed + load-dependent: mvaldmx only
             echo "$MVALDMX_SOLVER"
+            ;;
+        closed_frac)
+            # Fractional multiplicities: the solvers that accept them
+            echo "${FRAC_SOLVERS[*]}"
             ;;
     esac
 }
@@ -174,6 +218,11 @@ run_regression_test() {
             continue
         fi
 
+        # gmom needs at least two classes
+        if [ "$solver_name" == "gmom" ] && [ "$(sed -n '1p' "$model")" -lt 2 ]; then
+            continue
+        fi
+
         timeout $TIMEOUT $solver $option $model > /tmp/regression_${solver_name}_$$.txt 2>/dev/null
         local exit_code=$?
         if [ $exit_code -eq 0 ]; then
@@ -222,6 +271,27 @@ run_regression_test() {
         fi
     fi
 
+    # Fractional multiplicities: the exact oracle is gld (-e, -l) or mvaldmx
+    # (-t, -q) on the equivalent load-dependent model.
+    if [ "$model_type" == "closed_frac" ]; then
+        local ld_model=/tmp/regression_ldcomp_$$.qn
+        write_ld_companion "$model" "$ld_model"
+        for oracle in "$GLD_SOLVER" "$MVALDMX_SOLVER"; do
+            local oname=$(basename $oracle)
+            if [ -f "$oracle" ] && solver_supports_option "$oracle" "$option"; then
+                timeout $TIMEOUT $oracle $option $ld_model > /tmp/regression_${oname}_$$.txt 2>/dev/null
+                local oexit=$?
+                if [ $oexit -eq 0 ]; then
+                    outputs+=("/tmp/regression_${oname}_$$.txt")
+                    solver_names+=("${oname}(ld)")
+                else
+                    echo -e "${RED}ERROR (exit $oexit): ${oname} on the load-dependent companion${NC}"
+                    echo "[ERROR] ${oname} on load-dependent companion of $model with $option (exit $oexit)" >> "$ERROR_LOG"
+                fi
+            fi
+        done
+    fi
+
     # Compare outputs if we have at least 2
     if [ ${#outputs[@]} -ge 2 ]; then
         local all_match=true
@@ -245,7 +315,7 @@ run_regression_test() {
     fi
 
     # Clean up
-    rm -f /tmp/regression_*_$$.txt
+    rm -f /tmp/regression_*_$$.txt /tmp/regression_ldcomp_$$.qn
 }
 
 # Parse command-line arguments: [model.qn ...] [-- -opt1 -opt2 ...]
