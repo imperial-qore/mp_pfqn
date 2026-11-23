@@ -10,6 +10,8 @@
 /* Prime count per batch (OpenMP threads), prime size in bits, witness
  * primes and denominator bound for bounded reconstruction (-B). */
 void mommod_config(int nthreads, int primebits, int nwitness, int use_bounded, int denbits);
+/* 1 (default): size the modulus from util/gbound.h; 0: adaptive schedule only */
+void mommod_apriori(int on);
 /* Primes used, unlucky primes discarded, and modulus bits of the last run. */
 void mommod_stats(long* primes, long* unlucky, unsigned long* modbits);
 /* Exact exported constants of q (layout of util/singular.h) through every

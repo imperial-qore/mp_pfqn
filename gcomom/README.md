@@ -25,6 +25,7 @@ make -C gcomom            # produces bin/gcomom (plain C, no C++)
 | `-q` | mean queue lengths Q_kr, one row per station (total over its `mi` copies) |
 | `-d` | metrics as exact rationals |
 | `-X`, `--no-perturb` | fail on a singular system instead of running the exact fallback |
+| `-j n` | threads (OpenMP): sub-models of one level in parallel (default 1) |
 | `--stats` | sub-model count, depth, unknowns and timing on stderr |
 
 ## Algorithm
@@ -117,6 +118,15 @@ picard09 (shared, load ~13 of 20 cores):
 | 16 | 20 | 421 | 0.28 | class order (tier 1) |
 | 16 | 40 | 509 | 0.60 | class order (tier 1) |
 | 24 | 20 | not run | 2.1 | direct |
+
+**Threads.** Setting up a class (row selection, block LU) reads no other
+sub-model, so `-j n` does it for all of them at once; a step reads the
+children's new tables, which have one copy fewer, so it runs the
+sub-models of equal total copies in parallel, one level after the other.
+Convolution sub-models are built in parallel too. Output is byte-identical
+for every `n`. Wall clock with `-j 8`, same host under load: M=24 N_R=40
+1.24 s -> 0.33 s, `10_diverse` 5.6 s -> 1.7 s; `06_large` (15 sub-models,
+its time in one convolution) does not gain.
 
 At M=16 two stations share a class-2 demand (387); the sub-model that removes
 both has the single form `(L_3 - L_15)` with a zero class-2 component, so it

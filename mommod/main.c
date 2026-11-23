@@ -125,7 +125,7 @@ static double ratio_double(int idx, int station, mpz_t* num, mpz_t* den)
 static void usage(const char* prog)
 {
 	printf("USAGE: %s [-l|--log] [-e|--ex] [-g|--nc] [-t|--tput] [-q|--qlen]\n", prog);
-	printf("       %*s [-v] [-j nthreads] [--primebits bits] [-B] [-W n] [--denbits n] model.qn\n",
+	printf("       %*s [-v] [-j nthreads] [--primebits bits] [-B] [-W n] [--denbits n] [--adaptive] model.qn\n",
 	       (int)strlen(prog), "");
 	printf("  -l, --log        : Print only log of normalizing constant as double\n");
 	printf("  -e, --ex         : Print exact normalizing constant numerator and denominator\n");
@@ -135,6 +135,11 @@ static void usage(const char* prog)
 	printf("  -v               : Report prime count and timing on stderr\n");
 	printf("  -j n             : Number of primes solved concurrently (OpenMP)\n");
 	printf("  --primebits bits : Bit size of the primes drawn (default 61)\n");
+	printf("  --adaptive       : Do not size the modulus in advance.  By default it is\n");
+	printf("                     sized from proven bounds on every constant (G <= F(x)/x^N,\n");
+	printf("                     denominator | prod of N_r! over classes with think time,\n");
+	printf("                     util/gbound.h), which makes one bounded reconstruction\n");
+	printf("                     exact; --adaptive adds primes until the result is stable.\n");
 	printf("  -B, --bounded    : Bound the denominator during rational reconstruction.\n");
 	printf("                     Recovers a B-bit constant from about B bits of modulus\n");
 	printf("                     instead of 2B, roughly halving the number of primes.\n");
@@ -174,6 +179,7 @@ int main(int argc, char**argv)
 			fprintf(stderr, "mommod: -b is now --primebits (-b means bounds in mom, momf and gmom)\n");
 			return 1;
 		}
+		else if (!strcmp(argv[i],"--adaptive")) mommod_apriori(0);
 		else if (!strcmp(argv[i],"-B")||!strcmp(argv[i],"--bounded")) { use_bounded=1; if(nwitness==0) nwitness=1; }
 		else if (!strcmp(argv[i],"-W")||!strcmp(argv[i],"--witness")) { if(i+1<argc) nwitness=atoi(argv[++i]); }
 		else if (!strcmp(argv[i],"--denbits")) { if(i+1<argc) denbits=atoi(argv[++i]); }

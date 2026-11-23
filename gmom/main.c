@@ -7,6 +7,11 @@
 #include <gmpla.h>
 #include "gmom.h"
 #include "lvtab.h"
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
+static int NTHREADS = 1;   /* -j: sub-models with the same queue count in parallel */
 
 struct rusage ruse;
 double t0, t1;
@@ -439,6 +444,9 @@ static int gmom_compute(char* model_file, int pdigit, int pseed, int psign,
 		fprintf(stderr, "gmom: multiserver/replicated stations (mi>1 at queue %d) are not supported; the b=1 basis assumes distinct single-server queues\n", q+1); return 1; } }
 	mpz_t** L = qn->L; mpz_t* Z = qn->Z; int* N = qn->N;
 	nckinit(M + R - 1, R);
+	/* nck() caches into a global table on first use, which is not thread
+	 * safe: fill every entry the recursion reads before going parallel */
+	{ int a, b; for (a = 0; a <= M + R + 1 && a < MAXNCKTABLE; a++) for (b = 0; b <= a; b++) (void)nck(a, b); }
 
 	/* keep the unperturbed demands so the header can report the model as
 	 * read plus the per-class epsilon actually applied (as mom does) */
@@ -561,9 +569,13 @@ static int gmom_compute(char* model_file, int pdigit, int pseed, int psign,
 			low = nlow; lowlen = nlen;
 			for (ll = 0; ll <= ln-2; ll++) lowr[ll] = vnew(lowlen[ll]);
 		}
-		for (i = GT->n - 1; i >= 0; i--) {   /* bottom-up: children first */
+		/* setup and factorization read no other model: all in parallel */
+		int* lold = (int*) calloc(GT->n, sizeof(int));
+		#pragma omp parallel for schedule(dynamic,1) num_threads(NTHREADS)
+		for (i = GT->n - 1; i >= 0; i--) {
 			gmodel* g = &GT->m[i];
-			int c, lo = g->l;
+			int c;
+			lold[i] = g->l;
 			g->l = gm_level(g->d, r, bmax);
 			for (c = 0; c < g->ntag; c++) g->clevel[c] = gm_level(g->d - 1, r, bmax);
 			lsb_free(g->ls); g->ls = NULL;
@@ -576,6 +588,16 @@ static int gmom_compute(char* model_file, int pdigit, int pseed, int psign,
 			g->ls = setupb(L, g->q, g->d, g->ntag, g->clevel, r, g->l, nvec, Z, 0);
 			g->fa = nfact_new(g->ls->A, g->ls->nrows, g->ls->colA, g->d == 1);
 			if (!g->fa) { lsb_free(g->ls); g->ls = NULL; }
+		}
+		/* class start: a level solve reads the children (d-1 queues), so
+		 * one group of equal d at a time, bottom-up, each group in parallel */
+		for (int gb = GT->n; gb > 0; ) {
+		int ga = gb - 1;
+		while (ga > 0 && GT->m[ga-1].d == GT->m[gb-1].d) ga--;
+		#pragma omp parallel for schedule(dynamic,1) num_threads(NTHREADS)
+		for (i = gb - 1; i >= ga; i--) {
+			gmodel* g = &GT->m[i];
+			int lo = lold[i];
 			if (r == 2 || !g->ls) {
 				fill_model(g, L, r, nvec, Z);
 			} else if (g->l == lo) {
@@ -592,6 +614,9 @@ static int gmom_compute(char* model_file, int pdigit, int pseed, int psign,
 				g->vl = level_solve(g, GT, NULL); g->lenl = g->ls->colA;
 			}
 		}
+		gb = ga;
+		}
+		free(lold);
 		ltop = top->l;
 		/* G(n-1_r) snapshots: zero until the last step of the sweep sets
 		 * them (they stay zero when N_r = 0) */
@@ -614,7 +639,11 @@ static int gmom_compute(char* model_file, int pdigit, int pseed, int psign,
 				for (ll = 0; full && ll <= ltop-2; ll++) fp_copy_vec(lowr[ll], low[ll], lowlen[ll]);
 			}
 			if (full) lower_step(T, qn->mi, L, Z, r, low, top->vl1, nr, ltop-1);
-			for (i = GT->n - 1; i >= 0; i--) {   /* bottom-up: children first */
+			for (int gb = GT->n; gb > 0; ) {   /* bottom-up by queue count, each group in parallel */
+			int ga = gb - 1;
+			while (ga > 0 && GT->m[ga-1].d == GT->m[gb-1].d) ga--;
+			#pragma omp parallel for schedule(dynamic,1) num_threads(NTHREADS)
+			for (i = gb - 1; i >= ga; i--) {
 				gmodel* g = &GT->m[i];
 				if (!g->ls) { fill_model(g, L, r, nvec, Z); continue; }
 				LSB* ls = g->ls;
@@ -624,12 +653,14 @@ static int gmom_compute(char* model_file, int pdigit, int pseed, int psign,
 				matvec_rect(ue, ls->E, colD, colA, g->vl);
 				matvec_rect(uf, ls->F, colD, colD, g->vl1);
 				mpq_t inv; mpq_init(inv); mpq_set_si(inv, 1, nr);
-				for (s = 0; s < colD; s++) { mpq_add(u[s], ue[s], uf[s]); mpq_mul(u[s], u[s], inv); }
+				for (int s = 0; s < colD; s++) { mpq_add(u[s], ue[s], uf[s]); mpq_mul(u[s], u[s], inv); }
 				mpq_clear(inv);
 				vfree(g->vl1, g->lenl1); g->vl1 = u; g->lenl1 = colD;
 				vfree(ue, colD); vfree(uf, colD);
 				mpq_vec_t x = level_solve(g, GT, g->vl);
 				vfree(g->vl, g->lenl); g->vl = x; g->lenl = colA;
+			}
+			gb = ga;
 			}
 		}
 	}
@@ -740,12 +771,13 @@ int main(int argc, char** argv)
 		else if (!strcmp(argv[i], "-X") || !strcmp(argv[i], "--no-perturb")) no_perturb = true;
 		else if (!strcmp(argv[i], "--validate")) validate = true;
 		else if (!strcmp(argv[i], "--bmax")) { if (i+1 < argc) bmax = atoi(argv[++i]); }
+		else if (!strcmp(argv[i], "-j")) { if (i+1 < argc) NTHREADS = atoi(argv[++i]); if (NTHREADS < 1) NTHREADS = 1; }
 		else if (!strcmp(argv[i], "-p")) { if (i+1 < argc) pdigit = atoi(argv[++i]); }
 		else if (!strcmp(argv[i], "-s") || !strcmp(argv[i], "--seed")) { if (i+1 < argc) pseed = atoi(argv[++i]); }
 		else if (argv[i][0] != '-') model_file = argv[i];
 	}
 	if (!model_file) {
-		printf("USAGE: %s [-e|-g|-l|-t|-q] [-b] [--bmax B] [--validate] [--force-perturb] [-p digit] [-s seed] model.qn\n", argv[0]);
+		printf("USAGE: %s [-e|-g|-l|-t|-q] [-b] [--bmax B] [-j n] [--validate] [--force-perturb] [-p digit] [-s seed] model.qn\n", argv[0]);
 		printf("  gmom: generalized (divide-and-conquer) Method of Moments, MoM(Bmax).\n");
 		printf("  Outputs the top normalizing-constant basis entry V{M,l}(1),\n");
 		printf("  matching the reference mbmom1.  --validate checks the whole\n");
@@ -753,6 +785,7 @@ int main(int argc, char** argv)
 		printf("  --bmax B          : maximum branching factor (default 1): a model with d\n");
 		printf("                      queues adds min(d,B) convolution equations and carries\n");
 		printf("                      basis level max(1,R-min(d,B)); B >= R-1 gives level 1\n");
+		printf("  -j n              : threads, models with the same queue count in parallel\n");
 		printf("  -b, --bounds      : bracket a perturbed run by re-solving with a\n");
 		printf("                      second seed; requires -p (see gmom/README.md)\n");
 		printf("  --force-perturb   : allow the perturbed solve under -e (the printed\n");

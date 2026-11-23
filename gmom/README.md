@@ -44,6 +44,7 @@ through the recursion (see "Performance measures" below).
 | `-t` | throughputs `X_r`, one per line |
 | `-q` | mean queue lengths `Q_kr`, one row per station |
 | `--bmax B` | maximum branching factor (default 1, the original gmom); see "Branching factor" below |
+| `-j n` | threads (OpenMP): sub-models with the same queue count in parallel (default 1) |
 | `--validate` | check both basis slots of every sub-model against exact convolution |
 | `-p digit` | perturb demands/think-times at that decimal digit (approximate solution for degenerate models) |
 | `-s seed` | RNG seed for the perturbation (default 23000) |
@@ -57,7 +58,8 @@ auto-perturbing models differ in the last printed digit only
 (`test_singular4` -t/-q, `test_singular6` -q): the digit-20 perturbation is
 below double precision, so the difference is one ulp. `06_large` (auto-perturbed)
 now finishes in 76 s at B = 1 and 1.8 s at B = M (was over 300 s), matching
-`bin/ca` to the printed digit; `12_expanded` (R = 10) still exceeds 300 s.
+`bin/ca` to the printed digit; `12_expanded` (M = 3, R = 10) is singular under every class order at every
+Bmax (`-e` refuses), and its perturbed `-t` still exceeds 300 s at B = 1, 2, 3 = M.
 
 Extra GCEs can also restore rank: `07_mixed` (zero demands) is singular at
 B = 1 under every class order, but at B >= 2 it is solved exactly, `-e`, `-t`
@@ -83,7 +85,10 @@ The price is the number of sub-models: those with `d` queues number
 is solved at every population step, children before parents.
 
 Measured (exact `G`, identical to `bin/ca` bit for bit; `Z = 0`, distinct
-random demands, one core; `orig` is gmom before this change):
+random demands, one core; `orig` is gmom before this change; the models are
+`bench/m4r4.qn`, `m5r5.qn`, `m6r3.qn`, `m8r3.qn`, next to `bench/mixed_r4*.qn`
+and `bench/nr0_last.qn`, which cover mixed think times at R=4 and empty
+classes):
 
 | model | orig | B=1 | B=2 | B=3 | B=M |
 |---|---|---|---|---|---|
@@ -129,6 +134,15 @@ Implementation (`setupb.c`, the model tree in `main.c`):
 Every level matrix depends on the demands only, so its `A^T A` is formed
 and LU-factored once per (sub-model, class) and reused along the class
 sweep, instead of at every population step as before.
+
+**Threads** (`-j n`). Setup and factorization of a class read no other
+sub-model and run for all of them at once; a level solve reads the
+children (one queue fewer), so the class start and each population step
+run the sub-models of equal queue count in parallel, bottom-up. `nck()`'s
+lazily filled table is warmed first, since it is not thread safe. Output is
+byte-identical for every `n`. With `-j 8` (shared host): M=12 R=3 B=M
+38.9 s -> 10.3 s, M=10 R=4 B=M 10.7 s -> 5.1 s, M=8 R=5 B=M 4.2 s -> 1.7 s.
+`B = 1` is a chain, one sub-model per queue count, and does not gain.
 
 ## Perturbation
 

@@ -13,14 +13,15 @@ often the predicted-fastest solver is the measured-fastest one.
 Each run is single-threaded; a chain (solver, R, population profile) stops
 growing M at the first run that exceeds --tmax seconds.
 """
-import argparse, json, math, os, random, subprocess, sys, time
+import argparse, json, math, os, random, subprocess, sys, time, zlib
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BIN = os.path.join(ROOT, "bin")
-SOLVERS = ["ca", "mom", "comom", "gcomom", "gmom", "binmom", "bincomom", "mommod", "comommod"]
+# order = automom/main.c enum (calib.h is indexed by it); gmomb = gmom --bmax R-1
+SOLVERS = ["ca", "mom", "comom", "gcomom", "gmom", "binmom", "bincomom", "mommod", "comommod", "gmomb"]
 MS = [1, 2, 3, 4, 6, 8, 12, 16, 24]
 PROFILES = {"u2": lambda R: [2] * R, "u8": lambda R: [8] * R,
             "u25": lambda R: [25] * R, "tail200": lambda R: [2] * (R - 1) + [200]}
@@ -49,7 +50,8 @@ def features(path):
 def timed(solver, path, tmax):
     t = time.time()
     try:
-        p = subprocess.run([os.path.join(BIN, solver), "-t", path] + (["-X"] if solver == "gmom" else []),
+        # through automom --solver, which adds gmom's -X and gmomb's --bmax
+        p = subprocess.run([os.path.join(BIN, "automom"), "--solver", solver, "-t", path],
                            capture_output=True, text=True, timeout=tmax)
         return (time.time() - t, p.returncode)
     except subprocess.TimeoutExpired:
@@ -72,7 +74,7 @@ def main():
             for pn, pf in PROFILES.items():
                 for M in MS:
                     path = os.path.join(a.workdir, f"R{R}_{pn}_M{M}.qn")
-                    write_model(path, R, M, pf(R), hash((R, pn, M)) & 0xffffffff)
+                    write_model(path, R, M, pf(R), zlib.crc32(f"{R}/{pn}/{M}".encode()))   # hash() is salted per process
                     models[(R, pn, M)] = (path,) + features(path)
         runs = []
         def chain(solver, R, pn):

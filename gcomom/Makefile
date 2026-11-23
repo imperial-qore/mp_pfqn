@@ -1,7 +1,7 @@
 CC = gcc
 LD = gcc
-CFLAGS = -g -O2 -I../deps/local/include -I. -I../gmpla/ -I../util/ -Wall
-LDFLAGS = -L../deps/local/lib -lgmp -lm -L. -L../lib/
+CFLAGS = -g -O2 -fopenmp -I../deps/local/include -I. -I../gmpla/ -I../util/ -Wall
+LDFLAGS = -fopenmp -L../deps/local/lib -lgmp -lm -L. -L../lib/
 
 SRCS = main.c
 OBJS = $(SRCS:.c=.o)

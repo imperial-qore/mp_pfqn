@@ -23,7 +23,43 @@ Those of `mom` (`-l -e -g -t -q`), plus:
 | `-B`, `--bounded` | bound the denominator during rational reconstruction | **off** |
 | `-W n`, `--witness n` | primes solved but held out of the CRT, used only to verify bounded reconstructions | 1 when `-B`, else 0 |
 | `--denbits n` | denominator bound for `-B`, as a power of two | 64 |
+| `--adaptive` | do not size the modulus in advance: add primes until the result is stable (the previous default) | off |
 | `-v` | prime count, modulus size and timing on stderr | off |
+
+### Modulus sized in advance (default)
+
+Before the first prime, `util/gbound.h` bounds every exported constant
+(G, G(N-1_r), G^{+k}(N-1_r)):
+
+- **denominator**: it divides `D = prod N_r!` over the classes with a
+  think time. In the sum over states each station factor is an integer
+  multinomial `|n_k|!/prod_r n_kr!`, and only the delay contributes
+  `1/n0r!` (so `D = 1` without think times);
+- **value**: G(N) is the coefficient of `x^N` in
+  `F(x) = prod_r exp(Z_r x_r) prod_k (1 - sum_r L_kr x_r)^(-m_k)`, which
+  has nonnegative coefficients, so `G <= F(x)/x^N` for **every** admissible
+  `x > 0`. Minimizing over `x` (convex in `log x`, a few Newton sweeps)
+  gives the saddle-point estimate of log G (SIGMETRICS'17) as a bound; on
+  183 models it was 0-29 bits above the true value, 13 at the median.
+
+With `num <= G_up D` and `den <= D`, `zp_ratrecon_bounded(.., D)`
+returns the exact value once the modulus exceeds `2 G_up D^2`. The solver
+draws primes until it does and reconstructs once. That removes the probe
+schedule, the stability rounds and the confirmation at a later prime
+count, and the result is **proven** rather than accepted on stability.
+Primes and time against `--adaptive`, the previous schedule (picard09):
+
+| model | primes adaptive | primes a-priori | time adaptive | time a-priori |
+|---|---|---|---|---|
+| R=2, N=(300,300), Z=(50,0) | 324 | 164 | 0.36 s | 0.17 s |
+| R=3, N=(6,6,400), Z=0 | 183 | 80 | 3.07 s | 1.41 s |
+| `09_asymmetric` | 39 | 20 | 0.067 s | 0.032 s |
+| R=3, M=8, N=(2,2,20) | 13 | 5 | 0.053 s | 0.024 s |
+
+`-W` witnesses, if given, are checked on that reconstruction too. If it
+ever failed (it cannot for a valid bound), the solver says so and
+continues with the adaptive schedule. `-B` and `--denbits` act only on
+the adaptive schedule.
 
 ### `-B`: bounded reconstruction, and why it is off by default
 

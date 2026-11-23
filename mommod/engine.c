@@ -18,6 +18,7 @@
 #include "mommod.h"
 #include "lvtab.h"
 #include "singular.h"
+#include "gbound.h"
 #include "mmengine.h"
 
 /* Number of consecutive primes that must reproduce the same reconstructed
@@ -329,6 +330,11 @@ static int img_direct(qnmodel* q, zp_t p, zp_t* res, void* ctx)
  * Returns 0 on success, 1 if the image failed modulo more than 40
  * consecutive primes (the system is singular over Q), 2 if the primes of
  * the requested size ran out (reported here). */
+/* A-priori modulus (util/gbound.h): on by default; --adaptive turns it off
+ * and keeps only the adaptive schedule below. */
+static int S_APRIORI = 1;
+void mommod_apriori(int on) { S_APRIORI = on; }
+
 static int crt_solve(qnmodel* q, image_fn image, void* ctx, unsigned long minprime, mpq_t* out)
 {
 	int i, w, rc = 0, nres = NRES(q), nthreads = S_NTHREADS;
@@ -387,6 +393,12 @@ static int crt_solve(qnmodel* q, image_fn image, void* ctx, unsigned long minpri
 	{
 	int nprimes=0, unlucky=0, consec_fail=0, done=0;
 	int next_try=4, gstable=0, confirmed=0;
+	/* With bounds G <= G_up and den | D known before the first prime, a
+	 * modulus M > 2 G_up D^2 makes the bounded reconstruction of every
+	 * quantity exact (util/gbound.h): no probing, no stability rounds, no
+	 * confirmation at a later prime count, and about half the primes. */
+	mpz_t* DB = (mpz_t*) malloc(nres*sizeof(mpz_t));
+	long tbits = S_APRIORI ? gb_modbits(q, DB) : -1;
 	int batch = nthreads>1 ? nthreads : 1;
 	zp_t* plist = (zp_t*) malloc(batch*sizeof(zp_t));
 	zp_t* rbuf  = (zp_t*) malloc((size_t)batch*nres*sizeof(zp_t));
@@ -431,6 +443,18 @@ static int crt_solve(qnmodel* q, image_fn image, void* ctx, unsigned long minpri
 			mpz_set_ui(pz, (unsigned long) plist[bi]);
 			if (mpz_sgn(M)==0) mpz_set(M, pz); else mpz_mul(M, M, pz);
 
+			if (tbits >= 0) {
+				int allok = 1;
+				if ((long)mpz_sizeinbase(M,2) <= tbits) continue;
+				for (i=0;i<nres && allok;i++)
+					if (!zp_ratrecon_bounded(num[i], den[i], acc[i], M, DB[i]) || !witness_ok(num[i], den[i], i)) allok = 0;
+				if (allok) { done = 1; break; }
+				/* cannot happen for a valid bound; the adaptive loop takes over */
+				fprintf(stderr, "mommod: a-priori bound of %ld bits did not reconstruct; continuing adaptively\n", tbits);
+				tbits = -1;
+				continue;
+			}
+
 			/* Reconstruction is O(d^2) in the size of the modulus, so
 			 * attempting it after every prime would dominate the run.  Use
 			 * a geometric schedule and probe G alone; only once G has
@@ -458,6 +482,8 @@ static int crt_solve(qnmodel* q, image_fn image, void* ctx, unsigned long minpri
 			}
 		}
 	}
+	if (S_APRIORI) { for (i=0;i<nres;i++) mpz_clear(DB[i]); }
+	free(DB);
 	S_TOTPRIMES += nprimes; S_TOTUNLUCKY += unlucky;
 	if (done)
 	{

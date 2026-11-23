@@ -45,14 +45,20 @@
 #include "gmpla.h"
 #include "util.h"
 #include "singular.h"
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 static bool STATS = false;
 static bool NO_FALLBACK = false;   /* -X: no convolution sub-models, no singular.h tiers */
 
+static int NTHREADS = 1;            /* -j: sub-models of one level in parallel */
+
+/* wall clock: with -j the CPU time of the process sums the threads */
 static double cputime(void)
 {
-	struct rusage ru; getrusage(RUSAGE_SELF, &ru);
-	return ru.ru_utime.tv_sec + ru.ru_stime.tv_sec + 1e-6*(ru.ru_utime.tv_usec + ru.ru_stime.tv_usec);
+	struct timeval tv; gettimeofday(&tv, NULL);
+	return tv.tv_sec + 1e-6*tv.tv_usec;
 }
 
 static void* xcalloc(size_t n, size_t s) { void* p = calloc(n ? n : 1, s); if (!p) { fprintf(stderr, "gcomom: out of memory\n"); exit(2); } return p; }
@@ -333,11 +339,13 @@ static bool valid_d(gctx* g, int c, int i)
 static int setup_class(gctx* g, gmodel* x, int c)
 {
 	declist* dl = g->dl[c];
-	int nd = x->nd = (int)ndc(c, x->D), nt = x->nt;
+	int nd = x->nd, nt = x->nt;   /* set by the caller: nck() caches into a global table, not thread safe */
 	free(x->uid); x->uid = xcalloc((size_t)nt*nd, sizeof(int));
 	int nunk = 0;
 	for (int ti = 0; ti < nt; ti++) for (int i = 0; i < nd; i++) x->uid[ti*nd+i] = valid_d(g, c, i) ? nunk++ : -1;
-	x->nunk = nunk; g->unk_total += nunk;
+	x->nunk = nunk;
+	#pragma omp atomic
+	g->unk_total += nunk;
 	/* rows */
 	int maxrows = 0, nr = 0;
 	for (int i = 0; i < nd; i++) if (dl->tot[i] <= x->D-1) maxrows += nt + c + 2*c*nt + x->nB*nt;
@@ -492,7 +500,7 @@ static void conv_build(gctx* g, gmodel* x)
 		conv_one(g, hk, x->T[ti]);
 	}
 	free(p); mpz_clear(t);
-	x->conv = 1; g->nconv++;
+	x->conv = 1;   /* the caller counts g->nconv */
 }
 
 static void conv_free(gctx* g, gmodel* x)
@@ -633,6 +641,11 @@ static int gcomom_solve(qnmodel* q, mpq_t* out, void* ctx)
 		if (g->latn > CONV_MAX / (g->N[r] + 1)) { g->latn = 0; break; }
 		g->latn *= g->N[r] + 1;
 	}
+	/* level boundaries in ord (fam_order sorts by total copies) */
+	int* lev = xcalloc(g->nm + 1, sizeof(int)), nlev = 0;
+	for (int oi = 0; oi < g->nm; oi++) if (oi == 0 || g->m[ord[oi]].tot != g->m[ord[oi-1]].tot) lev[nlev++] = oi;
+	lev[nlev] = g->nm;
+	int* sing = xcalloc(g->nm, sizeof(int)), nsing = 0;
 	/* class 0, n = 0: zero population */
 	for (int i = 0; i < g->nm; i++) {
 		gmodel* x = &g->m[i];
@@ -667,23 +680,35 @@ static int gcomom_solve(qnmodel* q, mpq_t* out, void* ctx)
 			}
 		}
 		if (g->N[c] == 0) continue;
+		/* setup reads no other sub-model: all of them in parallel */
+		#pragma omp parallel for schedule(dynamic,1) num_threads(NTHREADS)
 		for (int oi = 0; oi < g->nm; oi++) {
 			gmodel* x = &g->m[ord[oi]];
-			if (x->conv) continue;
-			if (setup_class(g, x, c)) {
-				bool fits = !NO_FALLBACK && g->latn > 0 && g->latn <= CONV_MAX / (x->nt + 1);
-				if (STATS) {
-					fprintf(stderr, "gcomom: singular sub-model v=(");
-					for (int k = 0; k < M; k++) fprintf(stderr, "%d%s", x->v[k], k < M-1 ? "," : "");
-					fprintf(stderr, ") at class %d%s\n", c+1, fits ? ", solved by convolution from here on" : "");
-				}
-				if (fits) { blocks_free(x); conv_build(g, x); continue; }
-				rc = 1;
-				break;
-			}
+			sing[oi] = x->conv ? 0 : setup_class(g, x, c);
 		}
+		nsing = 0;
+		for (int oi = 0; oi < g->nm && !rc; oi++) {
+			if (!sing[oi]) continue;
+			gmodel* x = &g->m[ord[oi]];
+			bool fits = !NO_FALLBACK && g->latn > 0 && g->latn <= CONV_MAX / (x->nt + 1);
+			if (STATS) {
+				fprintf(stderr, "gcomom: singular sub-model v=(");
+				for (int k = 0; k < M; k++) fprintf(stderr, "%d%s", x->v[k], k < M-1 ? "," : "");
+				fprintf(stderr, ") at class %d%s\n", c+1, fits ? ", solved by convolution from here on" : "");
+			}
+			if (fits) { blocks_free(x); sing[nsing++] = ord[oi]; } else rc = 1;
+		}
+		if (rc) break;
+		#pragma omp parallel for schedule(dynamic,1) num_threads(NTHREADS)
+		for (int z = 0; z < nsing; z++) conv_build(g, &g->m[sing[z]]);
+		g->nconv += nsing;
+		/* a step reads the children's new tables, which have fewer copies:
+		 * the sub-models of one level (equal total copies) in parallel */
 		for (int n = 1; n <= g->N[c] && !rc; n++) {
-			for (int oi = 0; oi < g->nm; oi++) step_model(g, &g->m[ord[oi]], c, n);
+			for (int lv = 0; lv < nlev; lv++) {
+				#pragma omp parallel for schedule(dynamic,1) num_threads(NTHREADS)
+				for (int oi = lev[lv]; oi < lev[lv+1]; oi++) step_model(g, &g->m[ord[oi]], c, n);
+			}
 			for (int oi = 0; oi < g->nm; oi++) { gmodel* x = &g->m[ord[oi]]; push_hist(x, x->cur); x->cur = NULL; }
 		}
 	}
@@ -720,7 +745,7 @@ static int gcomom_solve(qnmodel* q, mpq_t* out, void* ctx)
 		free(x->hist); free(x->v); free(x->T); free(x->pos); free(x->Bj); free(x->child); free(x->uid);
 	}
 	for (int c = 0; c < R; c++) { free(g->dl[c]->d); free(g->dl[c]->up); free(g->dl[c]->tot); free(g->dl[c]); }
-	free(g->dl); free(g->m); free(ord); free(g->rad);
+	free(g->dl); free(g->m); free(ord); free(g->rad); free(lev); free(sing);
 	(void)Ntot;
 	return rc;
 }
@@ -751,6 +776,7 @@ static void usage(const char* p)
 	printf("  -q           mean queue lengths Q_kr, one row per station\n");
 	printf("  -d           all metrics as exact rationals\n");
 	printf("  -X, --no-perturb  fail on a singular system instead of the exact fallback\n");
+	printf("  -j n         threads: sub-models of one level in parallel (default 1)\n");
 	printf("  --stats      sub-model count, depth and timing on stderr\n");
 	printf("  -h           this help\n");
 }
@@ -769,6 +795,7 @@ int main(int argc, char** argv)
 		else if (!strcmp(a, "-d")) dbg = true;
 		else if (!strcmp(a, "-X") || !strcmp(a, "--no-perturb")) { nop = true; NO_FALLBACK = true; }
 		else if (!strcmp(a, "--stats")) STATS = true;
+		else if (!strcmp(a, "-j") && i+1 < argc) { NTHREADS = atoi(argv[++i]); if (NTHREADS < 1) NTHREADS = 1; }
 		else if (!strcmp(a, "-h") || !strcmp(a, "--help")) { usage(argv[0]); return 0; }
 		else if (a[0] == '-') { fprintf(stderr, "gcomom: unknown option %s\n", a); usage(argv[0]); return 1; }
 		else file = argv[i];
