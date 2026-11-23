@@ -1,9 +1,11 @@
-# gmom - Generalized Method of Moments (divide-and-conquer, b=1)
+# gmom - Generalized Method of Moments (divide-and-conquer, MoM(Bmax))
 
-`gmom` implements the b=1 case of the generalized MoM (Casale, "A
-Generalized Method of Moments for Closed Queueing Networks", Perf. Eval.
-2011; the divide-and-conquer / multi-branch MoM). It is a faithful C port
-of the reference MATLAB `mbmom1.m` / `setup1.m`, reusing the `gmpla`
+`gmom` implements the generalized MoM (Casale, "A Generalized Method of
+Moments for Closed Queueing Networks", Perf. Eval. 2011, the
+divide-and-conquer / multi-branch MoM), MoM(Bmax) for any maximum branching
+factor (`--bmax`, default 1). Bmax = 1 began as a C port of the reference
+MATLAB `mbmom1.m` / `setup1.m`; Bmax > 1 follows Sec. 4.1.2-4.2 of the
+paper (no reference code). It reuses the `gmpla`
 exact-rational linear algebra and `util` combinatorics that back `bin/mom`
 and `bin/comom`.
 
@@ -20,8 +22,9 @@ The original MoM (`bin/mom`) recurses on the population alone. The
 generalized MoM adds the **Convolution recursion**, which recurses on the
 number of queues: the model on the prefix `{1..m}` is built from the model
 on `{1..m-1}` plus one queue-removal (subtractive-convolution) branch.
-`gmom` is the b=1 case - one queue removed at a time along the prefix
-chain `1 -> 2 -> ... -> M`.
+With the default `--bmax 1` one queue is removed at a time along the prefix
+chain `1 -> 2 -> ... -> M`; larger Bmax branches into several sub-models
+per step (see "Branching factor" below).
 
 Per level the CE+PC system is overdetermined and is solved in exact
 rational arithmetic by normal equations `(A^T A) x = A^T b` (eq 8 of the
@@ -40,7 +43,8 @@ through the recursion (see "Performance measures" below).
 | `-l` | log `G(N)` |
 | `-t` | throughputs `X_r`, one per line |
 | `-q` | mean queue lengths `Q_kr`, one row per station |
-| `--validate` | check the whole basis, at every level, against exact convolution |
+| `--bmax B` | maximum branching factor (default 1, the original gmom); see "Branching factor" below |
+| `--validate` | check both basis slots of every sub-model against exact convolution |
 | `-p digit` | perturb demands/think-times at that decimal digit (approximate solution for degenerate models) |
 | `-s seed` | RNG seed for the perturbation (default 23000) |
 | `-b` | bracket a perturbed run by re-solving with `-eps` as well as `+eps` (requires `-p`) |
@@ -51,8 +55,80 @@ non-singular model (02, 03, 09, 13, lcfs_2class, lcfs_3class), and on the
 auto-perturbing ones too (05_sparse, 07, 08, test_singular2/3/5/7/8). Two
 auto-perturbing models differ in the last printed digit only
 (`test_singular4` -t/-q, `test_singular6` -q): the digit-20 perturbation is
-below double precision, so the difference is one ulp. `06_large` and
-`12_expanded` are in scope but exceed a 300 s budget.
+below double precision, so the difference is one ulp. `06_large` (auto-perturbed)
+now finishes in 76 s at B = 1 and 1.8 s at B = M (was over 300 s), matching
+`bin/ca` to the printed digit; `12_expanded` (R = 10) still exceeds 300 s.
+
+Extra GCEs can also restore rank: `07_mixed` (zero demands) is singular at
+B = 1 under every class order, but at B >= 2 it is solved exactly, `-e`, `-t`
+and `-q` bit-for-bit equal to `bin/ca`, and validates. `safe_gmom` still
+calls gmom at the default B = 1.
+
+## Branching factor (`--bmax`)
+
+`--bmax B` runs the paper's MoM(Bmax) with variable branching (Sec. 4.1.2
+and 4.2). A sub-model with `d` queues adds `B(d) = min{d, B}` general
+convolution expressions (GCEs, eq. 20), one for each of its last `B(d)`
+queues; each GCE ties the sub-model to the one with that queue removed.
+Every extra GCE lowers the basis level carried as unknowns, which is
+`l(d) = max{1, r - B(d)}` while `r` classes are processed (Theorem 2). The
+default `B = 1` is the fixed-branching prefix chain the original gmom
+implemented (`l = R-1`); `B >= R-1` brings the full model to level 1, i.e.
+`M*R` unknowns. `R = 2` has `l = 1` for every `B`, so `--bmax` only changes
+anything from `R = 3` on.
+
+The price is the number of sub-models: those with `d` queues number
+`C(B(d+1)+M-d-1, M-d)` (the paper's `card(m(d))`), about `M^2/2` in all for
+`B = 2` and every non-empty subset of the queues (`2^M - 1`) for `B = M`. Each
+is solved at every population step, children before parents.
+
+Measured (exact `G`, identical to `bin/ca` bit for bit; `Z = 0`, distinct
+random demands, one core; `orig` is gmom before this change):
+
+| model | orig | B=1 | B=2 | B=3 | B=M |
+|---|---|---|---|---|---|
+| M=4 R=4 N=12 each | 8.5 s | 0.15 s | 0.04 s | 0.03 s | 0.03 s |
+| M=5 R=5 N=8 each | >300 s | 58 s | 10.2 s | 0.61 s | 0.20 s |
+| M=6 R=3 N=(60,30,40) | 15.5 s | 0.34 s | 0.16 s | 0.25 s | 0.94 s |
+| M=8 R=3 N=30 each | 13.1 s | 0.84 s | 0.12 s | 0.42 s | 1.86 s |
+
+As the paper finds, B = M wins at M = R, where the basis shrinks most. With
+M > R, levels stop falling once `B >= R-1` while the sub-model count keeps
+growing, so B = R-1 is about optimal there.
+
+Implementation (`setupb.c`, the model tree in `main.c`):
+
+- `setupb()` builds one sub-model's system: GCE rows (for each tagged
+  queue `j` and replica multiset `delta` with `delta_j = 0`), then CE and PC
+  rows as in `setup1`. A GCE row's convolution term is component 0 of the
+  child's level-`l` basis, which lives in the child's `vl` slot when the
+  child carries level `l` and in its `vl1` slot when it carries `l+1`
+  (Theorem 2 guarantees one of the two). With `B = 1` the rows are exactly
+  `setup1`'s.
+- Single-queue sub-models are advanced by their own level system: with no
+  GCEs it has `r` rows and `r` unknowns at any level, square, as Sec. 4.2
+  suggests. They used to be refilled by a lattice convolution per entry at
+  every population step, which was 88% of the run time at B = 1. A queue
+  with a zero demand in a class `s < r` makes that system singular; such a
+  sub-model falls back to convolution.
+- New classes are carried over exactly instead of by convolution (except
+  class 2, whose lattice is one-dimensional): each basis keeps its `r-1`
+  entries per combination and gains the new decrement `G(n-1_{r-1})` from a
+  snapshot taken one step before the end of the previous sweep. When the
+  level rises, the old level becomes `vl1` and the new `vl` solves the level
+  system with `G(n-1_r) = 0`, the paper's reduced system. The paper's
+  pseudocode has two index errors here (see the review of the paper), and
+  the reference's shift initialisation is Z=0-only.
+- The measures read levels 0 and 1 of the full model: directly from its two
+  slots when `l = 1`, else from the lower-level carry (mixed think times) or
+  the downward pass started at level `l`.
+- The singularity screen tests every sub-model's matrix for every class
+  count (`gb_singular`); `pfqn_sing.c` builds only the `B = 1` matrices, so it
+  is still used for `B = 1`.
+
+Every level matrix depends on the demands only, so its `A^T A` is formed
+and LU-factored once per (sub-model, class) and reused along the class
+sweep, instead of at every population step as before.
 
 ## Perturbation
 
@@ -90,22 +166,22 @@ exact `G = 4.766087716788053e+34`, inside the bracket as expected.
 
 ## Correctness
 
-`--validate` recomputes every basis entry `V{m}` (all levels `m=1..M`, all
-replica combinations, all class decrements) by independent Buzen
-convolution of the corresponding replica-augmented model, and compares
-bit-for-bit. It passes on every closed, non-singular model in `models/`
-with `R>=2`:
+`--validate` recomputes both slots of every sub-model at `N` (all replica
+combinations, all class decrements) by independent Buzen convolution of the
+corresponding replica-augmented model, and compares bit-for-bit. It passes
+on every in-scope non-singular model in `models/`, at B = 1, 2 and 3:
 
 ```
-02_bottleneck R=2   all 20 basis entries match
-03_think      R=2   all 20 basis entries match   (Z != 0)
-04_replicated R=2   all 12 basis entries match
-09_asymmetric R=3   all 168 basis entries match  (M=6, Z != 0)
-13_gld_small  R=2   all  6 basis entries match
-14_ld_multi   R=2   all  6 basis entries match
-15_repairman  R=2   all  6 basis entries match
-lcfs_2class   R=2   all  6 basis entries match
-lcfs_3class   R=3   all 12 basis entries match
+                      entries (sub-models)
+                      B=1        B=2        B=3
+02_bottleneck R=2      28 (4)     60 (10)    86 (14)
+03_think      R=2      28 (4)     60 (10)    86 (14)   (Z != 0)
+09_asymmetric R=3     231 (6)    231 (21)   456 (41)   (M=6, Z != 0)
+18_zero_first R=2      10 (2)     14 (3)     14 (3)
+19_zero_last  R=2      10 (2)     14 (3)     14 (3)
+20_zero_middle R=3     21 (2)     21 (3)     21 (3)
+21_mixed_think R=2     10 (2)     14 (3)     14 (3)    (mixed Z: lower-level carry)
+lcfs_3class   R=3      21 (2)     21 (3)     21 (3)
 ```
 
 ## Scope and two findings from the port
@@ -113,8 +189,8 @@ lcfs_3class   R=3   all 12 basis entries match
 - **Distinct single-server closed queues only.** Open/mixed models (a
   class with `N<0` / `LAMBDA`), load-dependent stations (`MU`), and
   multiserver/replicated stations (`mi>1`) are rejected with a clear
-  message rather than mis-solved. The b=1 basis assumes `m=(1,...,1)`,
-  the reference's stated domain; the base convolution is single-server.
+  message rather than mis-solved. The basis assumes `m=(1,...,1)`, the
+  reference's stated domain.
 - **Init-time singularity check and auto-reorder.** `util/pfqn_sing.c` provides
   a shared oracle `pfqn_recursion_singular` / `pfqn_nonsingular_recclass`:
   the coefficient matrix depends only on the loadings (not the population),
@@ -124,7 +200,8 @@ lcfs_3class   R=3   all 12 basis entries match
   matrix) and solves in that order, un-permuting `X`/`Q` back; if no single
   class reorder removes it, gmom falls back to perturbation (see below).
   This replaces the old mid-recursion abort. NB the
-  oracle is exact for gmom's (b=1) matrix; mom/comom use a different basis
+  oracle is exact for gmom's Bmax = 1 matrix (Bmax > 1 screens its own
+  matrices, `gb_singular`); mom/comom use a different basis
   whose degeneracy is stronger, so they must probe their own matrix.
 - **Singular models.** Models whose MoM coefficient matrix is singular
   (equal-loading / demand relations: `05_sparse`, `06_large`,
@@ -139,22 +216,22 @@ lcfs_3class   R=3   all 12 basis entries match
   reference initialises the new class by a cheap component shift, and the
   MATLAB explicitly `error('Z<>0')` on that path. That shift zeroes the
   decrement component of the class just completed, which is wrong once
-  that class has a think time. `gmom` instead initialises each new class
-  exactly by convolution at the class boundary (`fill_level_all`): correct
-  for all `Z`, and costing only `R-1` convolutions off the population
-  sweep, so the recursion still carries the `O(N)` cost. With the shift,
-  `09_asymmetric` (Z != 0) fails; with the exact init it validates.
+  that class has a think time. `gmom` instead carries every basis over
+  exactly, taking the decrement of the class just completed from a
+  snapshot one step before its end (see "Branching factor"); correct for
+  all `Z`. With the shift, `09_asymmetric` (Z != 0) fails; with the exact
+  carry-over it validates.
 
 ## Performance measures (full basis)
 
-The two slots hold replica levels `r-1` (`vl`) and `r-2` (`vl1`). For the
-full `M`-queue model, `main.c` also carries levels `0..r-3` (Casale,
+The full model's two slots hold replica levels `l` (`vl`) and `l-1` (`vl1`),
+`l = max{1, r - min{M, Bmax}}` (`r-1` under `--bmax 1`). When think times are
+mixed, `main.c` also carries levels `0..l-2` of the full model (Casale,
 Perf. Eval. 2011, Def. 1 and App. C; tables in `util/lvtab.h`). They are
-filled by exact convolution when class `r` starts, like the two slots, and
-advanced along the class-`r` sweep by the class-`r` population constraint,
+carried over between classes like the two slots, and advanced along the class-`r` sweep by the class-`r` population constraint,
 which holds for any think time. The class-`R` decrement `G(N-1_R)` comes
-from snapshots of all levels one population step back (`grM`, `gr1M`,
-`lowr`). `measures.c` then reads `G(N)`, `X_r` and `Q_kr` directly from
+from snapshots of all levels one population step back (`pvl`, `pvl1`,
+`lowr`). Otherwise the downward pass (`gmom_descend`) starts at level `l`. `measures.c` then reads `G(N)`, `X_r` and `Q_kr` directly from
 levels 0 and 1.
 
 This replaces the earlier `mdecrease` replica-descent, whose `Z_s=0` branch
@@ -168,7 +245,8 @@ bit-for-bit against `bin/ca`.
   valid for `Z=0` and `Z!=0`.
 - `setup1.c` - the six per-level matrices `A,B,C,D,E,F` (port of
   `setup1.m`), with the overdetermined row count computed.
-- `main.c` - the `mbmom1` recursion, normal-equations solve, exact
-  new-class init, lower-level carry and `N-1_R` snapshots, CLI and
-  validation harness.
+- `setupb.c` - one sub-model's level system for `--bmax` (GCE, CE, PC rows).
+- `main.c` - the MoM(Bmax) recursion over the sub-model tree, cached
+  normal-equations factorization, exact new-class init, lower-level carry
+  and `N-1_R` snapshots, singularity screen, CLI and validation harness.
 - `measures.c` - `G(N)`/`X`/`Q` output from levels 0 and 1.

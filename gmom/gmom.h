@@ -50,6 +50,25 @@ typedef struct {
 	double* Q;   /* M*R entries  */
 } gmom_out;
 
+/* Level system of one sub-model for --bmax (setupb.c).  A, B are
+ * (nrows x colA), D is (nrows x colD), E is (colD x colA), F is
+ * (colD x colD).  The GCE rows reference one entry of a child model:
+ * row i takes child cchild[i] (-1: none), slot cslot[i] (0: vl, 1: vl1),
+ * column ccol[i], with coefficient 1. */
+typedef struct
+{
+	mpq_mat_t A, B, D, E, F;
+	int nrows, szIk, szI, colA, colD;
+	int *cchild, *cslot, *ccol;
+} LSB;
+
+/* q[0..d-1]: original queue indices of the sub-model; its last ntag
+ * queues are removed by GCEs, child c (dropping q[d-ntag+c]) carrying
+ * level clevel[c]; r classes, basis level l.  aonly: build A only (for
+ * the singularity screen). */
+LSB* setupb(mpz_t** L, int* q, int d, int ntag, const int* clevel, int r, int l, int* N, mpz_t* Z, int aonly);
+void lsb_free(LSB* ls);
+
 /* base normalizing constant for the single-queue prefix (m=1): a model of
  * `mult` identical queues with demand row d[0..r-1] plus think times Z,
  * at population pop[0..r-1].  Computed exactly by population-lattice

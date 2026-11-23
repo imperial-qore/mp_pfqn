@@ -12,7 +12,7 @@ struct rusage ruse;
 double t0, t1;
 
 extern void gmva(mpq_t G, mpz_t** dem, int nq, int* pop, mpz_t* Z, int r);
-extern void gmom_descend(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM, mpq_vec_t* Gout, mpq_vec_t* Gkout);
+extern void gmom_descend(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM, int ltop, mpq_vec_t* Gout, mpq_vec_t* Gkout);
 extern void gmom_measures(qnmodel* qn, mpq_vec_t G, mpq_vec_t Gk, int oe, int og, int ol, int ot, int oq, int* cperm, mpz_t scale_factor, gmom_out* cap);
 
 /* ---- small dense helpers over rectangular mpq matrices ---------------- */
@@ -41,24 +41,45 @@ static void tvec_rect(mpq_vec_t rop, mpq_mat_t A, int nrows, int ncols, mpq_vec_
 	mpq_clear(t);
 }
 
-/* Solve the overdetermined A x = rhs (A: nrows x ncols) by normal
- * equations (A^T A) x = A^T rhs, exactly.  Returns a fresh x[ncols]. */
-static mpq_vec_t solve_normal(mpq_mat_t A, int nrows, int ncols, mpq_vec_t rhs)
+/* LU factorization of A^T A, cached across a class sweep.  A (setup1's
+ * coefficient matrix) holds demands only: the populations and think times
+ * sit in B, C, D, E and F.  So A^T A is the same at every step of the
+ * class-r sweep and is factored once per (level, class), as Sec. 5 of the
+ * paper assumes, instead of once per population step. */
+typedef struct { mpq_mat_t AtA; int* indx; int ncols; } nfact;
+
+static void nfact_free(nfact* f);
+
+/* may_fail: return NULL on a singular A^T A instead of exiting */
+static nfact* nfact_new(mpq_mat_t A, int nrows, int ncols, int may_fail)
 {
-	mpq_mat_t AtA = mpq_matzeros(ncols, ncols);
-	mpq_vec_t Atb = mpq_vec(ncols, 0, 1);
-	mpq_mattransmul(AtA, A, A, nrows, ncols);
-	tvec_rect(Atb, A, nrows, ncols, rhs);
-	int* indx = mpq_ludcmp(AtA, ncols);
-	if (!indx) { fprintf(stderr, "gmom: SINGULAR A^T A  nrows=%d ncols=%d\n", nrows, ncols);
+	nfact* f = (nfact*) malloc(sizeof(nfact));
+	f->ncols = ncols;
+	f->AtA = mpq_matzeros(ncols, ncols);
+	mpq_mattransmul(f->AtA, A, A, nrows, ncols);
+	f->indx = mpq_ludcmp(f->AtA, ncols);
+	if (!f->indx && may_fail) { f->indx = (int*) malloc(sizeof(int)); nfact_free(f); return NULL; }
+	if (!f->indx) { fprintf(stderr, "gmom: SINGULAR A^T A  nrows=%d ncols=%d\n", nrows, ncols);
 		if (getenv("GMOM_DBG")) { fprintf(stderr,"A =\n"); mpq_matprint(A, nrows, ncols); }
 		exit(2); }
-	mpq_lubksb(AtA, Atb, ncols, indx);
-	free(indx);
+	return f;
+}
+
+static void nfact_free(nfact* f)
+{
 	int i, j;
-	for (i = 0; i < ncols+1; i++) { for (j = 0; j < ncols+1; j++) mpq_clear(AtA[i][j]); free(AtA[i]); }
-	free(AtA);
-	return Atb; /* length ncols; caller frees */
+	if (!f) return;
+	for (i = 0; i < f->ncols+1; i++) { for (j = 0; j < f->ncols+1; j++) mpq_clear(f->AtA[i][j]); free(f->AtA[i]); }
+	free(f->AtA); free(f->indx); free(f);
+}
+
+/* x = (A^T A)^{-1} A^T rhs with the cached factorization; fresh x[ncols] */
+static mpq_vec_t nfact_solve(nfact* f, mpq_mat_t A, int nrows, mpq_vec_t rhs)
+{
+	mpq_vec_t x = mpq_vec(f->ncols, 0, 1);
+	tvec_rect(x, A, nrows, f->ncols, rhs);
+	mpq_lubksb(f->AtA, x, f->ncols, f->indx);
+	return x;
 }
 
 /* G of the prefix sub-model on queues 0..m-1 with (1+combo[j]) copies of
@@ -85,19 +106,20 @@ static mpq_vec_t vnew(int n) { return mpq_vec(n, 0, 1); }
 static void vfree(mpq_vec_t v, int n) { int i; if (!v) return; for (i = 0; i < n+1; i++) mpq_clear(v[i]); free(v); }
 static void fp_copy_vec(mpq_vec_t d, mpq_vec_t s, int n) { int i; for (i = 0; i < n; i++) mpq_set(d[i], s[i]); }
 
-/* Lower replica levels 0..r-3 of the full M-queue basis (see
- * util/lvtab.h).  gmom's two slots hold levels r-1 (vl) and r-2 (vl1);
- * the levels below are carried for m=M only, filled exactly by
+/* Lower replica levels 0..ltop-2 of the full M-queue basis (see
+ * util/lvtab.h).  The full model's two slots hold levels ltop (vl) and
+ * ltop-1 (vl1), ltop = r-1 under --bmax 1; lv1 = ltop-1 below.  The
+ * levels below are carried for the full model only, filled exactly by
  * convolution when class r starts and advanced along the class-r sweep
  * by the class-r population constraint
  *   n_r G^{+d}(n) = Z_r G^{+d}(n-1_r) + sum_j L_jr (m_j+d_j) G^{+d+1_j}(n-1_r),
  * which holds for any think time.  Levels 0 and 1 at N then give G(N),
  * X and Q without a downward pass. */
-static void fill_low(lvtab* T, mpq_vec_t* low, mpz_t** L, int r, int* nvec, mpz_t* Z)
+static void fill_low(lvtab* T, mpq_vec_t* low, mpz_t** L, int r, int* nvec, mpz_t* Z, int lv1)
 {
 	int l, i, s, M = T->m;
 	int* pop = (int*) malloc(r * sizeof(int));
-	for (l = 0; l <= r-3; l++)
+	for (l = 0; l <= lv1-1; l++)
 		for (i = 0; i < T->card[l]; i++)
 			for (s = 0; s < r; s++) {
 				oner(pop, nvec, r, s);
@@ -107,14 +129,14 @@ static void fill_low(lvtab* T, mpq_vec_t* low, mpz_t** L, int r, int* nvec, mpz_
 }
 
 /* advance levels 0..r-3 from n-1_r to n; above2 is the old level r-2 */
-static void lower_step(lvtab* T, int* mi, mpz_t** L, mpz_t* Z, int r, mpq_vec_t* low, mpq_vec_t above2, int nr)
+static void lower_step(lvtab* T, int* mi, mpz_t** L, mpz_t* Z, int r, mpq_vec_t* low, mpq_vec_t above2, int nr, int lv1)
 {
 	int l, i, j, s, M = T->m;
 	mpq_t acc, c, w, zr;
 	mpq_init(acc); mpq_init(c); mpq_init(w); mpq_init(zr);
 	mpq_set_z(zr, Z[r-1]);
-	for (l = 0; l <= r-3; l++) {
-		mpq_vec_t above = (l+1 == r-2) ? above2 : low[l+1];
+	for (l = 0; l <= lv1-1; l++) {
+		mpq_vec_t above = (l+1 == lv1) ? above2 : low[l+1];
 		for (i = 0; i < T->card[l]; i++)
 			for (s = 0; s < r; s++) {
 				mpq_mul(acc, zr, low[l][i*r+s]);
@@ -134,45 +156,197 @@ static void lower_step(lvtab* T, int* mi, mpz_t** L, mpz_t* Z, int r, mpq_vec_t*
 }
 
 
-/* Fill V[m] both slots directly from exact convolution at the current
- * nvec, for any level m.  Used to initialise a new class exactly (the
- * cheap shift-based init is only valid when intermediate classes have no
- * think time). */
-static void fill_level_all(mpq_vec_t* vl, mpq_vec_t* vl1, int* lenl, int* lenl1,
-                           mpz_t** L, int m, int r, int* nvec, mpz_t* Z)
+/* ---- model tree of the variable-branching recursion (--bmax) --------- */
+
+/* B(d) = min{d, Bmax} GCEs for a model with d queues, basis level
+ * l(d) = max{1, r - B(d)} while r classes are processed (Theorem 2). */
+static int gm_B(int d, int bmax) { return d < bmax ? d : bmax; }
+static int gm_level(int d, int r, int bmax) { int v = r - gm_B(d, bmax); return v < 1 ? 1 : v; }
+
+typedef struct {
+	int d, ntag;
+	int* q;          /* original queue indices, increasing */
+	int* child;      /* child c drops q[d-ntag+c] */
+	int* clevel;     /* child basis levels, current class */
+	int l;           /* basis level, current class */
+	mpq_vec_t vl, vl1; int lenl, lenl1;
+	mpq_vec_t pvl, pvl1; int lenp, lenp1;   /* both at n-1_r */
+	LSB* ls; nfact* fa;
+} gmodel;
+
+typedef struct { gmodel* m; int n; } gtree;
+
+/* m(M) = {all queues}; each model with d queues has children that drop,
+ * one at a time, each of its last B(d) queues; children shared between
+ * parents are built once.  Models are appended by decreasing d, so the
+ * array read backwards is a bottom-up order and m[0] is the full model.
+ * Bmax = 1 gives the prefix chain {1..M} -> {1..M-1} -> ... -> {1}. */
+static gtree* gtree_new(int M, int bmax)
+{
+	gtree* T = (gtree*) calloc(1, sizeof(gtree));
+	int cap = 16, i, c, a, b, j;
+	T->m = (gmodel*) calloc(cap, sizeof(gmodel));
+	T->m[0].d = M; T->m[0].q = (int*) malloc(M * sizeof(int));
+	for (i = 0; i < M; i++) T->m[0].q[i] = i;
+	T->n = 1;
+	for (i = 0; i < T->n; i++) {
+		int d = T->m[i].d;
+		int ntag = (d >= 2) ? gm_B(d, bmax) : 0;
+		T->m[i].ntag = ntag;
+		T->m[i].child  = (int*) calloc(ntag > 0 ? ntag : 1, sizeof(int));
+		T->m[i].clevel = (int*) calloc(ntag > 0 ? ntag : 1, sizeof(int));
+		for (c = 0; c < ntag; c++) {
+			int drop = d - ntag + c;
+			int* cq = (int*) malloc((d-1) * sizeof(int));
+			for (a = 0, b = 0; a < d; a++) if (a != drop) cq[b++] = T->m[i].q[a];
+			int found = -1;
+			for (j = i+1; j < T->n && found < 0; j++)
+				if (T->m[j].d == d-1) {
+					for (a = 0; a < d-1 && T->m[j].q[a] == cq[a]; a++) ;
+					if (a == d-1) found = j;
+				}
+			if (found < 0) {
+				if (T->n == cap) { cap *= 2; T->m = (gmodel*) realloc(T->m, cap * sizeof(gmodel)); }
+				memset(&T->m[T->n], 0, sizeof(gmodel));
+				T->m[T->n].d = d-1; T->m[T->n].q = cq;
+				found = T->n++;
+			} else free(cq);
+			T->m[i].child[c] = found;
+		}
+	}
+	return T;
+}
+
+static void gtree_free(gtree* T)
+{
+	int i;
+	if (!T) return;
+	for (i = 0; i < T->n; i++) {
+		gmodel* g = &T->m[i];
+		free(g->q); free(g->child); free(g->clevel);
+		vfree(g->vl, g->lenl); vfree(g->vl1, g->lenl1);
+		vfree(g->pvl, g->lenp); vfree(g->pvl1, g->lenp1);
+		lsb_free(g->ls); nfact_free(g->fa);
+	}
+	free(T->m); free(T);
+}
+
+/* r-component copy of an (r-1)-component basis: entry i keeps its r-1
+ * values and gains G(n-1_{r-1}) = component 0 of the snapshot pv */
+static mpq_vec_t vext(mpq_vec_t v, mpq_vec_t pv, int ncomb, int r, int* len)
 {
 	int i, s;
-	int* pop = (int*) malloc(r * sizeof(int));
-	int szIk = nck(m + (r-1) - 1, m-1);
-	int szI  = nck(m + (r-2) - 1, m-1);
-	int** Ik = sortbynnzpos(multichoose(m, r-1), szIk, m);
-	int** I  = sortbynnzpos(multichoose(m, r-2), szI, m);
-	vfree(vl[m], lenl[m]); lenl[m] = szIk*r; vl[m] = vnew(szIk*r);
-	for (i = 0; i < szIk; i++) for (s = 0; s < r; s++) { oner(pop, nvec, r, s); base_G(vl[m][i*r+s], L, m, Ik[i], r, pop, Z); }
-	vfree(vl1[m], lenl1[m]); lenl1[m] = szI*r; vl1[m] = vnew(szI*r);
-	for (i = 0; i < szI; i++) for (s = 0; s < r; s++) { oner(pop, nvec, r, s); base_G(vl1[m][i*r+s], L, m, I[i], r, pop, Z); }
-	free(Ik); free(I); free(pop);
+	mpq_vec_t w = vnew(ncomb * r);
+	for (i = 0; i < ncomb; i++) {
+		for (s = 0; s < r-1; s++) mpq_set(w[i*r+s], v[i*(r-1)+s]);
+		mpq_set(w[i*r+r-1], pv[i*(r-1)]);
+	}
+	*len = ncomb * r;
+	return w;
 }
-/* Fill V[m=1] base levels (both slots) at the current nvec for class r. */
-static void fill_level1(mpq_vec_t* vl, mpq_vec_t* vl1, int* lenl, int* lenl1,
-                        mpz_t** L, int r, int* nvec, mpz_t* Z)
+
+/* new level-l basis of g from rhs = B*vprev + D*vl1 + child GCE terms;
+ * vprev = NULL is the class start, where G(n-1_r) = 0 */
+static mpq_vec_t level_solve(gmodel* g, gtree* GT, mpq_vec_t vprev)
 {
-	int s;
-	int* combo0 = (int*) calloc(1, sizeof(int)); /* multichoose(1,k) = [k] */
+	LSB* ls = g->ls;
+	int s, nrows = ls->nrows;
+	mpq_vec_t rd = vnew(nrows), rhs = vnew(nrows);
+	if (vprev) matvec_rect(rhs, ls->B, nrows, ls->colA, vprev);
+	matvec_rect(rd, ls->D, nrows, ls->colD, g->vl1);
+	for (s = 0; s < nrows; s++) {
+		mpq_add(rhs[s], rhs[s], rd[s]);
+		if (ls->cchild[s] >= 0) {
+			gmodel* ch = &GT->m[g->child[ls->cchild[s]]];
+			mpq_add(rhs[s], rhs[s], (ls->cslot[s] ? ch->vl1 : ch->vl)[ls->ccol[s]]);
+		}
+	}
+	mpq_vec_t x = nfact_solve(g->fa, ls->A, nrows, rhs);
+	vfree(rd, nrows); vfree(rhs, nrows);
+	return x;
+}
+
+/* G of the sub-model on queues q[0..d-1] with (1+combo[j]) copies of
+ * queue q[j], at population pop */
+static void base_Gq(mpq_t G, mpz_t** L, int* q, int d, int* combo, int r, int* pop, mpz_t* Z)
+{
+	int j, c, nq = 0;
+	for (j = 0; j < d; j++) nq += 1 + combo[j];
+	mpz_t** dem = (mpz_t**) malloc(nq * sizeof(mpz_t*));
+	c = 0;
+	for (j = 0; j < d; j++) { int t; for (t = 0; t <= combo[j]; t++) dem[c++] = L[q[j]]; }
+	gmva(G, dem, nq, pop, Z, r);
+	free(dem);
+}
+
+/* fill a level-lv basis of model g by exact convolution at nvec */
+static mpq_vec_t conv_level(gmodel* g, mpz_t** L, int lv, int r, int* nvec, mpz_t* Z, int* len)
+{
+	int i, s, sz = nck(g->d + lv - 1, lv);
+	int** I = sortbynnzpos(multichoose(g->d, lv), sz, g->d);
 	int* pop = (int*) malloc(r * sizeof(int));
+	mpq_vec_t v = vnew(sz * r);
+	for (i = 0; i < sz; i++) for (s = 0; s < r; s++) { oner(pop, nvec, r, s); base_Gq(v[i*r+s], L, g->q, g->d, I[i], r, pop, Z); }
+	for (i = 0; i < sz; i++) free(I[i]);
+	free(I); free(pop);
+	*len = sz * r;
+	return v;
+}
 
-	/* slot l_1: multichoose(1, r-2) = [r-2] (empty combo if r-2<=0 -> [max(0,r-2)]) */
-	int k1 = (r-2 < 0) ? 0 : r-2;
-	vfree(vl1[1], lenl1[1]); lenl1[1] = r; vl1[1] = vnew(r);
-	combo0[0] = k1;
-	for (s = 0; s < r; s++) { oner(pop, nvec, r, s); base_G(vl1[1][s], L, 1, combo0, r, pop, Z); }
+/* both slots of g (levels g->l and g->l-1) by exact convolution: the
+ * class initialisation, and every step for the single-queue models */
+static void fill_model(gmodel* g, mpz_t** L, int r, int* nvec, mpz_t* Z)
+{
+	vfree(g->vl, g->lenl);   g->vl  = conv_level(g, L, g->l,   r, nvec, Z, &g->lenl);
+	vfree(g->vl1, g->lenl1); g->vl1 = conv_level(g, L, g->l-1, r, nvec, Z, &g->lenl1);
+}
 
-	/* slot l: multichoose(1, r-1) = [r-1] */
-	vfree(vl[1], lenl[1]); lenl[1] = r; vl[1] = vnew(r);
-	combo0[0] = r-1;
-	for (s = 0; s < r; s++) { oner(pop, nvec, r, s); base_G(vl[1][s], L, 1, combo0, r, pop, Z); }
+/* Singularity screen for --bmax > 1 (pfqn_recursion_singular builds the
+ * Bmax = 1 matrices only): every level matrix is loading-only, so test
+ * A^T A of every sub-model for every class count once at start. */
+static int gb_singular(mpz_t** L, int M, int R, int bmax)
+{
+	int r, i, c, sing = 0;
+	gtree* T = gtree_new(M, bmax);
+	for (r = 2; r <= R && !sing; r++)
+		for (i = 0; i < T->n && !sing; i++) {
+			gmodel* g = &T->m[i];
+			if (g->d < 2) continue;
+			int l = gm_level(g->d, r, bmax);
+			for (c = 0; c < g->ntag; c++) g->clevel[c] = gm_level(g->d - 1, r, bmax);
+			LSB* ls = setupb(L, g->q, g->d, g->ntag, g->clevel, r, l, NULL, NULL, 1);
+			mpq_mat_t AtA = mpq_matzeros(ls->colA, ls->colA);
+			mpq_mattransmul(AtA, ls->A, ls->A, ls->nrows, ls->colA);
+			int* idx = mpq_ludcmp(AtA, ls->colA);
+			if (!idx) sing = 1; else free(idx);
+			int a, b;
+			for (a = 0; a < ls->colA+1; a++) { for (b = 0; b < ls->colA+1; b++) mpq_clear(AtA[a][b]); free(AtA[a]); }
+			free(AtA);
+			lsb_free(ls);
+		}
+	gtree_free(T);
+	return sing;
+}
 
-	free(combo0); free(pop);
+/* class to move to the recursion position so that the screen passes, or
+ * -1 (same contract as pfqn_nonsingular_recclass) */
+static int gb_nonsingular_recclass(mpz_t** L, int M, int R, int bmax)
+{
+	int c, k, s, j;
+	if (!gb_singular(L, M, R, bmax)) return R-1;
+	for (c = 0; c < R-1; c++) {
+		mpz_t** P = (mpz_t**) malloc(M * sizeof(mpz_t*));
+		for (k = 0; k < M; k++) {
+			P[k] = (mpz_t*) malloc(R * sizeof(mpz_t));
+			for (s = 0, j = 0; s < R; s++) if (s != c) mpz_init_set(P[k][j++], L[k][s]);
+			mpz_init_set(P[k][R-1], L[k][c]);
+		}
+		int sing = gb_singular(P, M, R, bmax);
+		for (k = 0; k < M; k++) { for (s = 0; s < R; s++) mpz_clear(P[k][s]); free(P[k]); }
+		free(P);
+		if (!sing) return c;
+	}
+	return -1;
 }
 
 void generate_permutation(int* perm, int n, unsigned int seed) {
@@ -250,9 +424,9 @@ typedef struct {
  * --validate consumed the run. */
 static int gmom_compute(char* model_file, int pdigit, int pseed, int psign,
                         bool out_e, bool force_perturb, bool no_perturb, bool validate,
-                        bool print_model, gmom_sol* sol)
+                        bool print_model, int bmax, gmom_sol* sol)
 {
-	int i, s, m, r, nr;
+	int i, s, r, nr;
 	qnmodel* qn = readmodel(model_file);
 	qn_require_closed(qn, "gmom", 0);
 	int M = qn->M, R = qn->R;
@@ -288,8 +462,10 @@ static int gmom_compute(char* model_file, int pdigit, int pseed, int psign,
 	 * model is genuinely degenerate for gmom's basis. */
 	int* cperm = (int*) malloc(R * sizeof(int));
 	for (i = 0; i < R; i++) cperm[i] = i;
-	if (pfqn_recursion_singular(L, M, R)) {
-		int fix = pfqn_nonsingular_recclass(L, M, R);
+	/* Bmax = 1 uses the shared oracle (same matrices); larger Bmax adds
+	 * GCE rows and changes the levels, so it screens its own matrices */
+	if (bmax == 1 ? pfqn_recursion_singular(L, M, R) : gb_singular(L, M, R, bmax)) {
+		int fix = bmax == 1 ? pfqn_nonsingular_recclass(L, M, R) : gb_nonsingular_recclass(L, M, R, bmax);
 		if (fix < 0) {
 			if (no_perturb) {
 				/* exact-only probe (safe_gmom): report and fail rather
@@ -341,155 +517,170 @@ static int gmom_compute(char* model_file, int pdigit, int pseed, int psign,
 
 	int* nvec = (int*) calloc(R, sizeof(int));
 
-	/* V slots for m=1..M */
-	mpq_vec_t* vl  = (mpq_vec_t*) calloc(M+1, sizeof(mpq_vec_t));
-	mpq_vec_t* vl1 = (mpq_vec_t*) calloc(M+1, sizeof(mpq_vec_t));
-	int* lenl  = (int*) calloc(M+1, sizeof(int));
-	int* lenl1 = (int*) calloc(M+1, sizeof(int));
-	mpq_vec_t grM = NULL; int lengrM = 0;   /* vl[M] at N-1_R */
-	mpq_vec_t gr1M = NULL; int lengr1M = 0; /* vl1[M] at N-1_R */
+	gtree* GT = gtree_new(M, bmax);
+	gmodel* top = &GT->m[0];
+	mpq_vec_t grM = NULL; int lengrM = 0;   /* top vl at N-1_R */
+	mpq_vec_t gr1M = NULL; int lengr1M = 0; /* top vl1 at N-1_R */
 	int full = mom_mixed_think(qn); /* else the descent (gmom_descend) is exact */
 	lvtab* T = full ? lvtab_new(M, R) : NULL;
-	mpq_vec_t* low  = (mpq_vec_t*) calloc(R, sizeof(mpq_vec_t)); /* levels 0..r-3, m=M */
+	mpq_vec_t* low  = (mpq_vec_t*) calloc(R, sizeof(mpq_vec_t)); /* levels 0..ltop-2, top model */
 	mpq_vec_t* lowr = (mpq_vec_t*) calloc(R, sizeof(mpq_vec_t)); /* same at N-1_R */
+	int* lowlen = (int*) calloc(R, sizeof(int));
+	int ltop = 1;
 
-	/* ================= class 1 initialisation (r=2) ================= */
 	nvec[0] = N[0];
-	{
-		r = 2;
-		int* pop = (int*) malloc(r * sizeof(int));
-		for (m = 1; m <= M; m++) {
-			/* slot l_1: multichoose(m, r-2=0) -> 1 combo of zeros */
-			int szI0 = 1;
-			int** I0 = sortbynnzpos(multichoose(m, 0), 1, m);
-			vfree(vl1[m], lenl1[m]); lenl1[m] = szI0*r; vl1[m] = vnew(szI0*r);
-			for (i = 0; i < szI0; i++) for (s = 0; s < r; s++) {
-				oner(pop, nvec, r, s); base_G(vl1[m][i*r+s], L, m, I0[i], r, pop, Z);
-			}
-			free(I0);
-			/* slot l: multichoose(m, r-1=1) */
-			int szIk = nck(m + (r-1) - 1, m-1);
-			int** Ik = sortbynnzpos(multichoose(m, 1), szIk, m);
-			vfree(vl[m], lenl[m]); lenl[m] = szIk*r; vl[m] = vnew(szIk*r);
-			for (i = 0; i < szIk; i++) for (s = 0; s < r; s++) {
-				oner(pop, nvec, r, s); base_G(vl[m][i*r+s], L, m, Ik[i], r, pop, Z);
-			}
-			free(Ik);
-		}
-		free(pop);
-	}
-
-	/* ================= class loop r = 2..R ========================== */
 	for (r = 2; r <= R; r++) {
-		/* build matrices for m=2..M with the current nvec (nvec[r-1]=0 here) */
-		LS1** LS = (LS1**) calloc(M+1, sizeof(LS1*));
-		for (m = 2; m <= M; m++) LS[m] = setup1(L, m, r, nvec, Z);
-
-		if (r > 2) {
-			/* Initialise the new class exactly from convolution at the
-			 * current nvec (class r at 0).  The reference mbmom1 uses a
-			 * cheap component shift here, but that is only valid when the
-			 * intermediate classes have no think time (the reference
-			 * errors on Z<>0); the exact fill is correct for all Z and
-			 * costs only R-1 convolutions, off the population sweep. */
-			for (m = 1; m <= M; m++) fill_level_all(vl, vl1, lenl, lenl1, L, m, r, nvec, Z);
-			if (full) {
-				int ll;
-				for (ll = 0; ll <= r-3; ll++) {
-					vfree(low[ll], T->card[ll]*(r-1));
-					low[ll] = vnew(T->card[ll]*r);
+		int ltop_old = ltop;
+		/* New class, class r empty.  Levels and level systems, factored
+		 * once for the whole sweep.  Class 2 starts by convolution (only
+		 * class 1 is populated, so the lattice is one-dimensional).  From
+		 * class 3 on, each basis is carried over exactly: the r-1 entries
+		 * per combination are the old ones, and the new decrement
+		 * G(n-1_{r-1}) is the snapshot taken one step before the end of
+		 * the class-(r-1) sweep.  When the level rises (l(d,r) = l(d,r-1)+1)
+		 * the old level becomes vl1 and the new vl solves the level system
+		 * with the class-r term G(n-1_r) = 0.  Exact for any Z (the
+		 * reference's shift initialisation is Z=0-only). */
+		if (full) {
+			/* lower levels of the full model: old levels carried over, plus
+			 * the old vl1 when the full model's level rises */
+			int ll, ln = gm_level(M, r, bmax);
+			mpq_vec_t* nlow = (mpq_vec_t*) calloc(R, sizeof(mpq_vec_t));
+			int* nlen = (int*) calloc(R, sizeof(int));
+			if (r == 2) {
+				for (ll = 0; ll <= ln-2; ll++) { nlen[ll] = T->card[ll]*r; nlow[ll] = vnew(nlen[ll]); }
+				fill_low(T, nlow, L, r, nvec, Z, ln-1);
+			} else {
+				for (ll = 0; ll <= ln-2; ll++) {
+					if (ll <= ltop_old-2) nlow[ll] = vext(low[ll], lowr[ll], T->card[ll], r, &nlen[ll]);
+					else                  nlow[ll] = vext(top->vl1, top->pvl1, T->card[ll], r, &nlen[ll]);
 				}
-				fill_low(T, low, L, r, nvec, Z);
 			}
+			for (ll = 0; ll < R; ll++) { vfree(low[ll], lowlen[ll]); vfree(lowr[ll], lowlen[ll]); lowr[ll] = NULL; }
+			free(low); free(lowlen);
+			low = nlow; lowlen = nlen;
+			for (ll = 0; ll <= ln-2; ll++) lowr[ll] = vnew(lowlen[ll]);
+		}
+		for (i = GT->n - 1; i >= 0; i--) {   /* bottom-up: children first */
+			gmodel* g = &GT->m[i];
+			int c, lo = g->l;
+			g->l = gm_level(g->d, r, bmax);
+			for (c = 0; c < g->ntag; c++) g->clevel[c] = gm_level(g->d - 1, r, bmax);
+			lsb_free(g->ls); g->ls = NULL;
+			nfact_free(g->fa); g->fa = NULL;
+			/* single-queue models too: without GCEs their system has r rows
+			 * and r unknowns at any level, square, and it replaces a lattice
+			 * convolution per entry and step (Sec. 4.2).  It is singular when
+			 * the queue has a zero demand in a class s < r; those models stay
+			 * on convolution (ls = NULL). */
+			g->ls = setupb(L, g->q, g->d, g->ntag, g->clevel, r, g->l, nvec, Z, 0);
+			g->fa = nfact_new(g->ls->A, g->ls->nrows, g->ls->colA, g->d == 1);
+			if (!g->fa) { lsb_free(g->ls); g->ls = NULL; }
+			if (r == 2 || !g->ls) {
+				fill_model(g, L, r, nvec, Z);
+			} else if (g->l == lo) {
+				int n1, n2;
+				mpq_vec_t a = vext(g->vl,  g->pvl,  g->lenl/(r-1),  r, &n1);
+				mpq_vec_t b = vext(g->vl1, g->pvl1, g->lenl1/(r-1), r, &n2);
+				vfree(g->vl, g->lenl); vfree(g->vl1, g->lenl1);
+				g->vl = a; g->lenl = n1; g->vl1 = b; g->lenl1 = n2;
+			} else {
+				int n1;
+				mpq_vec_t b = vext(g->vl, g->pvl, g->lenl/(r-1), r, &n1);
+				vfree(g->vl1, g->lenl1); g->vl1 = b; g->lenl1 = n1;
+				vfree(g->vl, g->lenl);
+				g->vl = level_solve(g, GT, NULL); g->lenl = g->ls->colA;
+			}
+		}
+		ltop = top->l;
+		/* G(n-1_r) snapshots: zero until the last step of the sweep sets
+		 * them (they stay zero when N_r = 0) */
+		for (i = 0; i < GT->n; i++) {
+			gmodel* g = &GT->m[i];
+			vfree(g->pvl, g->lenp);  g->pvl  = vnew(g->lenl);  g->lenp  = g->lenl;
+			vfree(g->pvl1, g->lenp1); g->pvl1 = vnew(g->lenl1); g->lenp1 = g->lenl1;
 		}
 
 		/* population sweep of class r */
 		for (nr = 1; nr <= N[r-1]; nr++) {
 			nvec[r-1] = nr;
-			/* capture the top basis at N-1_R just before the final step */
-			if (r == R && nr == N[R-1]) {
-				vfree(grM, lengrM); lengrM = lenl[M]; grM = vnew(lenl[M]);
-				fp_copy_vec(grM, vl[M], lenl[M]);
-				vfree(gr1M, lengr1M); lengr1M = lenl1[M]; gr1M = vnew(lenl1[M]);
-				fp_copy_vec(gr1M, vl1[M], lenl1[M]);
+			if (nr == N[r-1]) {   /* snapshot every basis at n-1_r */
 				int ll;
-				for (ll = 0; full && ll <= R-3; ll++) {
-					lowr[ll] = vnew(T->card[ll]*R);
-					fp_copy_vec(lowr[ll], low[ll], T->card[ll]*R);
+				for (i = 0; i < GT->n; i++) {
+					gmodel* g = &GT->m[i];
+					fp_copy_vec(g->pvl, g->vl, g->lenl);
+					fp_copy_vec(g->pvl1, g->vl1, g->lenl1);
 				}
+				for (ll = 0; full && ll <= ltop-2; ll++) fp_copy_vec(lowr[ll], low[ll], lowlen[ll]);
 			}
-			if (full) lower_step(T, qn->mi, L, Z, r, low, vl1[M], nr);
-			fill_level1(vl, vl1, lenl, lenl1, L, r, nvec, Z);
-			for (m = 2; m <= M; m++) {
-				int colA = LS[m]->colA, colC = LS[m]->colC, colD = LS[m]->colD, nrows = LS[m]->nrows;
-				/* u = (E*vl[m] + F*vl1[m]) / nr  ; keep old vl[m] */
+			if (full) lower_step(T, qn->mi, L, Z, r, low, top->vl1, nr, ltop-1);
+			for (i = GT->n - 1; i >= 0; i--) {   /* bottom-up: children first */
+				gmodel* g = &GT->m[i];
+				if (!g->ls) { fill_model(g, L, r, nvec, Z); continue; }
+				LSB* ls = g->ls;
+				int colA = ls->colA, colD = ls->colD;
+				/* level l-1: (E*vl + F*vl1) / nr, from the previous step */
 				mpq_vec_t ue = vnew(colD), uf = vnew(colD), u = vnew(colD);
-				matvec_rect(ue, LS[m]->E, colD, colA, vl[m]);
-				matvec_rect(uf, LS[m]->F, colD, colD, vl1[m]);
+				matvec_rect(ue, ls->E, colD, colA, g->vl);
+				matvec_rect(uf, ls->F, colD, colD, g->vl1);
 				mpq_t inv; mpq_init(inv); mpq_set_si(inv, 1, nr);
-				for (i = 0; i < colD; i++) { mpq_add(u[i], ue[i], uf[i]); mpq_mul(u[i], u[i], inv); }
+				for (s = 0; s < colD; s++) { mpq_add(u[s], ue[s], uf[s]); mpq_mul(u[s], u[s], inv); }
 				mpq_clear(inv);
-				vfree(vl1[m], lenl1[m]); vl1[m] = u; lenl1[m] = colD;
+				vfree(g->vl1, g->lenl1); g->vl1 = u; g->lenl1 = colD;
 				vfree(ue, colD); vfree(uf, colD);
-				/* rhs = B*vl[m] + C*vl[m-1] + D*vl1[m] */
-				mpq_vec_t rb = vnew(nrows), rc = vnew(nrows), rd = vnew(nrows), rhs = vnew(nrows);
-				matvec_rect(rb, LS[m]->B, nrows, colA, vl[m]);
-				matvec_rect(rc, LS[m]->C, nrows, colC, vl[m-1]);
-				matvec_rect(rd, LS[m]->D, nrows, colD, vl1[m]);
-				for (i = 0; i < nrows; i++) { mpq_add(rhs[i], rb[i], rc[i]); mpq_add(rhs[i], rhs[i], rd[i]); }
-				mpq_vec_t x = solve_normal(LS[m]->A, nrows, colA, rhs);
-				vfree(vl[m], lenl[m]); vl[m] = x; lenl[m] = colA;
-				vfree(rb, nrows); vfree(rc, nrows); vfree(rd, nrows); vfree(rhs, nrows);
+				mpq_vec_t x = level_solve(g, GT, g->vl);
+				vfree(g->vl, g->lenl); g->vl = x; g->lenl = colA;
 			}
 		}
-		for (m = 2; m <= M; m++) ls1_free(LS[m], r);
-		free(LS);
 	}
+	/* the full model at N-1_R */
+	grM = top->pvl; lengrM = top->lenp; top->pvl = NULL;
+	gr1M = top->pvl1; lengr1M = top->lenp1; top->pvl1 = NULL;
 
 	/* ===================== output / validation ===================== */
 	if (validate) {
-		int* pop = (int*) malloc(R * sizeof(int));
 		mpq_t ref; mpq_init(ref);
-		int total = 0, totbad = 0;
-		for (m = 1; m <= M; m++) {
-			int szIk = nck(m + (R-1) - 1, m-1);
-			int** Ik = sortbynnzpos(multichoose(m, R-1), szIk, m);
+		int total = 0, totbad = 0, sl;
+		for (i = 0; i < GT->n; i++) {
+			gmodel* g = &GT->m[i];
 			int badm = 0;
-			for (i = 0; i < szIk; i++) for (s = 0; s < R; s++) {
-				oner(pop, N, R, s);
-				base_G(ref, L, m, Ik[i], R, pop, Z);
-				total++;
-				if (mpq_cmp(ref, vl[m][i*R+s]) != 0) {
-					badm++; totbad++;
-					if (badm <= 2) gmp_fprintf(stderr, "  m=%d i=%d s=%d gmom=%Qd conv=%Qd\n", m, i, s, vl[m][i*R+s], ref);
+			for (sl = 0; sl < 2; sl++) {
+				int len, k;
+				mpq_vec_t v = sl ? g->vl1 : g->vl;
+				mpq_vec_t c = conv_level(g, L, sl ? g->l-1 : g->l, R, N, Z, &len);
+				for (k = 0; k < len; k++) {
+					total++;
+					if (mpq_cmp(c[k], v[k]) != 0) {
+						badm++; totbad++;
+						if (badm <= 2) {
+							int a;
+							fprintf(stderr, "  model {");
+							for (a = 0; a < g->d; a++) fprintf(stderr, "%s%d", a ? "," : "", g->q[a]+1);
+							gmp_fprintf(stderr, "} level %d entry %d: gmom=%Qd conv=%Qd\n", sl ? g->l-1 : g->l, k, v[k], c[k]);
+						}
+					}
 				}
+				vfree(c, len);
 			}
-			free(Ik);
 		}
-		mpq_clear(ref); free(pop);
+		mpq_clear(ref);
 		if (totbad) { printf("VALIDATE: %d/%d WRONG\n", totbad, total); return 1; }
-		printf("VALIDATE: all %d basis entries match exact convolution\n", total);
+		printf("VALIDATE: all %d basis entries of %d sub-models match exact convolution\n", total, GT->n);
 		return 2;
 	}
 
 	/* G(N), X, Q come from levels 0 and 1 of the full basis at N.
 	 * N_R=0: the class-R sweep never runs, and G(.,N-1_R)=0 (negative
 	 * population), so the snapshots stay zero. */
-	if (N[R-1] == 0) {
-		int ll;
-		if (!grM)  { lengrM  = lenl[M];  grM  = vnew(lenl[M]); }
-		if (!gr1M) { lengr1M = lenl1[M]; gr1M = vnew(lenl1[M]); }
-		for (ll = 0; full && ll <= R-3; ll++) if (!lowr[ll]) lowr[ll] = vnew(T->card[ll]*R);
-	}
 	if (!grM || !gr1M) { fprintf(stderr, "gmom: internal error, N-1_R basis not captured\n"); return 1; }
 	if (!full) {
-		gmom_descend(qn, vl[M], grM, &sol->G0, &sol->G1);
+		gmom_descend(qn, top->vl, grM, ltop, &sol->G0, &sol->G1);
 	} else {
-		/* level l lives in vl[M] (l=R-1), vl1[M] (l=R-2) or low[l] */
-		mpq_vec_t L0 = (R == 2) ? vl1[M] : low[0];
-		mpq_vec_t S0 = (R == 2) ? gr1M   : lowr[0];
-		mpq_vec_t L1 = (R == 2) ? vl[M]  : (R == 3 ? vl1[M] : low[1]);
-		mpq_vec_t S1 = (R == 2) ? grM    : (R == 3 ? gr1M   : lowr[1]);
+		/* level lv lives in top vl (ltop), top vl1 (ltop-1) or low[lv] */
+		mpq_vec_t L0 = (ltop == 1) ? top->vl1 : low[0];
+		mpq_vec_t S0 = (ltop == 1) ? gr1M     : lowr[0];
+		mpq_vec_t L1 = (ltop == 1) ? top->vl  : (ltop == 2 ? top->vl1 : low[1]);
+		mpq_vec_t S1 = (ltop == 1) ? grM      : (ltop == 2 ? gr1M     : lowr[1]);
 		mpq_vec_t G0 = vnew(R+1), G1 = vnew(M*(R+1));
 		int k;
 		for (s = 0; s < R; s++) mpq_set(G0[s], L0[s]);
@@ -502,10 +693,12 @@ static int gmom_compute(char* model_file, int pdigit, int pseed, int psign,
 	}
 	{
 		int ll;
-		for (ll = 0; full && ll <= R-3; ll++) { vfree(low[ll], T->card[ll]*R); vfree(lowr[ll], T->card[ll]*R); }
-		free(low); free(lowr);
+		for (ll = 0; ll < R; ll++) { vfree(low[ll], lowlen[ll]); vfree(lowr[ll], lowlen[ll]); }
+		free(low); free(lowr); free(lowlen);
+		vfree(grM, lengrM);
 		vfree(gr1M, lengr1M);
 		lvtab_free(T);
+		gtree_free(GT);
 	}
 	sol->qn    = qn;
 	sol->cperm = cperm;
@@ -532,7 +725,7 @@ int main(int argc, char** argv)
 	int i;
 	bool out_e = false, out_g = false, out_l = false, out_t = false, out_q = false;
 	bool validate = false, out_b = false, force_perturb = false, no_perturb = false;
-	int pdigit = 0, pseed = 23000;
+	int pdigit = 0, pseed = 23000, bmax = 1;
 	char* model_file = NULL;
 
 	t0 = CPUTIME;
@@ -546,16 +739,20 @@ int main(int argc, char** argv)
 		else if (!strcmp(argv[i], "--force-perturb")) force_perturb = true;
 		else if (!strcmp(argv[i], "-X") || !strcmp(argv[i], "--no-perturb")) no_perturb = true;
 		else if (!strcmp(argv[i], "--validate")) validate = true;
+		else if (!strcmp(argv[i], "--bmax")) { if (i+1 < argc) bmax = atoi(argv[++i]); }
 		else if (!strcmp(argv[i], "-p")) { if (i+1 < argc) pdigit = atoi(argv[++i]); }
 		else if (!strcmp(argv[i], "-s") || !strcmp(argv[i], "--seed")) { if (i+1 < argc) pseed = atoi(argv[++i]); }
 		else if (argv[i][0] != '-') model_file = argv[i];
 	}
 	if (!model_file) {
-		printf("USAGE: %s [-e|-g|-l|-t|-q] [-b] [--validate] [--force-perturb] [-p digit] [-s seed] model.qn\n", argv[0]);
-		printf("  gmom: generalized (divide-and-conquer, b=1) Method of Moments.\n");
+		printf("USAGE: %s [-e|-g|-l|-t|-q] [-b] [--bmax B] [--validate] [--force-perturb] [-p digit] [-s seed] model.qn\n", argv[0]);
+		printf("  gmom: generalized (divide-and-conquer) Method of Moments, MoM(Bmax).\n");
 		printf("  Outputs the top normalizing-constant basis entry V{M,l}(1),\n");
 		printf("  matching the reference mbmom1.  --validate checks the whole\n");
 		printf("  basis against exact convolution of the augmented models.\n");
+		printf("  --bmax B          : maximum branching factor (default 1): a model with d\n");
+		printf("                      queues adds min(d,B) convolution equations and carries\n");
+		printf("                      basis level max(1,R-min(d,B)); B >= R-1 gives level 1\n");
 		printf("  -b, --bounds      : bracket a perturbed run by re-solving with a\n");
 		printf("                      second seed; requires -p (see gmom/README.md)\n");
 		printf("  --force-perturb   : allow the perturbed solve under -e (the printed\n");
@@ -564,6 +761,7 @@ int main(int argc, char** argv)
 		printf("                      (exact-only probe, used by bin/safe_gmom)\n");
 		return -1;
 	}
+	if (bmax < 1) { fprintf(stderr, "gmom: --bmax must be >= 1 (Bmax = 0 is the original MoM: use bin/mom)\n"); return 1; }
 	if (out_b && pdigit == 0) {
 		fprintf(stderr, "gmom: -b/--bounds requires -p digit (there is nothing to bracket without a perturbation)\n");
 		return 1;
@@ -576,7 +774,7 @@ int main(int argc, char** argv)
 	if (!out_b) {
 		gmom_sol sol;
 		bool print_model = !(out_e || out_g || out_l || out_t || out_q || validate);
-		int rc = gmom_compute(model_file, pdigit, pseed, +1, out_e, force_perturb, no_perturb, validate, print_model, &sol);
+		int rc = gmom_compute(model_file, pdigit, pseed, +1, out_e, force_perturb, no_perturb, validate, print_model, bmax, &sol);
 		if (rc) return rc == 2 ? 0 : rc;
 		gmom_measures(sol.qn, sol.G0, sol.G1, out_e, out_g, out_l, out_t, out_q, sol.cperm, sol.scale, NULL);
 		return 0;
@@ -584,14 +782,14 @@ int main(int argc, char** argv)
 
 	/* bounds: same digit and seed, one solve with +eps and one with -eps */
 	gmom_sol sp, sm;
-	int rc = gmom_compute(model_file, pdigit, pseed, +1, false, force_perturb, no_perturb, false, false, &sp);
+	int rc = gmom_compute(model_file, pdigit, pseed, +1, false, force_perturb, no_perturb, false, false, bmax, &sp);
 	if (rc) return rc == 2 ? 0 : rc;
 	int M = sp.qn->M, R = sp.qn->R;
 	gmom_out op, om;
 	op.X = (double*) malloc(R * sizeof(double)); op.Q = (double*) malloc(M*R * sizeof(double));
 	om.X = (double*) malloc(R * sizeof(double)); om.Q = (double*) malloc(M*R * sizeof(double));
 	gmom_measures(sp.qn, sp.G0, sp.G1, 0, 0, 0, 0, 0, sp.cperm, sp.scale, &op);
-	rc = gmom_compute(model_file, pdigit, pseed, -1, false, force_perturb, no_perturb, false, false, &sm);
+	rc = gmom_compute(model_file, pdigit, pseed, -1, false, force_perturb, no_perturb, false, false, bmax, &sm);
 	if (rc) { fprintf(stderr, "gmom: the -eps solve failed; no bracket available\n"); return rc == 2 ? 0 : rc; }
 	gmom_measures(sm.qn, sm.G0, sm.G1, 0, 0, 0, 0, 0, sm.cperm, sm.scale, &om);
 

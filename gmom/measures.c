@@ -6,13 +6,13 @@
 #include "gmom.h"
 
 /* Downward replica pass of the original MoM (mom/mdecrease.c), started at
- * level R-1 because gmom's basis is one level more compact.  vlM is the
- * level-(R-1) basis of the full model, vlM[t*R+s] = G(M+delta_t, N-1_s),
+ * level ltop, the full model's basis level (R-1 under --bmax 1, lower
+ * with more branching).  vlM is the level-ltop basis of the full model, vlM[t*R+s] = G(M+delta_t, N-1_s),
  * and grM the same one population step back, so grM[t*R] = G(M+delta_t,
  * N-1_R).  Returns level 0 in *Gout and level 1 in *Gkout, in the layout
  * gmom_measures takes.  Exact only when think times are not mixed (see
  * mom_mixed_think in util/lvtab.h); main.c uses the full basis otherwise. */
-void gmom_descend(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM, mpq_vec_t* Gout, mpq_vec_t* Gkout)
+void gmom_descend(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM, int ltop, mpq_vec_t* Gout, mpq_vec_t* Gkout)
 {
 	int M = qn->M, R = qn->R;
 	mpz_t** L = qn->L; mpz_t* Z = qn->Z; int* N = qn->N; int* mi = qn->mi;
@@ -22,8 +22,8 @@ void gmom_descend(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM, mpq_vec_t* Gout, mp
 	int Ntot = 0; for (s = 0; s < R; s++) Ntot += N[s];
 
 
-	/* level-(R-1) Gk with R+1 components */
-	int L1 = R - 1;
+	/* level-ltop Gk with R+1 components (ltop = R-1 under --bmax 1) */
+	int L1 = ltop;
 	int nc = nck(M + L1 - 1, L1);
 	mpq_vec_t Gk = mpq_vec(nc * (R+1), 0, 1);
 	for (t = 0; t < nc; t++) {

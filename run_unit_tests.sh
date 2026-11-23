@@ -4,7 +4,7 @@
 # Compares outputs between solvers (mom, comom, recal) with options -e, -l, -t, -q
 #
 # Model types are detected automatically:
-#   Standard closed     -> mva, ca, recal, mom, comom, gld, mvamx, mvaldmx
+#   Standard closed     -> mva, ca, recal, mom, comom, gcomom, automom, gld, mvamx, mvaldmx
 #   Closed + MU         -> gld, comomld
 #   Mixed (LAMBDA)      -> mvamx
 #   Mixed + MU          -> mvaldmx
@@ -32,7 +32,7 @@ MODELS_DIR="models"
 TIMEOUT=120  # Timeout in seconds for each test
 
 # Solver groups
-CLOSED_SOLVERS=("./bin/mom" "./bin/mva" "./bin/ca" "./bin/comom" "./bin/recal")
+CLOSED_SOLVERS=("./bin/mom" "./bin/mva" "./bin/ca" "./bin/comom" "./bin/recal" "./bin/gcomom" "./bin/automom")
 CLOSED_OPTIONS=("-e" "-l" "-t" "-q")
 
 # New solvers that also handle standard closed models (for parity checking)

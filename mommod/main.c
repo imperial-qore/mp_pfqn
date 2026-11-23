@@ -46,14 +46,23 @@
 
 
 /* ------------------------------------------------------------------ */
+static double to_double(mpz_t num, mpz_t den);
+
 static double log_mpq(mpz_t num, mpz_t den)
 {
-	/* log(num/den) without ever forming num/den as a double, which would
-	 * overflow: mpz_get_d_2exp splits off the binary exponent. */
-	signed long en, ed;
-	double dn = mpz_get_d_2exp(&en, num);
-	double dd = mpz_get_d_2exp(&ed, den);
-	return log(dn) - log(dd) + (double)(en - ed) * log(2.0);
+	/* Same route as bin/mom and bin/comommod (mpq -> double, then log), so
+	 * the printed value is byte-identical to the other solvers; the
+	 * two-term form rounds twice and can land an ulp or two away (it did
+	 * on 11_swapped). It stays as the fallback for a G no double holds:
+	 * mpz_get_d_2exp splits off the binary exponent. */
+	double d = to_double(num, den);
+	if (d > 0.0 && !isinf(d)) return log(d);
+	{
+		signed long en, ed;
+		double dn = mpz_get_d_2exp(&en, num);
+		double dd = mpz_get_d_2exp(&ed, den);
+		return log(dn) - log(dd) + (double)(en - ed) * log(2.0);
+	}
 }
 
 static double to_double(mpz_t num, mpz_t den)

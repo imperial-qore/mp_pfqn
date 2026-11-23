@@ -76,14 +76,28 @@ static inline int qn_replica_mu(qnmodel* qn)
 			mpq_div(a[t], a[t-1], qn->mu[m][t-1]);
 		}
 		if (rc) break;
-		/* c = a^{*mi} */
-		for (t = 0; t <= Nt; t++) mpq_set(c[t], a[t]);
-		for (i = 2; i <= qn->mi[m]; i++) {
-			for (t = 0; t <= Nt; t++) {
-				mpq_set_ui(w[t], 0, 1);
-				for (s = 0; s <= t; s++) { mpq_mul(p, c[s], a[t-s]); mpq_add(w[t], w[t], p); }
+		/* c = a^{*mi} by repeated squaring: about 2 log2(mi) truncated
+		 * convolutions instead of mi-1 (a ZRP with L=1024 sites is one
+		 * station with mi=1024).  a is the running power a^{*2^j}, c
+		 * collects the powers of the set bits of mi; both are exact, so
+		 * the result is the same rational as the sequential product. */
+		mpq_set_ui(c[0], 1, 1);
+		for (t = 1; t <= Nt; t++) mpq_set_ui(c[t], 0, 1);
+		for (i = qn->mi[m]; i > 0; i >>= 1) {
+			if (i & 1) {
+				for (t = 0; t <= Nt; t++) {
+					mpq_set_ui(w[t], 0, 1);
+					for (s = 0; s <= t; s++) { mpq_mul(p, c[s], a[t-s]); mpq_add(w[t], w[t], p); }
+				}
+				for (t = 0; t <= Nt; t++) mpq_swap(c[t], w[t]);
 			}
-			for (t = 0; t <= Nt; t++) mpq_set(c[t], w[t]);
+			if (i > 1) {
+				for (t = 0; t <= Nt; t++) {
+					mpq_set_ui(w[t], 0, 1);
+					for (s = 0; s <= t; s++) { mpq_mul(p, a[s], a[t-s]); mpq_add(w[t], w[t], p); }
+				}
+				for (t = 0; t <= Nt; t++) mpq_swap(a[t], w[t]);
+			}
 		}
 		for (t = 1; t <= Nt; t++) mpq_div(qn->mu[m][t-1], c[t-1], c[t]);
 	}
