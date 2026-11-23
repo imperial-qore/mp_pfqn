@@ -72,10 +72,15 @@ Random non-degenerate models (R = 1..5, M = 1..24, four population
 profiles, half with think times, 30% with `mi` in {1,2}); each solver
 single-threaded with a 20 s cap, a chain stopping at its first timeout.
 The fit is least squares on log t, written to `calib.h`. Calibrated on
-picard09 (20 cores, shared): 1333 runs, median prediction error 1.5x to 2.3x
-by solver. On the grid itself the predicted-fastest solver was the fastest
-on 72/164 models, with picked/best time 1.06 at the median and 1.95 at the
-90th percentile.
+picard09 (20 cores, shared, load 8 to 19): 1396 runs over the 10
+candidates, median prediction error 1.4x (gmom) to 2.6x (comommod) by
+solver. On the grid models whose fastest solver takes at least 0.1 s, the
+pick was the fastest on 24/45, picked/best time 1.00 at the median and 2.05
+at the 90th percentile (worst 5.7: mom predicted at 1 s, 12.4 s measured, on
+R=5 with one long class). On 40 held-out random models: median 1.12, 28/40
+within 1.5x, worst 2.9. Most misses are on runs of a few milliseconds,
+where process start-up and host load decide the order. Models are drawn
+from fixed seeds (`zlib.crc32`), so a rerun times the same grid.
 
 The predictions assume a non-singular model: a singular one adds the cost
 of the chosen solver's exact fallback, which the model does not price.

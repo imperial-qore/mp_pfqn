@@ -33,6 +33,10 @@ static qnmodel* COMOM_MODEL = NULL;
 static int comom_main(int argc, char**argv);
 static int comom_fallback(qnmodel* q, bool log_output, bool normconst_output, bool normconst_g_output,
                           bool throughput_output, bool queue_output, bool debug_output);
+static void comom_print(qnmodel* q, mpq_t* ex, const char* head, bool log_output, bool normconst_output,
+                        bool normconst_g_output, bool throughput_output, bool queue_output, bool debug_output);
+static int comom_reduced(qnmodel* q, bool log_output, bool normconst_output, bool normconst_g_output,
+                         bool throughput_output, bool queue_output, bool debug_output, bool no_perturb);
 
 void printcompact(int*n,int R, double elapsed_time)
 {
@@ -427,6 +431,7 @@ static int comom_main(int argc, char**argv)
 	char* model_file = NULL;
 	bool auto_perturbation = false;
 	bool no_perturb = false;
+	bool no_reduce = false;   /* --no-reduce: skip the exact reduction below */
 	
 	if(argc < 2)
 	{
@@ -442,6 +447,7 @@ static int comom_main(int argc, char**argv)
 		printf("  -s seed          : Set perturbation seed (default: 23000)\n");
 		printf("  -X, --no-perturb : Fail on a singular system instead of the exact fallback\n");
 		printf("  -j n             : Threads for the per-prime interpolation tier of the fallback\n");
+		printf("  --no-reduce      : Do not fold identical stations or merge proportional classes first\n");
 		return -1;
 	}
 	
@@ -460,6 +466,8 @@ static int comom_main(int argc, char**argv)
 			debug_output = true; // -d now prints basis normalizing constants
 		} else if(strcmp(argv[i], "-X") == 0 || strcmp(argv[i], "--no-perturb") == 0) {
 			no_perturb = true;
+		} else if(strcmp(argv[i], "--no-reduce") == 0) {
+			no_reduce = true;
 		} else if(strcmp(argv[i], "-j") == 0) {
 			if (i + 1 < argc) COMOM_THREADS = atoi(argv[++i]);
 		} else if(strcmp(argv[i], "-p") == 0) {
@@ -493,6 +501,7 @@ static int comom_main(int argc, char**argv)
 			printf("  -s seed          : Set perturbation seed (default: 23000)\n");
 			printf("  -X, --no-perturb : Fail on a singular system instead of the exact fallback\n");
 			printf("  -j n             : Threads for the per-prime interpolation tier of the fallback\n");
+			printf("  --no-reduce      : Do not fold identical stations or merge proportional classes first\n");
 			return 0;
 		} else if(argv[i][0] == '-') {
 			// Skip unknown options silently
@@ -514,6 +523,7 @@ static int comom_main(int argc, char**argv)
 		printf("  -s seed          : Set perturbation seed (default: 23000)\n");
 		printf("  -X, --no-perturb : Fail on a singular system instead of the exact fallback\n");
 		printf("  -j n             : Threads for the per-prime interpolation tier of the fallback\n");
+		printf("  --no-reduce      : Do not fold identical stations or merge proportional classes first\n");
 		return -1;
 	}
 	
@@ -522,6 +532,16 @@ static int comom_main(int argc, char**argv)
 	else {
 		qnm=(qnmodel*)readmodel(model_file);
 		qn_require_closed(qnm, "comom", 0);
+	}
+
+	/* Exact reduction first (util/singular.h): fewer stations and classes
+	 * in the CoMoM basis, constants of the input model recovered exactly.
+	 * Not under -p, which perturbs, nor for the derived models of the
+	 * fallback (already reduced). */
+	if (!COMOM_CAPTURE && !no_reduce && perturbation_digit == 0) {
+		int rc = comom_reduced(qnm, log_output, normconst_output, normconst_g_output,
+		                       throughput_output, queue_output, debug_output, no_perturb);
+		if (rc != -1) return rc;
 	}
 	
 	// Apply perturbation if requested
@@ -1507,8 +1527,7 @@ static void sg_measure(qnmodel* q, mpq_t* ex, int k, int r, mpq_t out)
 static int comom_fallback(qnmodel* q, bool log_output, bool normconst_output, bool normconst_g_output,
                           bool throughput_output, bool queue_output, bool debug_output)
 {
-	int R = q->R, M = q->M, nres = SG_NRES(q), k, r;
-	bool report = !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output;
+	int nres = SG_NRES(q);
 	mpq_t* ex = sg_mpq_arr(nres);
 	char tier[256];
 	/* Tier 4 runs on comommod's engine: the Ntot+1 perturbed solves of
@@ -1528,7 +1547,21 @@ static int comom_fallback(qnmodel* q, bool log_output, bool normconst_output, bo
 		return 1;
 	}
 	fprintf(stderr, "comom: singular CoMoM system, solved exactly via %s\n", tier);
+	char head[300];
+	snprintf(head, sizeof head, "Singular CoMoM system, solved exactly via %s", tier);
+	comom_print(q, ex, head, log_output, normconst_output, normconst_g_output,
+	            throughput_output, queue_output, debug_output);
+	sg_mpq_arr_free(ex, nres);
+	return 0;
+}
 
+/* Print the measures of q from its exported constants ex[], in comom's
+ * formats; head is the route line of the full report. */
+static void comom_print(qnmodel* q, mpq_t* ex, const char* head, bool log_output, bool normconst_output,
+                        bool normconst_g_output, bool throughput_output, bool queue_output, bool debug_output)
+{
+	int R = q->R, M = q->M, k, r;
+	bool report = !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output;
 	mpf_t f; mpf_init(f);
 	mpq_t v, tot; mpq_init(v); mpq_init(tot);
 	if (log_output)
@@ -1547,7 +1580,7 @@ static int comom_fallback(qnmodel* q, bool log_output, bool normconst_output, bo
 			printf("\n");
 		}
 	else if (report) {
-		printf("\nSingular CoMoM system, solved exactly via %s\n", tier);
+		printf("\n%s\n", head);
 		printf("\n========== Performance Metrics ==========\n");
 		if (debug_output) gmp_printf("G = %Qd\n", ex[0]);
 		else {
@@ -1578,6 +1611,38 @@ static int comom_fallback(qnmodel* q, bool log_output, bool normconst_output, bo
 		printf("Elapsed time (CoMoM): %.6f s\n", t1-t0);
 	}
 	mpq_clear(v); mpq_clear(tot); mpf_clear(f);
+}
+
+/* Exact reduction before the solve (util/singular.h): stations with
+ * identical demand rows folded, classes with proportional demands and
+ * think times aggregated, the smaller model solved and its constants
+ * mapped back.  -1 if nothing reduces, else the exit code. */
+static int comom_reduced(qnmodel* q, bool log_output, bool normconst_output, bool normconst_g_output,
+                         bool throughput_output, bool queue_output, bool debug_output, bool no_perturb)
+{
+	int nres = SG_NRES(q);
+	mpq_t* ex = sg_mpq_arr(nres);
+	char tier[256];
+	if (!no_perturb) comommod_config(COMOM_THREADS, 61, 0, 0, 0);
+	sg_ops ops = { comom_sg_direct, comommod_interp, NULL, " per prime" };
+	sg_qn_fix_nt(q);
+	int rc = sg_solve_reduced(q, ex, tier, sizeof tier, &ops, !no_perturb);
+	if (rc == -1) { sg_mpq_arr_free(ex, nres); return -1; }
+	if (rc != 0) {
+		if (no_perturb)
+			fprintf(stderr, "\nError: Model cannot be solved exactly by the CoMoM solver.\n"
+			                "The system of equations of the reduced model is singular; -X suppresses the singular fallback.\n");
+		else
+			fprintf(stderr, "\nError: the CoMoM system of the reduced model is singular, and every exact fallback failed.\n"
+			                "bin/ca solves any well-posed model by convolution.\n");
+		sg_mpq_arr_free(ex, nres);
+		return 1;
+	}
+	fprintf(stderr, "comom: solved the reduced model (%s)\n", tier);
+	char head[300];
+	snprintf(head, sizeof head, "Solved the exactly reduced model (%s)", tier);
+	comom_print(q, ex, head, log_output, normconst_output, normconst_g_output,
+	            throughput_output, queue_output, debug_output);
 	sg_mpq_arr_free(ex, nres);
 	return 0;
 }

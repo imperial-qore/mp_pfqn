@@ -19,10 +19,15 @@
  * interpolation over Q from exact solves of perturbed models; a solver
  * may replace it (the multi-modular solvers interpolate per prime).
  *
- * Every tier is exact: none of them approximates G. */
+ * Every tier is exact: none of them approximates G.
+ *
+ * sg_solve_reduced() applies tiers 2-3 up front, before the first solve,
+ * so that mom and comom never build a basis over duplicate stations or
+ * proportional classes. */
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <gmp.h>
 #include "util.h"
 
@@ -231,10 +236,45 @@ static inline void sg_class_factor(mpq_t F, int* Nv, int R, int ng, int* grp, mp
 	mpz_clear(f); mpq_clear(t);
 }
 
+/* Exported constants of q from those of sg_merge_stations(q, grp), o. */
+static inline void sg_map_stations(int R, int M, const int* grp, mpq_t* o, mpq_t* out)
+{
+	int i, k;
+	mpq_set(out[0], o[0]);
+	for (i=0;i<R;i++) mpq_set(out[1+i], o[1+i]);
+	for (k=0;k<M;k++) for (i=0;i<R;i++) mpq_set(out[SG_IDX_GK(R,k,i)], o[SG_IDX_GK(R,grp[k],i)]);
+}
+
+/* Exported constants of q from those of sg_merge_classes(q, grp, c) (ng
+ * classes), o: scaled by F of the population vector each one refers to. */
+static inline void sg_map_classes(qnmodel* q, int ng, int* grp, mpq_t* c, mpq_t* o, mpq_t* out)
+{
+	int R = q->R, M = q->M, i, k;
+	int* Nv = (int*) malloc(R*sizeof(int));
+	mpq_t F; mpq_init(F);
+	for (i=0;i<R;i++) Nv[i] = q->N[i];
+	sg_class_factor(F, Nv, R, ng, grp, c);
+	mpq_mul(out[0], o[0], F);
+	for (i=0;i<R;i++)
+	{
+		if (q->N[i] == 0) {
+			mpq_set_ui(out[1+i], 0, 1);
+			for (k=0;k<M;k++) mpq_set_ui(out[SG_IDX_GK(R,k,i)], 0, 1);
+			continue;
+		}
+		Nv[i]--;
+		sg_class_factor(F, Nv, R, ng, grp, c);
+		Nv[i]++;
+		mpq_mul(out[1+i], o[1+grp[i]], F);
+		for (k=0;k<M;k++) mpq_mul(out[SG_IDX_GK(R,k,i)], o[SG_IDX_GK(ng,k,grp[i])], F);
+	}
+	mpq_clear(F); free(Nv);
+}
+
 /* Tiers 1-3.  tier receives a short description of the route taken. */
 static inline int sg_solve_reduce(qnmodel* q, mpq_t* out, char* tier, size_t tsz, const sg_ops* ops, int skip_direct)
 {
-	int R = q->R, M = q->M, rc, reordered, i, k;
+	int R = q->R, M = q->M, rc, reordered;
 	rc = sg_solve_order(q, out, &reordered, ops, skip_direct);
 	if (rc == 0) { if (reordered) snprintf(tier, tsz, "class order"); return 0; }
 	if (rc != 1) return rc;
@@ -251,9 +291,7 @@ static inline int sg_solve_reduce(qnmodel* q, mpq_t* out, char* tier, size_t tsz
 			rc = sg_solve_reduce(ms, o, sub, sizeof sub, ops, 0);
 			if (rc == 0)
 			{
-				mpq_set(out[0], o[0]);
-				for (i=0;i<R;i++) mpq_set(out[1+i], o[1+i]);
-				for (k=0;k<M;k++) for (i=0;i<R;i++) mpq_set(out[SG_IDX_GK(R,k,i)], o[SG_IDX_GK(R,grp[k],i)]);
+				sg_map_stations(R, M, grp, o, out);
 				snprintf(tier, tsz, "merged stations (M=%d->%d)%s%s", M, ms->M, sub[0] ? ", " : "", sub);
 			}
 			sg_mpq_arr_free(o, nres2);
@@ -276,25 +314,7 @@ static inline int sg_solve_reduce(qnmodel* q, mpq_t* out, char* tier, size_t tsz
 			rc = sg_solve_reduce(mc, o, sub, sizeof sub, ops, 0);
 			if (rc == 0)
 			{
-				int* Nv = (int*) malloc(R*sizeof(int));
-				mpq_t F; mpq_init(F);
-				for (i=0;i<R;i++) Nv[i] = q->N[i];
-				sg_class_factor(F, Nv, R, ng, grp, c);
-				mpq_mul(out[0], o[0], F);
-				for (i=0;i<R;i++)
-				{
-					if (q->N[i] == 0) {
-						mpq_set_ui(out[1+i], 0, 1);
-						for (k=0;k<M;k++) mpq_set_ui(out[SG_IDX_GK(R,k,i)], 0, 1);
-						continue;
-					}
-					Nv[i]--;
-					sg_class_factor(F, Nv, R, ng, grp, c);
-					Nv[i]++;
-					mpq_mul(out[1+i], o[1+grp[i]], F);
-					for (k=0;k<M;k++) mpq_mul(out[SG_IDX_GK(R,k,i)], o[SG_IDX_GK(ng,k,grp[i])], F);
-				}
-				mpq_clear(F); free(Nv);
+				sg_map_classes(q, ng, grp, c, o, out);
 				snprintf(tier, tsz, "merged classes (R=%d->%d)%s%s", R, ng, sub[0] ? ", " : "", sub);
 			}
 			sg_mpq_arr_free(o, nres2);
@@ -438,6 +458,52 @@ static inline int sg_solve_tiered(qnmodel* q, mpq_t* out, char* tier, size_t tsz
 	if (rc == 0)
 		snprintf(tier, tsz, "interpolation (%d+1 perturbed solves%s)", sg_interp_degree(q),
 		         ops->interp_note ? ops->interp_note : "");
+	return rc;
+}
+
+/* Reduce first, on every run: fold stations with identical demand rows
+ * and aggregate classes with proportional demands and think times (both
+ * exact, see sg_merge_stations and sg_merge_classes), solve the smaller
+ * model and map its constants back.  Folding stations shrinks M and
+ * aggregating classes shrinks R, so the MoM/CoMoM basis of the reduced
+ * model is smaller; neither changes what the other finds, so one pass of
+ * each suffices.  tiered: solve the reduced model through
+ * sg_solve_tiered (else ops->solve only, for -X).  Returns -1 if nothing
+ * reduces (q untouched, the caller solves it as usual), else the solve's
+ * 0 / 1 / 2; tier receives the route ("M=a->b, R=c->d[, sub-route]"). */
+static inline int sg_solve_reduced(qnmodel* q, mpq_t* out, char* tier, size_t tsz, const sg_ops* ops, int tiered)
+{
+	int R = q->R, M = q->M, rc;
+	int* sgrp = (int*) malloc(M*sizeof(int));
+	int* cgrp = (int*) malloc(R*sizeof(int));
+	mpq_t* c = sg_mpq_arr(R);
+	qnmodel* ms = sg_merge_stations(q, sgrp);
+	qnmodel* mid = ms ? ms : q;
+	qnmodel* mc = sg_merge_classes(mid, cgrp, c);
+	if (!ms && !mc) { free(sgrp); free(cgrp); sg_mpq_arr_free(c, R); return -1; }
+	qnmodel* red = mc ? mc : ms;
+	int nred = SG_NRES(red);
+	mpq_t* o = sg_mpq_arr(nred);
+	char sub[200] = "";
+	rc = tiered ? sg_solve_tiered(red, o, sub, sizeof sub, ops, 0) : ops->solve(red, o, ops->ctx);
+	if (rc == 0)
+	{
+		if (ms && mc) {
+			int nmid = SG_NRES(ms);
+			mpq_t* om = sg_mpq_arr(nmid);
+			sg_map_classes(ms, mc->R, cgrp, c, o, om);
+			sg_map_stations(R, M, sgrp, om, out);
+			sg_mpq_arr_free(om, nmid);
+		}
+		else if (mc) sg_map_classes(q, mc->R, cgrp, c, o, out);
+		else sg_map_stations(R, M, sgrp, o, out);
+		int plain = !tiered || strcmp(sub, "direct") == 0;
+		snprintf(tier, tsz, "M=%d->%d, R=%d->%d%s%s", M, red->M, R, red->R, plain ? "" : ", ", plain ? "" : sub);
+	}
+	sg_mpq_arr_free(o, nred);
+	if (mc) sg_qn_del(mc);
+	if (ms) sg_qn_del(ms);
+	free(sgrp); free(cgrp); sg_mpq_arr_free(c, R);
 	return rc;
 }
 

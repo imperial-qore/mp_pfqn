@@ -409,6 +409,9 @@ int main(int argc, char**argv)
 	 * -p is still honoured. */
 	bool no_perturb = false;
 	int mom_threads = 1;
+	/* --no-reduce: skip the exact reduction (identical stations folded,
+	 * proportional classes aggregated) done before every solve */
+	bool no_reduce = false;
 
 	if(argc < 2)
 	{
@@ -426,6 +429,7 @@ int main(int argc, char**argv)
 		printf("  --linbox         : Use LinBox Dixon p-adic lifting solver (avoids coefficient blowup)\n");
 		printf("  -X, --no-perturb : Fail on a singular system instead of auto-perturbing (exact-only probe)\n");
 		printf("  -j n             : Threads for the modular interpolation of singular models (default 1)\n");
+		printf("  --no-reduce      : Do not fold identical stations or merge proportional classes first\n");
 		return -1;
 	}
 	
@@ -459,6 +463,7 @@ int main(int argc, char**argv)
 			printf("  --linbox         : Use LinBox Dixon p-adic lifting solver (avoids coefficient blowup)\n");
 			printf("  -X, --no-perturb : Fail on a singular system instead of auto-perturbing (exact-only probe)\n");
 			printf("  -j n             : Threads for the modular interpolation of singular models (default 1)\n");
+			printf("  --no-reduce      : Do not fold identical stations or merge proportional classes first\n");
 			return 0;
 		} else if(strcmp(argv[i], "-p") == 0) {
 			if(i + 1 < argc) {
@@ -484,6 +489,8 @@ int main(int argc, char**argv)
 			use_linbox = true;
 		} else if(strcmp(argv[i], "-X") == 0 || strcmp(argv[i], "--no-perturb") == 0) {
 			no_perturb = true;
+		} else if(strcmp(argv[i], "--no-reduce") == 0) {
+			no_reduce = true;
 		} else if(argv[i][0] == '-') {
 			// Skip unknown options silently - no additional logic needed
 		} else {
@@ -506,6 +513,7 @@ int main(int argc, char**argv)
 		printf("  --linbox         : Use LinBox Dixon p-adic lifting solver (avoids coefficient blowup)\n");
 		printf("  -X, --no-perturb : Fail on a singular system instead of auto-perturbing (exact-only probe)\n");
 		printf("  -j n             : Threads for the modular interpolation of singular models (default 1)\n");
+		printf("  --no-reduce      : Do not fold identical stations or merge proportional classes first\n");
 		return -1;
 	}
 	
@@ -567,6 +575,41 @@ int main(int argc, char**argv)
 		}
 	}
 	
+	/* Exact reduction first (util/singular.h): stations with identical
+	 * demand rows fold into one of summed multiplicity and classes with
+	 * proportional demands and think times aggregate, so the MoM basis is
+	 * built over fewer stations and classes; the constants of the input
+	 * model are recovered exactly.  Not under -p or -b, which perturb. */
+	if (!no_reduce && perturbation_digit == 0 && !bounds_output) {
+		bool report = !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output;
+		int nres = SG_NRES(qnm);
+		mpq_t* exact = sg_mpq_arr(nres);
+		char tier[256];
+		if (!no_perturb) mommod_config(mom_threads, 61, 0, 0, 64);
+		sg_ops ops = { sg_direct, mommod_interp, NULL, " per prime" };
+		int rc = sg_solve_reduced(qnm, exact, tier, sizeof tier, &ops, !no_perturb);
+		if (rc != -1) {
+			if (rc != 0) {
+				if (no_perturb)
+					fprintf(stderr, "\nError: Model cannot be solved exactly by the MoM solver.\n"
+					                "The system of equations of the reduced model is singular; -X suppresses the singular fallback.\n");
+				else
+					fprintf(stderr, "\nError: the MoM system of the reduced model is singular, and every exact fallback failed.\n"
+					                "bin/ca solves any well-posed model by convolution.\n");
+				sg_mpq_arr_free(exact, nres);
+				return 1;
+			}
+			fprintf(stderr, "mom: solved the reduced model (%s)\n", tier);
+			if (report) printf("\nSolved the exactly reduced model (%s)\n", tier);
+			report_exact(qnm, exact, verbose_output, log_output, normconst_output, normconst_g_output,
+			             throughput_output, queue_output, debug_output, scale_factor);
+			sg_mpq_arr_free(exact, nres);
+			mpz_clear(scale_factor);
+			return 0;
+		}
+		sg_mpq_arr_free(exact, nres);
+	}
+
 	// Try to solve the model
 	int result = solve_model(qnm, argc, argv, verbose_output, log_output,
 	                        normconst_output, normconst_g_output, throughput_output,
