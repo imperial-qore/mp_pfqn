@@ -57,7 +57,7 @@ The test script runs all 5 solvers (mva, ca, recal, mom, comom) with options `-e
 | `recal/` | Recursion by Chain (RECAL) | Efficient chain-based recursion |
 | `mom/` | Method of Moments (MoM) | Exact linear system solve; optional LinBox C++ backend. Every run first folds identical stations into `mi` and aggregates proportional classes (`sg_solve_reduced`, exact; `--no-reduce` skips it), which also lets `-X` solve such models. Singular models are solved exactly by the tiered fallback of `util/singular.h` instead of the old automatic perturbation; tier 4 runs on mommod's modular engine (`mommod/engine.c`, linked as `mom/mmengine.o` with every symbol but the `mmengine.h` API made local), `-j` threads |
 | `comom/` | Class-Oriented MoM (CoMoM) | BTF decomposition for sparse systems. Same exact reduction before every solve as `mom` (`--no-reduce`). Singular models are solved exactly by the tiered fallback of `util/singular.h` (derived models re-solved through `comom_main` in capture mode); tier 4 runs on comommod's modular engine (`comommod/engine.c`, linked as `comom/ccengine.o` with every symbol but the `ccengine.h` API made local), `-j` threads; `-X` fails instead, `-p` keeps the approximate perturbation |
-| `gmom/` | Generalized MoM (divide-and-conquer, MoM(Bmax)) | `--bmax B` (default 1, the prefix chain): a sub-model with d queues adds min(d,B) GCEs and carries basis level max(1, r-min(d,B)) (paper Sec. 4.1.2-4.2, `setupb.c`); B=M is up to 300x faster than B=1 at M=R. `A^T A` factored once per (sub-model, class); single-queue sub-models advanced by their own square system and classes carried over exactly, not by convolution (was 88% of the run). Overdetermined per-level system solved by exact normal equations; lower replica levels carried through the recursion give G(N)/X/Q; distinct single-server closed queues only. `-j` runs sub-models of equal queue count in parallel (OpenMP; `nck` table warmed first, not thread safe). `-p`/`-s` perturbation with analytic descaling, `-b` two-sided (+eps/-eps) bracket, `--force-perturb`, `-X`. See `gmom/README.md` |
+| `gmom/` | Generalized MoM (divide-and-conquer, MoM(Bmax)) | `--bmax B` (default 1, the prefix chain): a sub-model with d queues adds min(d,B) GCEs and carries basis level max(1, r-min(d,B)) (paper Sec. 4.1.2-4.2, `setupb.c`); B=M is up to 300x faster than B=1 at M=R. `A^T A` factored once per (sub-model, class); single-queue sub-models advanced by their own square system and classes carried over exactly, not by convolution (was 88% of the run). Overdetermined per-level system solved by exact normal equations; lower replica levels carried through the recursion give G(N)/X/Q; closed models with any multiplicity, integer or rational (the tree runs on copy vectors). `-j` runs sub-models of equal queue count in parallel (OpenMP; `nck` table warmed first, not thread safe). `-p`/`-s` perturbation with analytic descaling, `-b` two-sided (+eps/-eps) bracket, `--force-perturb`, `-X`. See `gmom/README.md` |
 | `safe_comom/` | CoMoM exact on singular models | Hybrid MVA/CoMoM (TSE'09 Appendix A): tiered orchestrator - plain CoMoM, then class-permuted CoMoM, then exact convolution (`ca`) for genuine loading degeneracies. Every tier exact. See `safe_comom/README.md` |
 | `safe_mom/` | MoM exact on singular models | Same tiered construction on the MoM basis: plain `mom -X`, then class-permuted `mom -X`, then exact convolution (`ca`). Adds `-X`/`--no-perturb` to `mom` (fail instead of auto-perturbing). Tier driver shared with `safe_comom` (`util/safe_tiers.c`). See `safe_mom/README.md` |
 | `safe_gmom/` | Generalized MoM exact on singular models | Same tiers on gmom's b=1 basis: `gmom -X`, class-permuted `gmom -X`, then `ca`. Adds `-X`/`--no-perturb` to `gmom`. Tier 2 never fires (gmom picks the class order itself via its exact b=1 oracle); Tier 3 also absorbs gmom's domain limits (R=1, multiserver, load-dependent). Open/mixed reported as out of scope. See `safe_gmom/README.md` |
@@ -125,6 +125,19 @@ servers (rates `min(n, mi)`), a different model, and disagreed with `ca` by 1% t
 they now fold the copies into one load-dependent station of rates `c(t-1)/c(t)`, `c` the `mi`-fold convolution
 of `1/(mu(1)...mu(t))` (`t/(t+mi-1)` for plain queues), or, in `mvaldmx`, expand them (`util/replicas.h`), and
 match `ca` exactly.
+
+**Fractional multiplicities** (`3/2 L1 ... LR`): `mom`, `comom`, `gcomom` and `gmom` accept a positive rational `mi = e`,
+the station whose generating function is `(1 - sum_r L_r x_r)^(-e)`, i.e. a load-dependent station with rates
+`mu(t) = t/(t+e-1)` (integer `e` is `e` copies). It is the only load-dependent family that keeps the MoM basis:
+the population constraints just take the coefficient `e + replicas`. Stored as numerators over a common
+denominator (`qnmodel.mden`, `qn_mult()` in `util/util.h`); `readmodel` accepts it only where the program sets
+`qn_allow_rational_mi`, so every other solver refuses the file. Singular fractional models use the exact
+interpolation tier over Q (`sg_interp_exact`), not the modular engines; `gcomom` splits `e` into a never-removed
+base `frac(e)` plus removable copies and skips its convolution fallback for sub-models with a fractional base.
+`gmom` (which before took unit multiplicities only) now builds its model tree on copy vectors the same way:
+GCEs remove one copy of the last `min(Bmax, #removable)` stations, level `max(1, r - B)`, a child keeping the
+station reads the same replica table; unit multiplicities give the original tree. Verified exactly against
+`gld` with MU rates `t/(t+e-1)`.
 
 12 test models in `models/` (01_single through 12_expanded).
 

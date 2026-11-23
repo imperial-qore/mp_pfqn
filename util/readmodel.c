@@ -4,6 +4,8 @@
 #include "util.h"
 #include "assert.h"
 
+int qn_allow_rational_mi = 0;
+
 qnmodel* readmodel(char* filename)
 {
 	qnmodel* qn=(qnmodel*)malloc(sizeof(qnmodel));
@@ -16,6 +18,7 @@ qnmodel* readmodel(char* filename)
 	qn->isLD = 0;
 	qn->Nt = 0;
 	qn->mu = NULL;
+	qn->mden = 1;
 
 	/* open file*/
 	FILE *f = fopen(filename,"r");
@@ -70,12 +73,17 @@ qnmodel* readmodel(char* filename)
 		}
 	}
 	qn->mi=(int*)int_vec(qn->M,0);
+	/* multiplicities are read as rationals and stored over a common
+	 * denominator (util.h, qn_mult) */
+	mpq_t* miq = (mpq_t*)malloc(qn->M * sizeof(mpq_t));
 	for(m=1;m<=qn->M;m++)
 	{
-	 if (fscanf(f,"%d",&qn->mi[m-1]) != 1) {
+	 mpq_init(miq[m-1]);
+	 if (gmp_fscanf(f,"%Qd",&miq[m-1]) != 1 || mpz_sgn(mpq_denref(miq[m-1])) == 0) {
 		printf("Error reading mi[%d] from file\n", m-1);
 		exit(1);
 	 }
+	 mpq_canonicalize(miq[m-1]);
 	 for (r=1;r<=qn->R;r++)
 	 {
 		if (gmp_fscanf(f,"%Zd",&qn->L[m-1][r-1]) != 1) {
@@ -86,6 +94,39 @@ qnmodel* readmodel(char* filename)
 	 if (fscanf(f,"\n") != 0) {
 		/* Newline consumed, continue */
 	 }
+	}
+
+	{
+		mpz_t den, t;
+		mpz_init_set_ui(den, 1); mpz_init(t);
+		for (m = 0; m < qn->M; m++) mpz_lcm(den, den, mpq_denref(miq[m]));
+		if (mpz_cmp_ui(den, 1) > 0) {
+			if (!qn_allow_rational_mi) {
+				printf("Error: fractional multiplicities are not supported by this solver (mom and comom accept them)\n");
+				exit(1);
+			}
+			if (!mpz_fits_sint_p(den)) {
+				printf("Error: the common denominator of the multiplicities is too large\n");
+				exit(1);
+			}
+		}
+		qn->mden = (int)mpz_get_si(den);
+		for (m = 0; m < qn->M; m++) {
+			if (mpq_sgn(miq[m]) <= 0) {
+				gmp_printf("Error: multiplicity mi[%d]=%Qd must be positive\n", m, miq[m]);
+				exit(1);
+			}
+			mpz_divexact(t, den, mpq_denref(miq[m]));
+			mpz_mul(t, t, mpq_numref(miq[m]));
+			if (!mpz_fits_sint_p(t)) {
+				printf("Error: multiplicity mi[%d] is too large\n", m);
+				exit(1);
+			}
+			qn->mi[m] = (int)mpz_get_si(t);
+			mpq_clear(miq[m]);
+		}
+		free(miq);
+		mpz_clear(den); mpz_clear(t);
 	}
 
 	/* sanity checks on the fixed part of the model */
@@ -104,7 +145,7 @@ qnmodel* readmodel(char* filename)
 		}
 	}
 	for (m = 0; m < qn->M; m++) {
-		if (qn->mi[m] < 1) {
+		if (qn->mden == 1 && qn->mi[m] < 1) {
 			printf("Error: multiplicity mi[%d]=%d must be >= 1\n", m, qn->mi[m]);
 			exit(1);
 		}

@@ -129,7 +129,7 @@ static void lower_step(qnmodel* qnm, lvtab* T, int r, mpq_vec_t* low, mpq_t* glo
 				for (j=0;j<m;j++) {
 					if (mpz_sgn(qnm->L[j][r-1]) == 0) continue;
 					mpq_set_z(c, qnm->L[j][r-1]);
-					mpq_set_si(w, qnm->mi[j] + T->cb[l][i][j], 1);
+					qn_mult(w, qnm, j, T->cb[l][i][j]);
 					mpq_mul(c, c, w);
 					mpq_mul(w, c, above[T->up[l][i*m+j]*r+s]);
 					mpq_add(acc, acc, w);
@@ -185,7 +185,7 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 			/* initialize linear system */
 			setup_start = CPUTIME;
 			int show_progress = !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output && !bounds_output;
-			A =(LS*) setupls_progress(qnm->L,n,qnm->Z,qnm->mi,m,r,setup_start,show_progress);
+			A =(LS*) setupls_progress(qnm->L,n,qnm->Z,qnm->mi,qn_mden(qnm),m,r,setup_start,show_progress);
 			if (A == NULL) {
 				return -1; // Signal singular matrix
 			}
@@ -210,7 +210,7 @@ int solve_model(qnmodel* qnm, int argc, char** argv, bool verbose_output, bool l
 			free(A->A12); free(A->B1r); free(A->B2r); free(A);
 			setup_start = CPUTIME;
 			int show_progress = !log_output && !normconst_output && !normconst_g_output && !throughput_output && !queue_output && !bounds_output;
-			A =(LS*) setupls_progress(qnm->L,n,qnm->Z,qnm->mi,m,r,setup_start,show_progress);
+			A =(LS*) setupls_progress(qnm->L,n,qnm->Z,qnm->mi,qn_mden(qnm),m,r,setup_start,show_progress);
 			if (A == NULL) {
 				return -1; // Signal singular matrix
 			}
@@ -524,6 +524,7 @@ int main(int argc, char**argv)
 	}
 	
 	USE_LINBOX = use_linbox;
+	qn_allow_rational_mi = 1;   /* fractional multiplicities (util.h, qn_mult) */
 	qnm=(qnmodel*)readmodel(model_file);
 	qn_require_closed(qnm, "mom", 0);
 	
@@ -586,7 +587,7 @@ int main(int argc, char**argv)
 		mpq_t* exact = sg_mpq_arr(nres);
 		char tier[256];
 		if (!no_perturb) mommod_config(mom_threads, 61, 0, 0, 64);
-		sg_ops ops = { sg_direct, mommod_interp, NULL, " per prime" };
+		sg_ops ops = { sg_direct, qn_mden(qnm) > 1 ? NULL : mommod_interp, NULL, qn_mden(qnm) > 1 ? "" : " per prime" };
 		int rc = sg_solve_reduced(qnm, exact, tier, sizeof tier, &ops, !no_perturb);
 		if (rc != -1) {
 			if (rc != 0) {
@@ -640,7 +641,7 @@ int main(int argc, char**argv)
 		 * long rationals, while per prime in Z/p they are word-size
 		 * recursions, combined by CRT into the same exact value. */
 		mommod_config(mom_threads, 61, 0, 0, 64);
-		sg_ops ops = { sg_direct, mommod_interp, NULL, " per prime" };
+		sg_ops ops = { sg_direct, qn_mden(qnm) > 1 ? NULL : mommod_interp, NULL, qn_mden(qnm) > 1 ? "" : " per prime" };
 		int rc = sg_solve_tiered(qnm, exact, tier, sizeof tier, &ops, 1);
 		if (rc != 0) {
 			fprintf(stderr, "\nError: the MoM system is singular for this model, and every exact fallback\n"

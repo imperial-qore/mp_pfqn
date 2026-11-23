@@ -140,6 +140,10 @@ typedef struct {
 
 typedef struct {
 	int M, R; int* N; mpz_t* Z; mpz_t** L; int* mi;
+	/* fractional multiplicity e_k = mi[k]/mden (util.h, qn_mult) splits into a
+	 * base fb[k]/mden in [0,1), never removed, plus v_k removable copies, the
+	 * integers of the copy vectors; fb = 0 and mden = 1 for integer models */
+	int mden; int* fb; int* vfull;
 	gmodel* m; int nm, full;
 	declist** dl; int Dmax;
 	long unk_total;
@@ -211,27 +215,31 @@ static void fam_build(gctx* g)
 	vhash H = { 4096, xcalloc(4096, sizeof(int)) };
 	for (int z = 0; z < H.cap; z++) H.key[z] = -1;
 	int* tmp = xcalloc(M, sizeof(int));
-	g->full = vh_find_or_add(&H, g, &cap, g->mi);
+	g->full = vh_find_or_add(&H, g, &cap, g->vfull);
 	for (int id = 0; id < g->nm; id++) {
 		gmodel* x = &g->m[id];
 		int nt = 0;
-		for (int k = 0; k < M; k++) if (x->v[k] > 0) nt++;
+		for (int k = 0; k < M; k++) if (x->v[k] > 0 || g->fb[k] > 0) nt++;
 		x->nt = nt; x->T = xcalloc(nt, sizeof(int)); x->pos = xcalloc(M, sizeof(int));
 		nt = 0; x->tot = 0;
-		for (int k = 0; k < M; k++) { x->pos[k] = -1; if (x->v[k] > 0) { x->pos[k] = nt; x->T[nt++] = k; x->tot += x->v[k]; } }
-		x->D = (nt >= R-1) ? 1 : (nt > 0 ? nt : 1);
-		x->nB = MIN(R-1, nt);
+		int nrem = 0;   /* support stations with a removable copy (all of them in integer models) */
+		for (int k = 0; k < M; k++) { x->pos[k] = -1; if (x->v[k] > 0 || g->fb[k] > 0) { x->pos[k] = nt; x->T[nt++] = k; x->tot += x->v[k]; if (x->v[k] > 0) nrem++; } }
+		x->D = (nrem >= R-1) ? 1 : (nt > 0 ? nt : 1);
+		x->nB = MIN(R-1, nrem);
 		x->Bj = xcalloc(x->nB, sizeof(int)); x->child = xcalloc(x->nB, sizeof(int));
+		int* rem = xcalloc(nrem ? nrem : 1, sizeof(int));
+		{ int z = 0; for (int ti = 0; ti < nt; ti++) if (x->v[x->T[ti]] > 0) rem[z++] = x->T[ti]; }
 		for (int b = 0; b < x->nB; b++) {
-			int j = x->T[nt - x->nB + b], any = 0;
+			int j = rem[nrem - x->nB + b], any = 0;
 			memcpy(tmp, x->v, M*sizeof(int)); tmp[j]--;
-			for (int k = 0; k < M; k++) if (tmp[k]) { any = 1; break; }
+			for (int k = 0; k < M; k++) if (tmp[k] || g->fb[k]) { any = 1; break; }
 			x->Bj[b] = j;
 			/* vh_find_or_add may move g->m: re-fetch x after it */
 			int ch = any ? vh_find_or_add(&H, g, &cap, tmp) : -1;   /* the empty model is never read */
 			x = &g->m[id];
 			x->child[b] = ch;
 		}
+		free(rem);
 	}
 	free(tmp); free(H.key);
 	g->Dmax = 1; for (int i = 0; i < g->nm; i++) g->Dmax = MAX(g->Dmax, g->m[i].D);
@@ -366,7 +374,8 @@ static int setup_class(gctx* g, gmodel* x, int c)
 		}
 		for (int s = 0; s < c; s++) {                          /* PC */
 			int u = dl->up[(size_t)i*c+s];
-			for (int ti = 0; ti < nt; ti++) { int k = x->T[ti]; mpz_mul_si(w, g->L[k][s], x->v[k]); ADD(UNK(ti, u), w); }
+			/* (fb_k/mden + v_k) L_ks, the row scaled by mden (its right-hand side too, in step_model) */
+			for (int ti = 0; ti < nt; ti++) { int k = x->T[ti]; mpz_mul_si(w, g->L[k][s], g->fb[k] + (long)g->mden * x->v[k]); ADD(UNK(ti, u), w); }
 			rd[nr++] = (rowdesc){ RPC, s, 0, i };
 		}
 		for (int s = 0; s < c; s++) {                          /* class s idle in the support */
@@ -553,7 +562,7 @@ static void step_model(gctx* g, gmodel* x, int c, int n)
 		mpq_set_z(w, g->Z[c]); mpq_mul(T->P[i], w, pv->P[i]);
 		for (int ti = 0; ti < nt; ti++) {
 			int k = x->T[ti];
-			mpz_mul_si(mpq_numref(w), g->L[k][c], x->v[k]); mpz_set_ui(mpq_denref(w), 1);
+			mpz_mul_si(mpq_numref(w), g->L[k][c], g->fb[k] + (long)g->mden * x->v[k]); mpz_set_ui(mpq_denref(w), g->mden); mpq_canonicalize(w);
 			mpq_mul(t, w, pv->Q[ti*nd+i]); mpq_add(T->P[i], T->P[i], t);
 		}
 		mpq_set_si(w, 1, n); mpq_mul(T->P[i], T->P[i], w);
@@ -574,6 +583,7 @@ static void step_model(gctx* g, gmodel* x, int c, int n)
 				int s = R->a, u = dl->up[(size_t)i*c+s];
 				mpq_set_si(w, g->N[s] - dl->d[(size_t)i*c+s], 1); mpq_mul(y, w, T->P[i]);
 				if (u >= 0 && u < nd) { mpq_set_z(w, g->Z[s]); mpq_mul(t, w, T->P[u]); mpq_sub(y, y, t); }
+				if (g->mden > 1) { mpq_set_si(w, g->mden, 1); mpq_mul(y, y, w); }   /* row scaled by mden */
 				break; }
 			case RHOM:
 				mpq_set_ui(y, 0, 1);
@@ -625,6 +635,9 @@ static int gcomom_solve(qnmodel* q, mpq_t* out, void* ctx)
 	gctx G; memset(&G, 0, sizeof G);
 	gctx* g = &G;
 	g->M = q->M; g->R = q->R; g->N = q->N; g->Z = q->Z; g->L = q->L; g->mi = q->mi;
+	g->mden = qn_mden(q);
+	g->fb = xcalloc(q->M, sizeof(int)); g->vfull = xcalloc(q->M, sizeof(int));
+	for (int k = 0; k < q->M; k++) { g->fb[k] = q->mi[k] % g->mden; g->vfull[k] = q->mi[k] / g->mden; }
 	int M = g->M, R = g->R, rc = 0;
 	int Ntot = 0; for (int r = 0; r < R; r++) Ntot += g->N[r];
 	nckinit(MAX(M + R + 8, 2*R + 8), R + 2);
@@ -691,6 +704,7 @@ static int gcomom_solve(qnmodel* q, mpq_t* out, void* ctx)
 			if (!sing[oi]) continue;
 			gmodel* x = &g->m[ord[oi]];
 			bool fits = !NO_FALLBACK && g->latn > 0 && g->latn <= CONV_MAX / (x->nt + 1);
+			for (int ti = 0; ti < x->nt; ti++) if (g->fb[x->T[ti]]) fits = false;   /* conv_one adds whole copies only */
 			if (STATS) {
 				fprintf(stderr, "gcomom: singular sub-model v=(");
 				for (int k = 0; k < M; k++) fprintf(stderr, "%d%s", x->v[k], k < M-1 ? "," : "");
@@ -746,6 +760,7 @@ static int gcomom_solve(qnmodel* q, mpq_t* out, void* ctx)
 	}
 	for (int c = 0; c < R; c++) { free(g->dl[c]->d); free(g->dl[c]->up); free(g->dl[c]->tot); free(g->dl[c]); }
 	free(g->dl); free(g->m); free(ord); free(g->rad); free(lev); free(sing);
+	free(g->fb); free(g->vfull);
 	(void)Ntot;
 	return rc;
 }
@@ -762,7 +777,7 @@ static void measure(qnmodel* q, mpq_t* ex, int k, int r, mpq_t out)
 	mpq_t w; mpq_init(w);
 	mpq_div(out, ex[SG_IDX_GK(R,k,r)], ex[0]);
 	mpq_set_z(w, q->L[k][r]); mpq_mul(out, out, w);
-	mpq_set_si(w, q->mi[k], 1); mpq_mul(out, out, w);
+	qn_mult(w, q, k, 0); mpq_mul(out, out, w);
 	mpq_clear(w);
 }
 
@@ -802,6 +817,7 @@ int main(int argc, char** argv)
 	}
 	if (!file) { usage(argv[0]); return 1; }
 	double t0 = cputime();
+	qn_allow_rational_mi = 1;   /* fractional multiplicities (util.h, qn_mult) */
 	qnmodel* q = readmodel(file);
 	if (!q) { fprintf(stderr, "gcomom: cannot read %s\n", file); return 1; }
 	qn_require_closed(q, "gcomom", 0);

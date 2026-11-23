@@ -104,3 +104,73 @@ void gmom_base(mpq_t G, mpz_t* d, int mult, int* pop, mpz_t* Z, int r)
 	gmva(G, dem, mult, pop, Z, r);
 	free(dem);
 }
+
+/* Rational multiplicities: station q contributes (1 - u_q)^(-e_q),
+ * u_q = sum_c dem[q][c] x_c, e_q = en[q]/mden > 0.  The integer part of e_q
+ * is floor(e_q) Buzen copies as in gmva; a fractional part f multiplies by
+ * sum_t (f)_t/t! u_q^t, with u_q^t g formed one power at a time
+ * ((u g)(n) = sum_c dem[q][c] g(n - 1_c)), t up to the total population. */
+void gbase_exp(mpq_t G, mpz_t** dem, const int* en, int mden, int nst, int* pop, mpz_t* Z, int r)
+{
+	int c0;
+	for (c0 = 0; c0 < r; c0++)
+		if (pop[c0] < 0) { mpq_set_si(G, 0, 1); return; }
+	if (mden < 1) mden = 1;
+	int bs = box_size(pop, r);
+	int i, c, q, idx, t, ntot = 0;
+	for (c = 0; c < r; c++) ntot += pop[c];
+	int* radix = (int*) malloc(r * sizeof(int));
+	int* n = (int*) malloc(r * sizeof(int));
+	mpq_vec_t g = mpq_vec(bs, 0, 1), p = mpq_vec(bs, 0, 1), pn = mpq_vec(bs, 0, 1), h = mpq_vec(bs, 0, 1);
+	mpq_t term, dq, ct;
+	mpq_init(term); mpq_init(dq); mpq_init(ct);
+	radix[0] = 1;
+	for (c = 1; c < r; c++) radix[c] = radix[c-1] * (pop[c-1] + 1);
+	for (idx = 0; idx < bs; idx++) {          /* delay: prod_c Z_c^{n_c}/n_c! */
+		int rem = idx;
+		mpq_set_si(g[idx], 1, 1);
+		for (c = 0; c < r; c++) { n[c] = rem % (pop[c]+1); rem /= (pop[c]+1); }
+		for (c = 0; c < r; c++) {
+			if (n[c] == 0) continue;
+			if (mpz_sgn(Z[c]) == 0) { mpq_set_si(g[idx], 0, 1); break; }
+			int e;
+			for (e = 0; e < n[c]; e++) { mpq_set_z(dq, Z[c]); mpq_mul(g[idx], g[idx], dq); mpq_set_si(dq, 1, e+1); mpq_mul(g[idx], g[idx], dq); }
+		}
+	}
+	for (q = 0; q < nst; q++) {
+		int a = en[q] / mden, fn = en[q] % mden, cp;
+		for (cp = 0; cp < a; cp++)                /* whole copies (Buzen) */
+			for (idx = 0; idx < bs; idx++) {
+				int rem = idx;
+				for (c = 0; c < r; c++) { n[c] = rem % (pop[c]+1); rem /= (pop[c]+1); }
+				for (c = 0; c < r; c++) {
+					if (n[c] == 0 || mpz_sgn(dem[q][c]) == 0) continue;
+					mpq_set_z(dq, dem[q][c]); mpq_mul(term, dq, g[idx - radix[c]]); mpq_add(g[idx], g[idx], term);
+				}
+			}
+		if (fn == 0) continue;
+		/* fractional part f = fn/mden: h = sum_t c_t u^t g, c_t = c_{t-1} (f+t-1)/t */
+		for (idx = 0; idx < bs; idx++) { mpq_set(p[idx], g[idx]); mpq_set(h[idx], g[idx]); }
+		mpq_set_si(ct, 1, 1);
+		for (t = 1; t <= ntot; t++) {
+			for (idx = 0; idx < bs; idx++) {
+				int rem = idx;
+				mpq_set_si(pn[idx], 0, 1);
+				for (c = 0; c < r; c++) { n[c] = rem % (pop[c]+1); rem /= (pop[c]+1); }
+				for (c = 0; c < r; c++) {
+					if (n[c] == 0 || mpz_sgn(dem[q][c]) == 0) continue;
+					mpq_set_z(dq, dem[q][c]); mpq_mul(term, dq, p[idx - radix[c]]); mpq_add(pn[idx], pn[idx], term);
+				}
+			}
+			mpq_set_si(dq, fn + (long)mden * (t-1), (unsigned long)mden * t); mpq_canonicalize(dq);
+			mpq_mul(ct, ct, dq);
+			for (idx = 0; idx < bs; idx++) { mpq_swap(p[idx], pn[idx]); mpq_mul(term, ct, p[idx]); mpq_add(h[idx], h[idx], term); }
+		}
+		for (idx = 0; idx < bs; idx++) mpq_swap(g[idx], h[idx]);
+	}
+	mpq_set(G, g[bs-1]);
+	for (i = 0; i < bs+1; i++) { mpq_clear(g[i]); mpq_clear(p[i]); mpq_clear(pn[i]); mpq_clear(h[i]); }
+	free(g); free(p); free(pn); free(h);
+	mpq_clear(term); mpq_clear(dq); mpq_clear(ct);
+	free(radix); free(n);
+}

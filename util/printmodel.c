@@ -8,7 +8,8 @@ void printmodel(qnmodel* qn)
 	int m,r,mtot=0;
 	for(m=1;m<=qn->M;m++)
 		mtot+=qn->mi[m-1];
-	printf("The queueing network model has %d queues (%d are replicas) and %d classes\n",mtot,mtot-qn->M,qn->R);
+	if (qn_mden(qn) > 1) printf("The queueing network model has %d stations (fractional multiplicities) and %d classes\n",qn->M,qn->R);
+	else printf("The queueing network model has %d queues (%d are replicas) and %d classes\n",mtot,mtot-qn->M,qn->R);
 	printf("          N[1:%d]:",qn->R);
 	for (r=1;r<=qn->R;r++)
 		printf("%12d",qn->N[r-1]);
@@ -19,7 +20,8 @@ void printmodel(qnmodel* qn)
 	printf("\n");
 	for(m=1;m<=qn->M;m++)
 	{
-	 printf("mi=%d    L[%d,1:%d]:",qn->mi[m-1],m,qn->R);
+	 if (qn_mden(qn) > 1) { mpq_t e; mpq_init(e); qn_mult(e, qn, m-1, 0); gmp_printf("mi=%Qd    L[%d,1:%d]:",e,m,qn->R); mpq_clear(e); }
+	 else printf("mi=%d    L[%d,1:%d]:",qn->mi[m-1],m,qn->R);
 	 for (r=1;r<=qn->R;r++)
 	 {
 		gmp_printf("%12Zd",qn->L[m-1][r-1]);
@@ -57,7 +59,8 @@ void printmodel_with_perturbation(qnmodel* qn, int perturbation_digit, mpz_t sca
 	int m,r,mtot=0;
 	for(m=1;m<=qn->M;m++)
 		mtot+=qn->mi[m-1];
-	printf("The queueing network model has %d queues (%d are replicas) and %d classes\n",mtot,mtot-qn->M,qn->R);
+	if (qn_mden(qn) > 1) printf("The queueing network model has %d stations (fractional multiplicities) and %d classes\n",qn->M,qn->R);
+	else printf("The queueing network model has %d queues (%d are replicas) and %d classes\n",mtot,mtot-qn->M,qn->R);
 	
 	// Print populations (N) as integers - these are not perturbed
 	printf("          N[1:%d]:",qn->R);
@@ -94,7 +97,8 @@ void printmodel_with_perturbation(qnmodel* qn, int perturbation_digit, mpz_t sca
 	
 	// Print service demands (L) with perturbation info
 	for(m=1;m<=qn->M;m++) {
-		printf("mi=%d    L[%d,1:%d]:",qn->mi[m-1],m,qn->R);
+		if (qn_mden(qn) > 1) { mpq_t e; mpq_init(e); qn_mult(e, qn, m-1, 0); gmp_printf("mi=%Qd    L[%d,1:%d]:",e,m,qn->R); mpq_clear(e); }
+		else printf("mi=%d    L[%d,1:%d]:",qn->mi[m-1],m,qn->R);
 		for (r=1;r<=qn->R;r++) {
 			if (perturbation_digit > 0) {
 				gmp_printf("%12Zd",original_L[m-1][r-1]);

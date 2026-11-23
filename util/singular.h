@@ -110,6 +110,7 @@ static inline int sg_solve_order(qnmodel* q, mpq_t* out, int* reordered, const s
 			for (k=0;k<M;k++) mpz_set(p->L[k][j], q->L[k][perm[j]]);
 		}
 		for (k=0;k<M;k++) p->mi[k] = q->mi[k];
+		p->mden = q->mden;
 		sg_qn_fix_nt(p);
 		mpq_t* o = sg_mpq_arr(nres);
 		rc = ops->solve(p, o, ops->ctx);
@@ -151,7 +152,8 @@ static inline qnmodel* sg_merge_stations(qnmodel* q, int* grp)
 	qnmodel* m = sg_qn_new(R, nm);
 	for (r=0;r<R;r++) { m->N[r] = q->N[r]; mpz_set(m->Z[r], q->Z[r]); }
 	for (h=0;h<nm;h++) for (r=0;r<R;r++) mpz_set(m->L[h][r], q->L[rep[h]][r]);
-	for (k=0;k<M;k++) m->mi[grp[k]] += q->mi[k];
+	for (k=0;k<M;k++) m->mi[grp[k]] += q->mi[k];   /* numerators over the same mden */
+	m->mden = q->mden;
 	sg_qn_fix_nt(m);
 	free(rep);
 	return m;
@@ -207,6 +209,7 @@ static inline qnmodel* sg_merge_classes(qnmodel* q, int* grp, mpq_t* c)
 	}
 	for (r=0;r<R;r++) m->N[grp[r]] += q->N[r];
 	for (k=0;k<M;k++) m->mi[k] = q->mi[k];
+	m->mden = q->mden;
 	sg_qn_fix_nt(m);
 	free(rep);
 	return m;
@@ -355,6 +358,7 @@ static inline qnmodel** sg_perturb_build(const qnmodel* q, int T)
 	{
 		qnmodel* m = sg_qn_new(R, M);
 		for (r=0;r<R;r++) { m->N[r] = q->N[r]; mpz_mul_ui(m->Z[r], dz[r], t); mpz_add(m->Z[r], m->Z[r], q->Z[r]); }
+		m->mden = q->mden;
 		for (k=0;k<M;k++) { m->mi[k] = q->mi[k];
 			for (r=0;r<R;r++) { mpz_mul_ui(m->L[k][r], dl[k][r], t); mpz_add(m->L[k][r], m->L[k][r], q->L[k][r]); } }
 		sg_qn_fix_nt(m);

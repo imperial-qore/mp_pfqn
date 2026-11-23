@@ -7,8 +7,9 @@
 /* Level system of the generalized MoM with variable branching factor
  * (Casale, Perf. Eval. 2011, Sec. 4.1.2 and 4.2), for one sub-model.
  *
- * The sub-model holds the d original queues q[0..d-1], each with unit
- * multiplicity, and carries the bases of levels l (unknowns, vl) and l-1
+ * The sub-model holds the d stations q[0..d-1], station q[j] with
+ * multiplicity en[j]/mden (1 in the original distinct-queue tree; the
+ * population constraints take en/mden + replicas), and carries the bases of levels l (unknowns, vl) and l-1
  * (vl1).  An entry of the level-l basis is the r-vector
  *   G(m'+delta, n), G(m'+delta, n-1_1), ..., G(m'+delta, n-1_{r-1}),
  * delta a multiset of l replicas over the d queues, combinations in the
@@ -33,7 +34,8 @@
 static void set_q_from_z(mpq_t q, mpz_t z) { mpq_set_z(q, z); }
 static void set_q_neg_z(mpq_t q, mpz_t z) { mpq_set_z(q, z); mpq_neg(q, q); }
 
-LSB* setupb(mpz_t** L, int* q, int d, int ntag, const int* clevel, int r, int l, int* N, mpz_t* Z, int aonly)
+LSB* setupb(mpz_t** L, int* q, int d, const int* en, int mden, int ntag, const int* tagpos, const int* cdrop,
+            const int* clevel, int r, int l, int* N, mpz_t* Z, int aonly)
 {
 	int i, j, s, row, t, c;
 	LSB* ls = (LSB*) calloc(1, sizeof(LSB));
@@ -52,7 +54,7 @@ LSB* setupb(mpz_t** L, int* q, int d, int ntag, const int* clevel, int r, int l,
 	int* tmp = (int*) malloc((d > 0 ? d : 1) * sizeof(int));
 
 	int nrows = 0;
-	for (c = 0; c < ntag; c++) { int jj = d - ntag + c; for (i = 0; i < szIk; i++) if (Ik[i][jj] == 0) nrows++; }
+	for (c = 0; c < ntag; c++) { int jj = tagpos[c]; for (i = 0; i < szIk; i++) if (Ik[i][jj] == 0) nrows++; }
 	for (i = 0; i < szIk; i++) for (j = 0; j < d; j++) if (Ik[i][j] > 0) nrows++;
 	nrows += szI * (r - 1);
 	ls->nrows = nrows;
@@ -70,18 +72,20 @@ LSB* setupb(mpz_t** L, int* q, int d, int ntag, const int* clevel, int r, int l,
 	}
 
 	row = 0;
-	/* GCE: queue q[jj] removed, child c */
+	/* GCE: one copy of station q[jj] removed, child c */
 	for (c = 0; c < ntag; c++) {
-		int jj = d - ntag + c, k = q[jj];
+		int jj = tagpos[c], k = q[jj];
 		for (i = 0; i < szIk; i++) {
 			if (Ik[i][jj] != 0) continue;
 			mpq_set_si(ls->A[row][i*r + 0], 1, 1);
 			for (s = 1; s < r; s++) set_q_neg_z(ls->A[row][i*r + s], L[k][s-1]);
 			if (!aonly) {
 				set_q_from_z(ls->B[row][i*r + 0], L[k][r-1]);
-				int a, b = 0;
-				for (a = 0; a < d; a++) if (a != jj) tmp[b++] = Ik[i][a];
-				t = (int) int_matmatchrow(Ii, szIi, d-1, tmp);
+				if (cdrop[c]) {
+					int a, b = 0;
+					for (a = 0; a < d; a++) if (a != jj) tmp[b++] = Ik[i][a];
+					t = (int) int_matmatchrow(Ii, szIi, d-1, tmp);
+				} else t = i;   /* same support: same replica table */
 				ls->cchild[row] = c;
 				ls->cslot[row]  = (clevel[c] == l) ? 0 : 1;   /* 0: vl, 1: vl1 */
 				ls->ccol[row]   = t*r + 0;
@@ -120,9 +124,10 @@ LSB* setupb(mpz_t** L, int* q, int d, int ntag, const int* clevel, int r, int l,
 				t = (int) int_matmatchrow(Ik, szIk, d, I[i]);
 				I[i][j]--;
 				mpz_t v; mpz_init(v);
-				mpz_mul_ui(v, L[q[j]][s-1], (unsigned long)(1 + I[i][j]));
+				mpz_mul_ui(v, L[q[j]][s-1], (unsigned long)(en[j] + (long)mden * I[i][j]));
 				mpz_neg(v, v);
 				mpq_set_z(ls->A[row][t*r + s], v);
+				if (mden > 1) { mpz_set_si(mpq_denref(ls->A[row][t*r + s]), mden); mpq_canonicalize(ls->A[row][t*r + s]); }
 				mpz_clear(v);
 			}
 			row++;
@@ -140,8 +145,9 @@ LSB* setupb(mpz_t** L, int* q, int d, int ntag, const int* clevel, int r, int l,
 					t = (int) int_matmatchrow(Ik, szIk, d, I[i]);
 					I[i][j]--;
 					mpz_t v; mpz_init(v);
-					mpz_mul_ui(v, L[q[j]][r-1], (unsigned long)(1 + I[i][j]));
+					mpz_mul_ui(v, L[q[j]][r-1], (unsigned long)(en[j] + (long)mden * I[i][j]));
 					mpq_set_z(ls->E[row][t*r + s], v);
+					if (mden > 1) { mpz_set_si(mpq_denref(ls->E[row][t*r + s]), mden); mpq_canonicalize(ls->E[row][t*r + s]); }
 					mpz_clear(v);
 				}
 				row++;

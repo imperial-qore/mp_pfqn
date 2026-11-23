@@ -43,7 +43,7 @@ static double gb_log2_G(const qnmodel* q, const int* n, int kx)
 	long ntot = 0;
 	for (r = 0; r < R; r++) { Z[r] = mpz_get_d(q->Z[r]); ntot += n[r]; }
 	for (k = 0; k < M; k++) {
-		m[k] = q->mi[k] + (k == kx ? 1 : 0);
+		m[k] = (double)q->mi[k] / qn_mden(q) + (k == kx ? 1 : 0);
 		for (r = 0; r < R; r++) L[k*R+r] = mpz_get_d(q->L[k][r]);
 	}
 	/* classes without jobs take x_r = 0: their factors are then 1 */

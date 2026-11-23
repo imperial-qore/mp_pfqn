@@ -33,6 +33,13 @@ make -C gcomom            # produces bin/gcomom (plain C, no C++)
 While class c is swept, classes s < c are at full population and class c
 at n. A sub-model is a copy vector v (v_k <= mi_k, so multiplicity is
 native: a station of multiplicity m is m identical single-server queues).
+A fractional multiplicity e (`mom`-style rational `mi`, see the top-level
+CLAUDE.md) splits into a base frac(e) that is never removed plus floor(e)
+removable copies: the support counts stations with a base, depth 1 needs
+R-1 stations with a removable copy, and the PC coefficients are frac(e_k) +
+v_k. Sub-models with a fractional base never switch to the integer
+convolution fallback (it adds whole copies); a singular one goes to
+`util/singular.h`'s exact tiers instead.
 For decrements d over the classes s < c, it carries `P[d] = G_v(n-d)` and
 `Q[k,d] = G_{v+e_k}(n-d)` and moves them one step with:
 

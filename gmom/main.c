@@ -12,6 +12,11 @@
 #endif
 
 static int NTHREADS = 1;   /* -j: sub-models with the same queue count in parallel */
+/* multiplicities of the model being solved: station k has mi[k]/mden copies
+ * (util.h, qn_mult), split in the model tree into a never-removed base
+ * (mi[k] % mden)/mden plus mi[k]/mden removable unit copies */
+static const int* GM_MI = NULL;
+static int GM_MDEN = 1;
 
 struct rusage ruse;
 double t0, t1;
@@ -87,17 +92,35 @@ static mpq_vec_t nfact_solve(nfact* f, mpq_mat_t A, int nrows, mpq_vec_t rhs)
 	return x;
 }
 
-/* G of the prefix sub-model on queues 0..m-1 with (1+combo[j]) copies of
- * queue j (Ladd), at population pop, think times Z, r classes. */
-static void base_G(mpq_t G, mpz_t** L, int m, int* combo, int r, int* pop, mpz_t* Z)
+/* G of the sub-model on stations q[0..d-1], station q[j] with multiplicity
+ * en[j]/GM_MDEN plus combo[j] replicas, at population pop, think times Z,
+ * r classes.  Integer multiplicities go to gmva as repeated demand rows. */
+static void base_Gq(mpq_t G, mpz_t** L, const int* q, int d, const int* en, int* combo, int r, int* pop, mpz_t* Z)
 {
 	int j, c, nq = 0;
-	for (j = 0; j < m; j++) nq += 1 + combo[j];
+	if (GM_MDEN > 1) {
+		mpz_t** dem = (mpz_t**) malloc(d * sizeof(mpz_t*));
+		int* e = (int*) malloc(d * sizeof(int));
+		for (j = 0; j < d; j++) { dem[j] = L[q[j]]; e[j] = en[j] + GM_MDEN * combo[j]; }
+		gbase_exp(G, dem, e, GM_MDEN, d, pop, Z, r);
+		free(dem); free(e);
+		return;
+	}
+	for (j = 0; j < d; j++) nq += en[j] + combo[j];
 	mpz_t** dem = (mpz_t**) malloc(nq * sizeof(mpz_t*));
 	c = 0;
-	for (j = 0; j < m; j++) { int t; for (t = 0; t <= combo[j]; t++) dem[c++] = L[j]; }
+	for (j = 0; j < d; j++) { int t; for (t = 0; t < en[j] + combo[j]; t++) dem[c++] = L[q[j]]; }
 	gmva(G, dem, nq, pop, Z, r);
 	free(dem);
+}
+
+/* the full model (all m stations, multiplicities GM_MI) with combo replicas */
+static void base_G(mpq_t G, mpz_t** L, int m, int* combo, int r, int* pop, mpz_t* Z)
+{
+	int* q = (int*) malloc(m * sizeof(int)), j;
+	for (j = 0; j < m; j++) q[j] = j;
+	base_Gq(G, L, q, m, GM_MI, combo, r, pop, Z);
+	free(q);
 }
 
 static void oner(int* pop, int* nvec, int r, int s)
@@ -148,7 +171,8 @@ static void lower_step(lvtab* T, int* mi, mpz_t** L, mpz_t* Z, int r, mpq_vec_t*
 				for (j = 0; j < M; j++) {
 					if (mpz_sgn(L[j][r-1]) == 0) continue;
 					mpq_set_z(c, L[j][r-1]);
-					mpq_set_si(w, mi[j] + T->cb[l][i][j], 1);
+					mpq_set_si(w, mi[j] + (long)GM_MDEN * T->cb[l][i][j], GM_MDEN);
+					mpq_canonicalize(w);
 					mpq_mul(c, c, w);
 					mpq_mul(w, c, above[T->up[l][i*M+j]*r+s]);
 					mpq_add(acc, acc, w);
@@ -163,15 +187,26 @@ static void lower_step(lvtab* T, int* mi, mpz_t** L, mpz_t* Z, int r, mpq_vec_t*
 
 /* ---- model tree of the variable-branching recursion (--bmax) --------- */
 
-/* B(d) = min{d, Bmax} GCEs for a model with d queues, basis level
- * l(d) = max{1, r - B(d)} while r classes are processed (Theorem 2). */
-static int gm_B(int d, int bmax) { return d < bmax ? d : bmax; }
-static int gm_level(int d, int r, int bmax) { int v = r - gm_B(d, bmax); return v < 1 ? 1 : v; }
-
+/* A sub-model is a copy vector v: station k has the base (mi[k] % mden)/mden,
+ * never removed, plus v_k unit copies, so its multiplicity is en/mden with
+ * en = mi % mden + mden v_k (util.h, qn_mult); its support q are the
+ * stations with a positive multiplicity.  It has ntag = min{Bmax, #removable}
+ * GCEs, a removable station being one with a copy whose removal leaves a
+ * non-empty model, and basis level l = max{1, r - Bc}, Bc = ntag (Bc = 1 for a
+ * single-station support, which keeps the original single-queue level)
+ * while r classes are processed (Theorem 2).  Removing a copy changes the
+ * number of removable stations by at most one, so every child carries
+ * level l or l+1, the two slots a GCE row reads.  With unit multiplicities
+ * this is the original tree: v is the queue subset, removable = every queue
+ * of a model with d >= 2, Bc = min{d, Bmax}. */
 typedef struct {
-	int d, ntag;
-	int* q;          /* original queue indices, increasing */
-	int* child;      /* child c drops q[d-ntag+c] */
+	int d, ntag, Bc, tot;
+	int* v;          /* copy vector over all M stations */
+	int* q;          /* support: original station indices, increasing */
+	int* en;         /* multiplicity numerators of q[], over GM_MDEN */
+	int* tagpos;     /* child c removes a copy of local station tagpos[c] */
+	int* cdrop;      /* ... and drops it from its support */
+	int* child;
 	int* clevel;     /* child basis levels, current class */
 	int l;           /* basis level, current class */
 	mpq_vec_t vl, vl1; int lenl, lenl1;
@@ -181,44 +216,58 @@ typedef struct {
 
 typedef struct { gmodel* m; int n; } gtree;
 
-/* m(M) = {all queues}; each model with d queues has children that drop,
- * one at a time, each of its last B(d) queues; children shared between
- * parents are built once.  Models are appended by decreasing d, so the
- * array read backwards is a bottom-up order and m[0] is the full model.
- * Bmax = 1 gives the prefix chain {1..M} -> {1..M-1} -> ... -> {1}. */
-static gtree* gtree_new(int M, int bmax)
+static int gm_lev(const gmodel* g, int r) { int v = r - g->Bc; return v < 1 ? 1 : v; }
+
+/* m[0] is the full model (v_k = floor(mi_k)); each model's children remove
+ * one copy of each of its last ntag removable stations; children shared
+ * between parents are built once.  A child has one copy fewer, so models
+ * are appended by decreasing total copies tot and the array read backwards
+ * is a bottom-up order.  Unit multiplicities, Bmax = 1: the prefix chain
+ * {1..M} -> {1..M-1} -> ... -> {1}. */
+static gtree* gtree_new(int M, int bmax, const int* mi, int mden)
 {
 	gtree* T = (gtree*) calloc(1, sizeof(gtree));
-	int cap = 16, i, c, a, b, j;
+	int cap = 16, i, c, a, j, k;
 	T->m = (gmodel*) calloc(cap, sizeof(gmodel));
-	T->m[0].d = M; T->m[0].q = (int*) malloc(M * sizeof(int));
-	for (i = 0; i < M; i++) T->m[0].q[i] = i;
+	T->m[0].v = (int*) malloc(M * sizeof(int));
+	for (k = 0; k < M; k++) T->m[0].v[k] = mi[k] / mden;
 	T->n = 1;
+	int* cv = (int*) malloc(M * sizeof(int));
 	for (i = 0; i < T->n; i++) {
-		int d = T->m[i].d;
-		int ntag = (d >= 2) ? gm_B(d, bmax) : 0;
-		T->m[i].ntag = ntag;
-		T->m[i].child  = (int*) calloc(ntag > 0 ? ntag : 1, sizeof(int));
-		T->m[i].clevel = (int*) calloc(ntag > 0 ? ntag : 1, sizeof(int));
+		gmodel* g = &T->m[i];
+		int d = 0, tot = 0, nrem = 0;
+		for (k = 0; k < M; k++) { if (g->v[k] > 0 || mi[k] % mden) d++; tot += g->v[k]; }
+		g->d = d; g->tot = tot;
+		g->q = (int*) malloc((d ? d : 1) * sizeof(int)); g->en = (int*) malloc((d ? d : 1) * sizeof(int));
+		for (k = 0, a = 0; k < M; k++) if (g->v[k] > 0 || mi[k] % mden) { g->q[a] = k; g->en[a] = mi[k] % mden + mden * g->v[k]; a++; }
+		int* rem = (int*) malloc((d ? d : 1) * sizeof(int));
+		for (a = 0; a < d; a++) { k = g->q[a]; if (g->v[k] >= 1 && (d >= 2 || g->v[k] >= 2 || mi[k] % mden)) rem[nrem++] = a; }
+		int ntag = nrem < bmax ? nrem : bmax;
+		g->ntag = ntag; g->Bc = (d == 1) ? 1 : ntag;
+		g->child  = (int*) calloc(ntag > 0 ? ntag : 1, sizeof(int));
+		g->clevel = (int*) calloc(ntag > 0 ? ntag : 1, sizeof(int));
+		g->tagpos = (int*) calloc(ntag > 0 ? ntag : 1, sizeof(int));
+		g->cdrop  = (int*) calloc(ntag > 0 ? ntag : 1, sizeof(int));
 		for (c = 0; c < ntag; c++) {
-			int drop = d - ntag + c;
-			int* cq = (int*) malloc((d-1) * sizeof(int));
-			for (a = 0, b = 0; a < d; a++) if (a != drop) cq[b++] = T->m[i].q[a];
+			a = rem[nrem - ntag + c]; k = T->m[i].q[a];
+			memcpy(cv, T->m[i].v, M * sizeof(int)); cv[k]--;
+			T->m[i].tagpos[c] = a;
+			T->m[i].cdrop[c] = (cv[k] == 0 && mi[k] % mden == 0);
 			int found = -1;
 			for (j = i+1; j < T->n && found < 0; j++)
-				if (T->m[j].d == d-1) {
-					for (a = 0; a < d-1 && T->m[j].q[a] == cq[a]; a++) ;
-					if (a == d-1) found = j;
-				}
+				if (T->m[j].tot == tot-1 && !memcmp(T->m[j].v, cv, M * sizeof(int))) found = j;
 			if (found < 0) {
 				if (T->n == cap) { cap *= 2; T->m = (gmodel*) realloc(T->m, cap * sizeof(gmodel)); }
 				memset(&T->m[T->n], 0, sizeof(gmodel));
-				T->m[T->n].d = d-1; T->m[T->n].q = cq;
+				T->m[T->n].v = (int*) malloc(M * sizeof(int)); memcpy(T->m[T->n].v, cv, M * sizeof(int));
+				T->m[T->n].tot = tot-1;
 				found = T->n++;
-			} else free(cq);
+			}
 			T->m[i].child[c] = found;
 		}
+		free(rem);
 	}
+	free(cv);
 	return T;
 }
 
@@ -228,7 +277,7 @@ static void gtree_free(gtree* T)
 	if (!T) return;
 	for (i = 0; i < T->n; i++) {
 		gmodel* g = &T->m[i];
-		free(g->q); free(g->child); free(g->clevel);
+		free(g->q); free(g->child); free(g->clevel); free(g->v); free(g->en); free(g->tagpos); free(g->cdrop);
 		vfree(g->vl, g->lenl); vfree(g->vl1, g->lenl1);
 		vfree(g->pvl, g->lenp); vfree(g->pvl1, g->lenp1);
 		lsb_free(g->ls); nfact_free(g->fa);
@@ -271,19 +320,6 @@ static mpq_vec_t level_solve(gmodel* g, gtree* GT, mpq_vec_t vprev)
 	return x;
 }
 
-/* G of the sub-model on queues q[0..d-1] with (1+combo[j]) copies of
- * queue q[j], at population pop */
-static void base_Gq(mpq_t G, mpz_t** L, int* q, int d, int* combo, int r, int* pop, mpz_t* Z)
-{
-	int j, c, nq = 0;
-	for (j = 0; j < d; j++) nq += 1 + combo[j];
-	mpz_t** dem = (mpz_t**) malloc(nq * sizeof(mpz_t*));
-	c = 0;
-	for (j = 0; j < d; j++) { int t; for (t = 0; t <= combo[j]; t++) dem[c++] = L[q[j]]; }
-	gmva(G, dem, nq, pop, Z, r);
-	free(dem);
-}
-
 /* fill a level-lv basis of model g by exact convolution at nvec */
 static mpq_vec_t conv_level(gmodel* g, mpz_t** L, int lv, int r, int* nvec, mpz_t* Z, int* len)
 {
@@ -291,7 +327,7 @@ static mpq_vec_t conv_level(gmodel* g, mpz_t** L, int lv, int r, int* nvec, mpz_
 	int** I = sortbynnzpos(multichoose(g->d, lv), sz, g->d);
 	int* pop = (int*) malloc(r * sizeof(int));
 	mpq_vec_t v = vnew(sz * r);
-	for (i = 0; i < sz; i++) for (s = 0; s < r; s++) { oner(pop, nvec, r, s); base_Gq(v[i*r+s], L, g->q, g->d, I[i], r, pop, Z); }
+	for (i = 0; i < sz; i++) for (s = 0; s < r; s++) { oner(pop, nvec, r, s); base_Gq(v[i*r+s], L, g->q, g->d, g->en, I[i], r, pop, Z); }
 	for (i = 0; i < sz; i++) free(I[i]);
 	free(I); free(pop);
 	*len = sz * r;
@@ -312,14 +348,14 @@ static void fill_model(gmodel* g, mpz_t** L, int r, int* nvec, mpz_t* Z)
 static int gb_singular(mpz_t** L, int M, int R, int bmax)
 {
 	int r, i, c, sing = 0;
-	gtree* T = gtree_new(M, bmax);
+	gtree* T = gtree_new(M, bmax, GM_MI, GM_MDEN);
 	for (r = 2; r <= R && !sing; r++)
 		for (i = 0; i < T->n && !sing; i++) {
 			gmodel* g = &T->m[i];
 			if (g->d < 2) continue;
-			int l = gm_level(g->d, r, bmax);
-			for (c = 0; c < g->ntag; c++) g->clevel[c] = gm_level(g->d - 1, r, bmax);
-			LSB* ls = setupb(L, g->q, g->d, g->ntag, g->clevel, r, l, NULL, NULL, 1);
+			int l = gm_lev(g, r);
+			for (c = 0; c < g->ntag; c++) g->clevel[c] = gm_lev(&T->m[g->child[c]], r);
+			LSB* ls = setupb(L, g->q, g->d, g->en, GM_MDEN, g->ntag, g->tagpos, g->cdrop, g->clevel, r, l, NULL, NULL, 1);
 			mpq_mat_t AtA = mpq_matzeros(ls->colA, ls->colA);
 			mpq_mattransmul(AtA, ls->A, ls->A, ls->nrows, ls->colA);
 			int* idx = mpq_ludcmp(AtA, ls->colA);
@@ -432,6 +468,7 @@ static int gmom_compute(char* model_file, int pdigit, int pseed, int psign,
                         bool print_model, int bmax, gmom_sol* sol)
 {
 	int i, s, r, nr;
+	qn_allow_rational_mi = 1;   /* fractional multiplicities (util.h, qn_mult) */
 	qnmodel* qn = readmodel(model_file);
 	qn_require_closed(qn, "gmom", 0);
 	int M = qn->M, R = qn->R;
@@ -440,8 +477,11 @@ static int gmom_compute(char* model_file, int pdigit, int pseed, int psign,
 		fprintf(stderr, "gmom: open/mixed models are not supported (class %d is open); use a closed model\n", c+1); return 1; } }
 	if (qn->hasOpen) { fprintf(stderr, "gmom: open/mixed models are not supported\n"); return 1; }
 	if (qn->isLD)    { fprintf(stderr, "gmom: load-dependent stations are not supported\n"); return 1; }
-	{ int q; for (q = 0; q < M; q++) if (qn->mi[q] > 1) {
-		fprintf(stderr, "gmom: multiserver/replicated stations (mi>1 at queue %d) are not supported; the b=1 basis assumes distinct single-server queues\n", q+1); return 1; } }
+	/* multiplicities (integer copies or rational, util.h qn_mult) live in
+	 * the model tree; the shared Bmax = 1 oracle assumes unit ones */
+	GM_MI = qn->mi; GM_MDEN = qn_mden(qn);
+	int unit_mi = 1;
+	{ int q; for (q = 0; q < M; q++) if (qn->mi[q] != GM_MDEN) unit_mi = 0; }
 	mpz_t** L = qn->L; mpz_t* Z = qn->Z; int* N = qn->N;
 	nckinit(M + R - 1, R);
 	/* nck() caches into a global table on first use, which is not thread
@@ -472,8 +512,8 @@ static int gmom_compute(char* model_file, int pdigit, int pseed, int psign,
 	for (i = 0; i < R; i++) cperm[i] = i;
 	/* Bmax = 1 uses the shared oracle (same matrices); larger Bmax adds
 	 * GCE rows and changes the levels, so it screens its own matrices */
-	if (bmax == 1 ? pfqn_recursion_singular(L, M, R) : gb_singular(L, M, R, bmax)) {
-		int fix = bmax == 1 ? pfqn_nonsingular_recclass(L, M, R) : gb_nonsingular_recclass(L, M, R, bmax);
+	if (bmax == 1 && unit_mi ? pfqn_recursion_singular(L, M, R) : gb_singular(L, M, R, bmax)) {
+		int fix = bmax == 1 && unit_mi ? pfqn_nonsingular_recclass(L, M, R) : gb_nonsingular_recclass(L, M, R, bmax);
 		if (fix < 0) {
 			if (no_perturb) {
 				/* exact-only probe (safe_gmom): report and fail rather
@@ -525,7 +565,7 @@ static int gmom_compute(char* model_file, int pdigit, int pseed, int psign,
 
 	int* nvec = (int*) calloc(R, sizeof(int));
 
-	gtree* GT = gtree_new(M, bmax);
+	gtree* GT = gtree_new(M, bmax, GM_MI, GM_MDEN);
 	gmodel* top = &GT->m[0];
 	mpq_vec_t grM = NULL; int lengrM = 0;   /* top vl at N-1_R */
 	mpq_vec_t gr1M = NULL; int lengr1M = 0; /* top vl1 at N-1_R */
@@ -552,7 +592,7 @@ static int gmom_compute(char* model_file, int pdigit, int pseed, int psign,
 		if (full) {
 			/* lower levels of the full model: old levels carried over, plus
 			 * the old vl1 when the full model's level rises */
-			int ll, ln = gm_level(M, r, bmax);
+			int ll, ln = gm_lev(top, r);
 			mpq_vec_t* nlow = (mpq_vec_t*) calloc(R, sizeof(mpq_vec_t));
 			int* nlen = (int*) calloc(R, sizeof(int));
 			if (r == 2) {
@@ -576,8 +616,11 @@ static int gmom_compute(char* model_file, int pdigit, int pseed, int psign,
 			gmodel* g = &GT->m[i];
 			int c;
 			lold[i] = g->l;
-			g->l = gm_level(g->d, r, bmax);
-			for (c = 0; c < g->ntag; c++) g->clevel[c] = gm_level(g->d - 1, r, bmax);
+			g->l = gm_lev(g, r);
+			for (c = 0; c < g->ntag; c++) {
+				g->clevel[c] = gm_lev(&GT->m[g->child[c]], r);
+				if (g->clevel[c] != g->l && g->clevel[c] != g->l + 1) { fprintf(stderr, "gmom: internal error, child level %d under level %d\n", g->clevel[c], g->l); exit(1); }
+			}
 			lsb_free(g->ls); g->ls = NULL;
 			nfact_free(g->fa); g->fa = NULL;
 			/* single-queue models too: without GCEs their system has r rows
@@ -585,7 +628,7 @@ static int gmom_compute(char* model_file, int pdigit, int pseed, int psign,
 			 * convolution per entry and step (Sec. 4.2).  It is singular when
 			 * the queue has a zero demand in a class s < r; those models stay
 			 * on convolution (ls = NULL). */
-			g->ls = setupb(L, g->q, g->d, g->ntag, g->clevel, r, g->l, nvec, Z, 0);
+			g->ls = setupb(L, g->q, g->d, g->en, GM_MDEN, g->ntag, g->tagpos, g->cdrop, g->clevel, r, g->l, nvec, Z, 0);
 			g->fa = nfact_new(g->ls->A, g->ls->nrows, g->ls->colA, g->d == 1);
 			if (!g->fa) { lsb_free(g->ls); g->ls = NULL; }
 		}
@@ -593,7 +636,7 @@ static int gmom_compute(char* model_file, int pdigit, int pseed, int psign,
 		 * one group of equal d at a time, bottom-up, each group in parallel */
 		for (int gb = GT->n; gb > 0; ) {
 		int ga = gb - 1;
-		while (ga > 0 && GT->m[ga-1].d == GT->m[gb-1].d) ga--;
+		while (ga > 0 && GT->m[ga-1].tot == GT->m[gb-1].tot) ga--;
 		#pragma omp parallel for schedule(dynamic,1) num_threads(NTHREADS)
 		for (i = gb - 1; i >= ga; i--) {
 			gmodel* g = &GT->m[i];
@@ -641,7 +684,7 @@ static int gmom_compute(char* model_file, int pdigit, int pseed, int psign,
 			if (full) lower_step(T, qn->mi, L, Z, r, low, top->vl1, nr, ltop-1);
 			for (int gb = GT->n; gb > 0; ) {   /* bottom-up by queue count, each group in parallel */
 			int ga = gb - 1;
-			while (ga > 0 && GT->m[ga-1].d == GT->m[gb-1].d) ga--;
+			while (ga > 0 && GT->m[ga-1].tot == GT->m[gb-1].tot) ga--;
 			#pragma omp parallel for schedule(dynamic,1) num_threads(NTHREADS)
 			for (i = gb - 1; i >= ga; i--) {
 				gmodel* g = &GT->m[i];

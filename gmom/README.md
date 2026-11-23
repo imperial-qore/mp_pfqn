@@ -200,11 +200,20 @@ lcfs_3class   R=3      21 (2)     21 (3)     21 (3)
 
 ## Scope and two findings from the port
 
-- **Distinct single-server closed queues only.** Open/mixed models (a
-  class with `N<0` / `LAMBDA`), load-dependent stations (`MU`), and
-  multiserver/replicated stations (`mi>1`) are rejected with a clear
-  message rather than mis-solved. The basis assumes `m=(1,...,1)`, the
-  reference's stated domain.
+- **Closed models, any multiplicity.** Open/mixed models (a class with
+  `N<0` / `LAMBDA`) and load-dependent stations (`MU`) are rejected with a
+  clear message rather than mis-solved. Multiplicities, integer `mi > 1` or
+  rational (`3/2`, the station `(1 - L.x)^(-3/2)`, see the top-level
+  CLAUDE.md), are handled in the model tree: a sub-model is a copy vector v,
+  station k having the never-removed base `frac(mi_k)` plus `v_k` unit
+  copies; GCEs remove one copy of each of the last `min(Bmax, #removable)`
+  stations (removable: has a copy whose removal leaves a non-empty model);
+  the level is `max(1, r - B)` with `B = 1` for a single-station support, so
+  every child carries level l or l+1; a child that keeps the station in its
+  support reads the same replica table. The PC coefficients are
+  `mult + replicas` and the base convolutions take rational exponents
+  (`gbase_exp`). With unit multiplicities this is the original tree. Identical
+  demand rows are still singular for gmom's basis (no folding tier here).
 - **Init-time singularity check and auto-reorder.** `util/pfqn_sing.c` provides
   a shared oracle `pfqn_recursion_singular` / `pfqn_nonsingular_recclass`:
   the coefficient matrix depends only on the loadings (not the population),

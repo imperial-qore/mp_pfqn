@@ -133,7 +133,7 @@ void perfindices(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, bool verbose_output, b
 					
 					// Multiply by station multiplicity
 					mpq_t mult; mpq_init(mult);
-					mpq_set_si(mult, qnm->mi[k-1], 1);
+					qn_mult(mult, qnm, k-1, 0);
 					mpq_mul(tmp2, tmp2, mult);
 					mpq_clear(mult);
 				}
@@ -228,7 +228,7 @@ void perfindices(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, bool verbose_output, b
 					
 					// Multiply by station multiplicity
 					mpq_t mult; mpq_init(mult);
-					mpq_set_si(mult, qnm->mi[k-1], 1);
+					qn_mult(mult, qnm, k-1, 0);
 					mpq_mul(tmp2, tmp2, mult);
 					mpq_clear(mult);
 				}

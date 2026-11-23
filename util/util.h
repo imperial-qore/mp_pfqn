@@ -38,7 +38,29 @@ typedef struct
 	int isLD; /* 1 if MU section present */
 	int Nt; /* total closed population */
 	mpq_t **mu; /* load-dependent rates [M][Nt], NULL if not LD */
+	int mden; /* common denominator of the multiplicities: station k has
+	           * multiplicity mi[k]/mden.  0 or 1 = integer copies; > 1 only
+	           * in solvers that set qn_allow_rational_mi (see qn_mult). */
 } qnmodel;
+
+/* Rational multiplicity e = p/q (`3/2 L1 ... LR` on a station line): the
+ * station's generating function is (1 - sum_r L_r x_r)^(-e), i.e. a
+ * load-dependent station with rates mu(t) = t/(t+e-1); e integer is e
+ * copies.  readmodel accepts a fractional e only in a program that sets this
+ * flag first (mom, comom), so a solver that reads mi as a copy count never
+ * sees one. */
+extern int qn_allow_rational_mi;
+
+static inline int qn_mden(const qnmodel* q) { return q->mden > 1 ? q->mden : 1; }
+
+/* out = mi[k]/mden + add: the multiplicity of station k raised by `add`
+ * replicas, the coefficient of the MoM/CoMoM population constraints. */
+static inline void qn_mult(mpq_t out, const qnmodel* q, int k, long add)
+{
+	int d = qn_mden(q);
+	mpq_set_si(out, (long)q->mi[k] + add * d, (unsigned long)d);
+	mpq_canonicalize(out);
+}
 
 extern int nckmaxn; /* nchoosek table */
 extern int nckmaxk; /* nchoosek table */

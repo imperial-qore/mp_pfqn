@@ -102,6 +102,10 @@ LS* setupls(combsrep *Dn, qnmodel* qnm, int *N, int r, double setup_start, int s
 					mpz_init(neg_mi_L);
 					mpz_mul_si(neg_mi_L, L[k-1][s-1], -mi[k-1]);
 					mpq_set_z(ls->A11[row-1][hash(Dn,comb,k)-1], neg_mi_L);
+					if (qn_mden(qnm) > 1) {   /* multiplicity mi/mden (util.h, qn_mult) */
+						mpz_set_si(mpq_denref(ls->A11[row-1][hash(Dn,comb,k)-1]), qn_mden(qnm));
+						mpq_canonicalize(ls->A11[row-1][hash(Dn,comb,k)-1]);
+					}
 					mpz_clear(neg_mi_L);
 				}
 				comb[s-1] = comb[s-1] - 1; /* oner(n,s) */
@@ -133,7 +137,7 @@ LS* setupls(combsrep *Dn, qnmodel* qnm, int *N, int r, double setup_start, int s
 				mpz_t mi_L;
 				mpz_init(mi_L);
 				mpz_mul_si(mi_L, L[k-1][r-1], mi[k-1]);
-				mpq_mspset_z(ls->B2,row-1,hash(Dn,comb,k)-1,mi_L,1);
+				mpq_mspset_z(ls->B2,row-1,hash(Dn,comb,k)-1,mi_L,qn_mden(qnm));
 				mpz_clear(mi_L);
 			}	
 		}

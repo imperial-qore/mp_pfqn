@@ -80,13 +80,17 @@ static int mpq_block_is_singular(mpq_mat_t A, int n)
 }
 
 /* setuls - setup the linear system for the current class */
-LS* setupls(mpz_t** L, int* n, mpz_t *Z, int* mi, int m, int r)
+LS* setupls(mpz_t** L, int* n, mpz_t *Z, int* mi, int mden, int m, int r)
 {
-	return setupls_progress(L, n, Z, mi, m, r, 0.0, 0);
+	return setupls_progress(L, n, Z, mi, mden, m, r, 0.0, 0);
 }
 
-LS* setupls_progress(mpz_t** L, int* n, mpz_t *Z, int* mi, int m, int r, double setup_start, int show_progress)
+LS* setupls_progress(mpz_t** L, int* n, mpz_t *Z, int* mi, int mden, int m, int r, double setup_start, int show_progress)
 {
+	/* multiplicity of station j is mi[j]/mden (util.h, qn_mult): the
+	 * population-constraint coefficients (mi[j]/mden + d[j]) L are written
+	 * as (mi[j] + mden d[j]) L / mden */
+	if (mden < 1) mden = 1;
 	int i,j,k,s,h,t,w;
 	combsrep Ik;
 	combsrep I;
@@ -209,8 +213,8 @@ LS* setupls_progress(mpz_t** L, int* n, mpz_t *Z, int* mi, int m, int r, double 
 			{
 				mpz_t L_times_mi;
 				mpz_init(L_times_mi);
-				mpz_mul_ui(L_times_mi, L[j][r-1], mi[j]+d[j]);
-				mpq_mspset_z(ls->B2r,lastB2r-r,w*r,L_times_mi,maxL[r-1]);
+				mpz_mul_ui(L_times_mi, L[j][r-1], mi[j]+mden*d[j]);
+				mpq_mspset_z(ls->B2r,lastB2r-r,w*r,L_times_mi,maxL[r-1]*mden);
 				mpz_clear(L_times_mi);
 			}
 			for (s=1;s<=r-1;s++)
@@ -218,13 +222,13 @@ LS* setupls_progress(mpz_t** L, int* n, mpz_t *Z, int* mi, int m, int r, double 
 				mpz_t L_times_mi_r, neg_L_times_mi_s;
 				mpz_init(L_times_mi_r);
 				mpz_init(neg_L_times_mi_s);
-				mpz_mul_ui(L_times_mi_r, L[j][r-1], mi[j]+d[j]);
-				mpq_mspset_z(ls->B2r,lastB2r-r+s,w*r+s,L_times_mi_r,maxL[r-1]);
-				mpz_mul_ui(neg_L_times_mi_s, L[j][s-1], mi[j]+d[j]);
+				mpz_mul_ui(L_times_mi_r, L[j][r-1], mi[j]+mden*d[j]);
+				mpq_mspset_z(ls->B2r,lastB2r-r+s,w*r+s,L_times_mi_r,maxL[r-1]*mden);
+				mpz_mul_ui(neg_L_times_mi_s, L[j][s-1], mi[j]+mden*d[j]);
 				mpz_neg(neg_L_times_mi_s, neg_L_times_mi_s);
 				mpq_t divisor;
 				mpq_init(divisor);
-				mpq_set_ui(divisor, maxL[s-1], 1);
+				mpq_set_ui(divisor, maxL[s-1]*mden, 1);
 				mpq_set_z(ls->C[t].diag[last[t]+s-1][d2relpos[w]*r+s], neg_L_times_mi_s);
 				mpq_div(ls->C[t].diag[last[t]+s-1][d2relpos[w]*r+s], ls->C[t].diag[last[t]+s-1][d2relpos[w]*r+s], divisor);
 				mpq_clear(divisor);
@@ -243,8 +247,8 @@ LS* setupls_progress(mpz_t** L, int* n, mpz_t *Z, int* mi, int m, int r, double 
 			{
 				mpz_t L_times_mi;
 				mpz_init(L_times_mi);
-				mpz_mul_ui(L_times_mi, L[j][r-1], mi[j]+d[j]);
-				mpq_mspset_z(ls->B2r,lastB2r-r,w*r,L_times_mi,maxL[r-1]);
+				mpz_mul_ui(L_times_mi, L[j][r-1], mi[j]+mden*d[j]);
+				mpq_mspset_z(ls->B2r,lastB2r-r,w*r,L_times_mi,maxL[r-1]*mden);
 				mpz_clear(L_times_mi);
 			}
 			for (s=1;s<=r-1;s++)
@@ -252,11 +256,11 @@ LS* setupls_progress(mpz_t** L, int* n, mpz_t *Z, int* mi, int m, int r, double 
 				mpz_t L_times_mi_r, neg_L_times_mi_s;
 				mpz_init(L_times_mi_r);
 				mpz_init(neg_L_times_mi_s);
-				mpz_mul_ui(L_times_mi_r, L[j][r-1], mi[j]+d[j]);
-				mpq_mspset_z(ls->B2r,lastB2r-r+s,w*r+s,L_times_mi_r,maxL[r-1]);
-				mpz_mul_ui(neg_L_times_mi_s, L[j][s-1], mi[j]+d[j]);
+				mpz_mul_ui(L_times_mi_r, L[j][r-1], mi[j]+mden*d[j]);
+				mpq_mspset_z(ls->B2r,lastB2r-r+s,w*r+s,L_times_mi_r,maxL[r-1]*mden);
+				mpz_mul_ui(neg_L_times_mi_s, L[j][s-1], mi[j]+mden*d[j]);
 				mpz_neg(neg_L_times_mi_s, neg_L_times_mi_s);
-				mpq_mspset_z(ls->C[t].nondiag,last[t]+s-1,w*r+s,neg_L_times_mi_s,maxL[s-1]);
+				mpq_mspset_z(ls->C[t].nondiag,last[t]+s-1,w*r+s,neg_L_times_mi_s,maxL[s-1]*mden);
 				mpz_clear(L_times_mi_r);
 				mpz_clear(neg_L_times_mi_s);
 			}

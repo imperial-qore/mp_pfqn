@@ -53,18 +53,20 @@ void gmom_descend(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM, int ltop, mpq_vec_t
 			for (s = 1; s <= R; s++) {
 				if (mpz_cmp_ui(Z[s-1], 0) == 0) {
 					mpq_set_si(G[i*(R+1) + s], 0, 1);
-					int msum = 0;
+					/* multiplicities mi/mden (util.h, qn_mult): sums kept over md */
+					long msum = 0, md = qn_mden(qn);
 					for (j = 0; j < M; j++) {
 						I[i][j]++;
 						t = (int) int_matmatchrow(Ik, ncl, M, I[i]);
 						I[i][j]--;
-						mpq_set_si(tmp, mi[j] + I[i][j], 1);
+						qn_mult(tmp, qn, j, I[i][j]);
 						mpq_mul(tmp, tmp, Gk[t*(R+1) + s]);
 						mpq_add(G[i*(R+1) + s], G[i*(R+1) + s], tmp);
 						msum += mi[j];
 					}
-					for (j = 0; j < M; j++) msum += I[i][j];
-					mpq_set_si(tmp, Ntot + msum - 1, 1);
+					for (j = 0; j < M; j++) msum += md * I[i][j];
+					mpq_set_si(tmp, md * (Ntot - 1) + msum, md);
+					mpq_canonicalize(tmp);
 					mpq_div(G[i*(R+1) + s], G[i*(R+1) + s], tmp);
 				} else {
 					mpq_set_si(G[i*(R+1) + s], N[s-1], 1);
@@ -76,7 +78,7 @@ void gmom_descend(qnmodel* qn, mpq_vec_t vlM, mpq_vec_t grM, int ltop, mpq_vec_t
 						t = (int) int_matmatchrow(Ik, ncl, M, I[i]);
 						I[i][j]--;
 						mpq_set_z(tmp, L[j][s-1]);
-						mpq_set_si(tmp2, mi[j] + I[i][j], 1);
+						qn_mult(tmp2, qn, j, I[i][j]);
 						mpq_mul(tmp2, tmp2, tmp);
 						mpq_set_z(tmp, Z[s-1]);
 						mpq_div(tmp2, tmp2, tmp);
@@ -116,7 +118,7 @@ void gmom_measures(qnmodel* qn, mpq_vec_t G, mpq_vec_t Gk,
 	 * position of original class c.  X/Q are printed in ORIGINAL order. */
 	int inv[64], _c; for (_c = 0; _c < R; _c++) inv[_c] = _c;
 	if (cperm) for (_c = 0; _c < R; _c++) inv[cperm[_c]] = _c;
-	mpz_t** L = qn->L; int* N = qn->N; int* mi = qn->mi;
+	mpz_t** L = qn->L; int* N = qn->N;
 	int i, s;
 	mpq_t tmp, tmp2; mpq_init(tmp); mpq_init(tmp2);
 
@@ -151,7 +153,7 @@ void gmom_measures(qnmodel* qn, mpq_vec_t G, mpq_vec_t Gk,
 			s = inv[_c] + 1;
 			mpz_t oL; mpz_init(oL); if (scaled) mpz_tdiv_q(oL, L[i-1][s-1], scale_factor); else mpz_set(oL, L[i-1][s-1]);
 			if (mpz_sgn(oL) == 0) mpq_set_si(tmp, 0, 1);
-			else { mpq_set_z(tmp, L[i-1][s-1]); mpq_mul(tmp, tmp, Gk[(i-1)*(R+1)+s]); mpq_div(tmp, tmp, G[0]); mpq_set_si(tmp2, mi[i-1], 1); mpq_mul(tmp, tmp, tmp2); }
+			else { mpq_set_z(tmp, L[i-1][s-1]); mpq_mul(tmp, tmp, Gk[(i-1)*(R+1)+s]); mpq_div(tmp, tmp, G[0]); qn_mult(tmp2, qn, i-1, 0); mpq_mul(tmp, tmp, tmp2); }
 			mpz_clear(oL);
 			cap->Q[(i-1)*R + _c] = mpq_get_d(tmp);
 		}
@@ -177,7 +179,7 @@ void gmom_measures(qnmodel* qn, mpq_vec_t G, mpq_vec_t Gk,
 				s = inv[_c] + 1;
 				mpz_t oL; mpz_init(oL); if (scaled) mpz_tdiv_q(oL, L[i-1][s-1], scale_factor); else mpz_set(oL, L[i-1][s-1]);
 				if (mpz_sgn(oL) == 0) mpq_set_si(tmp, 0, 1);
-				else { mpq_set_z(tmp, L[i-1][s-1]); mpq_mul(tmp, tmp, Gk[(i-1)*(R+1)+s]); mpq_div(tmp, tmp, G[0]); mpq_set_si(tmp2, mi[i-1], 1); mpq_mul(tmp, tmp, tmp2); }
+				else { mpq_set_z(tmp, L[i-1][s-1]); mpq_mul(tmp, tmp, Gk[(i-1)*(R+1)+s]); mpq_div(tmp, tmp, G[0]); qn_mult(tmp2, qn, i-1, 0); mpq_mul(tmp, tmp, tmp2); }
 				mpz_clear(oL);
 				printf("%.15e", mpq_get_d(tmp));
 				if (_c < R-1) printf(" ");
@@ -197,7 +199,7 @@ void gmom_measures(qnmodel* qn, mpq_vec_t G, mpq_vec_t Gk,
 				s = inv[_c] + 1;
 				mpz_t oL; mpz_init(oL); if (scaled) mpz_tdiv_q(oL, L[i-1][s-1], scale_factor); else mpz_set(oL, L[i-1][s-1]);
 				if (mpz_sgn(oL) == 0) mpq_set_si(tmp, 0, 1);
-				else { mpq_set_z(tmp, L[i-1][s-1]); mpq_mul(tmp, tmp, Gk[(i-1)*(R+1)+s]); mpq_div(tmp, tmp, G[0]); mpq_set_si(tmp2, mi[i-1], 1); mpq_mul(tmp, tmp, tmp2); }
+				else { mpq_set_z(tmp, L[i-1][s-1]); mpq_mul(tmp, tmp, Gk[(i-1)*(R+1)+s]); mpq_div(tmp, tmp, G[0]); qn_mult(tmp2, qn, i-1, 0); mpq_mul(tmp, tmp, tmp2); }
 				mpz_clear(oL);
 				printf("\t%.15e", mpq_get_d(tmp));
 			}

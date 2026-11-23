@@ -62,11 +62,17 @@ typedef struct
 	int *cchild, *cslot, *ccol;
 } LSB;
 
-/* q[0..d-1]: original queue indices of the sub-model; its last ntag
- * queues are removed by GCEs, child c (dropping q[d-ntag+c]) carrying
- * level clevel[c]; r classes, basis level l.  aonly: build A only (for
- * the singularity screen). */
-LSB* setupb(mpz_t** L, int* q, int d, int ntag, const int* clevel, int r, int l, int* N, mpz_t* Z, int aonly);
+/* q[0..d-1]: original station indices of the sub-model (its support),
+ * en[0..d-1] their exponents over mden (multiplicity of the station in the
+ * sub-model: frac(mi) plus its remaining copies, util.h qn_mult); ntag GCEs,
+ * the one of child c removing one copy of local station tagpos[c], the
+ * child dropping the station from its support when cdrop[c] (else it keeps
+ * the same support and replica table) and carrying level clevel[c]; r
+ * classes, basis level l.  aonly: build A only (for the singularity
+ * screen).  Unit multiplicities, tagpos[c] = d-ntag+c and cdrop = 1 are
+ * the original distinct-queue tree. */
+LSB* setupb(mpz_t** L, int* q, int d, const int* en, int mden, int ntag, const int* tagpos, const int* cdrop,
+            const int* clevel, int r, int l, int* N, mpz_t* Z, int aonly);
 void lsb_free(LSB* ls);
 
 /* base normalizing constant for the single-queue prefix (m=1): a model of
@@ -74,5 +80,9 @@ void lsb_free(LSB* ls);
  * at population pop[0..r-1].  Computed exactly by population-lattice
  * convolution, valid for Z=0 and Z!=0 alike.  Result in G (mpq). */
 void gmom_base(mpq_t G, mpz_t* d, int mult, int* pop, mpz_t* Z, int r);
+
+/* the same for nst stations of rational multiplicity en[q]/mden (station q
+ * contributes (1 - sum_c dem[q][c] x_c)^(-en[q]/mden)), exactly */
+void gbase_exp(mpq_t G, mpz_t** dem, const int* en, int mden, int nst, int* pop, mpz_t* Z, int r);
 
 #endif

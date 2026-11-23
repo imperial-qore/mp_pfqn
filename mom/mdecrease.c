@@ -51,20 +51,23 @@ int mdecrease(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, mpq_vec_t g, mpq_vec_t gr
 				if (mpz_cmp_ui(qnm->Z[s-1], 0) == 0)
 				{
 					mpq_set_si(G[i*(qnm->R+1)+s],0,1);
-					int msum=0; // sum of multiplicities
+					/* sum of multiplicities and replicas, kept as a rational:
+					 * multiplicities are mi[j]/mden (util.h, qn_mult) */
+					long msum=0, md=qn_mden(qnm);
 					for (j=0;j<qnm->M;j++)
 					{
 						I.combs[i][j]++;
 						t=int_matmatchrow(Ik.combs,nck(qnm->M+l-1,l),qnm->M,I.combs[i]);
 						I.combs[i][j]--;
-						mpq_set_si(tmp,qnm->mi[j]+I.combs[i][j],1);
+						qn_mult(tmp,qnm,j,I.combs[i][j]);
 						mpq_mul(tmp,tmp,Gk[t*(qnm->R+1)+s]);
 						mpq_add(G[i*(qnm->R+1)+s],G[i*(qnm->R+1)+s],tmp);
 						msum+=qnm->mi[j];
 					}
 					for (j=0;j<qnm->M;j++)
-						msum+=I.combs[i][j];
-					mpq_set_si(tmp,Ntot+msum-1,1);
+						msum+=md*I.combs[i][j];
+					mpq_set_si(tmp,md*(Ntot-1)+msum,md);
+					mpq_canonicalize(tmp);
 					mpq_div(G[i*(qnm->R+1)+s],G[i*(qnm->R+1)+s],tmp);
 
 				}
@@ -80,7 +83,7 @@ int mdecrease(qnmodel* qnm, mpq_vec_t G, mpq_vec_t Gk, mpq_vec_t g, mpq_vec_t gr
 						t=int_matmatchrow(Ik.combs,nck(qnm->M+l-1,l),qnm->M,I.combs[i]);
 						I.combs[i][j]--;
 						mpq_set_z(tmp,qnm->L[j][s-1]);
-						mpq_set_si(tmp2,qnm->mi[j]+I.combs[i][j],1);
+						qn_mult(tmp2,qnm,j,I.combs[i][j]);
 						mpq_mul(tmp2,tmp2,tmp);
 						mpq_set_z(tmp,qnm->Z[s-1]);
 						mpq_div(tmp2,tmp2,tmp);

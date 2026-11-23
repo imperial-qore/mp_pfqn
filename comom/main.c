@@ -530,6 +530,7 @@ static int comom_main(int argc, char**argv)
 	if (COMOM_MODEL)
 		qnm = COMOM_MODEL;
 	else {
+		qn_allow_rational_mi = 1;   /* fractional multiplicities (util.h, qn_mult) */
 		qnm=(qnmodel*)readmodel(model_file);
 		qn_require_closed(qnm, "comom", 0);
 	}
@@ -1235,10 +1236,10 @@ static int comom_main(int argc, char**argv)
 				mpz_clear(original_L_value);
 				
 				// Multiply by the multiplicity mi[k-1] for station k
-				if (qnm->mi[k-1] > 1) {
+				if (qnm->mi[k-1] != qn_mden(qnm)) {
 					mpq_t mi_q;
 					mpq_init(mi_q);
-					mpq_set_ui(mi_q, qnm->mi[k-1], 1);
+					qn_mult(mi_q, qnm, k-1, 0);   /* mi/mden (util.h) */
 					mpq_mul(Q_kr, Q_kr, mi_q);
 					mpq_clear(mi_q);
 				}
@@ -1382,10 +1383,10 @@ static int comom_main(int argc, char**argv)
 				mpz_clear(original_L_value);
 				
 				// Multiply by the multiplicity mi[k-1] for station k
-				if (qnm->mi[k-1] > 1) {
+				if (qnm->mi[k-1] != qn_mden(qnm)) {
 					mpq_t mi_q;
 					mpq_init(mi_q);
-					mpq_set_ui(mi_q, qnm->mi[k-1], 1);
+					qn_mult(mi_q, qnm, k-1, 0);   /* mi/mden (util.h) */
 					mpq_mul(Q_kr, Q_kr, mi_q);
 					mpq_clear(mi_q);
 				}
@@ -1520,7 +1521,7 @@ static void sg_measure(qnmodel* q, mpq_t* ex, int k, int r, mpq_t out)
 	mpq_t w; mpq_init(w);
 	mpq_div(out, ex[SG_IDX_GK(R,k,r)], ex[0]);
 	mpq_set_z(w, q->L[k][r]); mpq_mul(out, out, w);
-	mpq_set_si(w, q->mi[k], 1);  mpq_mul(out, out, w);
+	qn_mult(w, q, k, 0);  mpq_mul(out, out, w);
 	mpq_clear(w);
 }
 
@@ -1535,7 +1536,7 @@ static int comom_fallback(qnmodel* q, bool log_output, bool normconst_output, bo
 	 * long rationals, while per prime in Z/p they are word-size
 	 * recursions, combined by CRT into the same exact value. */
 	comommod_config(COMOM_THREADS, 61, 0, 0, 0);
-	sg_ops ops = { comom_sg_direct, comommod_interp, NULL, " per prime" };
+	sg_ops ops = { comom_sg_direct, qn_mden(q) > 1 ? NULL : comommod_interp, NULL, qn_mden(q) > 1 ? "" : " per prime" };
 	sg_qn_fix_nt(q);
 	int rc = sg_solve_tiered(q, ex, tier, sizeof tier, &ops, 1);
 	if (rc != 0) {
@@ -1624,7 +1625,7 @@ static int comom_reduced(qnmodel* q, bool log_output, bool normconst_output, boo
 	mpq_t* ex = sg_mpq_arr(nres);
 	char tier[256];
 	if (!no_perturb) comommod_config(COMOM_THREADS, 61, 0, 0, 0);
-	sg_ops ops = { comom_sg_direct, comommod_interp, NULL, " per prime" };
+	sg_ops ops = { comom_sg_direct, qn_mden(q) > 1 ? NULL : comommod_interp, NULL, qn_mden(q) > 1 ? "" : " per prime" };
 	sg_qn_fix_nt(q);
 	int rc = sg_solve_reduced(q, ex, tier, sizeof tier, &ops, !no_perturb);
 	if (rc == -1) { sg_mpq_arr_free(ex, nres); return -1; }

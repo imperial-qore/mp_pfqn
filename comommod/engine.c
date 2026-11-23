@@ -405,5 +405,10 @@ int comommod_solve_tiered(qnmodel* q, mpq_t* out, char* tier, size_t tsz)
 
 int comommod_interp(qnmodel* q, mpq_t* out, void* ctx)
 {
+	/* the per-prime recursion reads mi as an integer copy count */
+	if (qn_mden(q) > 1) {
+		fprintf(stderr, "comommod_interp: fractional multiplicities are not supported by the modular interpolation tier\n");
+		return 1;
+	}
 	return sg_interp_mod(q, out, ctx);
 }
