@@ -35,6 +35,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <gmp.h>
+#include <time.h>
 
 typedef struct {
 	int nE, card, M;
@@ -152,6 +153,10 @@ static int zc_failfast = 0;   /* stop an order at the first G neither the PC nor
 static long zc_nsub = 0, zc_budget = 0;   /* corner sub-runs allowed per class order (OIMOM_ZC_SUBRUNS) */
 typedef struct zmemo { int R; int N[32]; int ok; mpq_t* tr; struct zmemo* next; } zmemo;
 
+/* shifted export (zc_solve_shift): G(N-b) and G^{+k}(N-b) for n shifts b
+ * (reduced class indices), where need says so */
+typedef struct { int n; const int* b; const char* needG; const char* needX; mpq_t* G; mpq_t* X; } zshift;
+
 typedef struct {
 	int R, M;             /* classes of the reduced problem, stations */
 	const int* N;
@@ -160,6 +165,8 @@ typedef struct {
 	const int* mi;
 	zmemo** memo;         /* shared by the sub-runs of one top-level run */
 	int depth;
+	int lev;              /* basis level: decrements |c| <= lev (M in comom) */
+	const zshift* sh;     /* shifted export, top level only */
 } zprob;
 
 static void zm_free(zmemo* m)
@@ -193,7 +200,7 @@ static mpq_t* zc_corner(const zprob* P, const int* ord, int idx, const int* c)
 		int o[32];
 		for (i = 0; i < R1; i++) { mpq_init(Zs[i]); mpq_set(Zs[i], P->Z[ord[i]]); o[i] = i; }
 		for (k = 0; k < P->M; k++) { Ls[k] = (mpq_t*) malloc(R1 * sizeof(mpq_t)); for (i = 0; i < R1; i++) { mpq_init(Ls[k][i]); mpq_set(Ls[k][i], P->L[k][ord[i]]); } }
-		zprob S = { R1, P->M, key, Zs, Ls, P->mi, P->memo, P->depth + 1 };
+		zprob S = { R1, P->M, key, Zs, Ls, P->mi, P->memo, P->depth + 1, P->lev, NULL };
 		zc_nsub++;
 		m->ok = zc_run(&S, o, NULL, NULL, NULL, m->tr) == 0;
 		for (i = 0; i < R1; i++) mpq_clear(Zs[i]);
@@ -282,7 +289,7 @@ static int list_rows(const zprob* P, const int* ord, int r, const cset* C, const
 			if (mpq_sgn(P->L[k][r]) && !prev->kX[k * card + c]) continue;
 			rows[n].type = 0; rows[n].a = k; rows[n].c = c; n++;
 		}
-		if (C->sum[c] < M)
+		if (C->sum[c] < C->M)
 			for (i = 0; i < nE; i++) { rows[n].type = 1; rows[n].a = i; rows[n].c = c; n++; }
 	}
 	return n;
@@ -372,6 +379,12 @@ static zfact* zf_build(const zprob* P, const int* ord, int r, const cset* C, con
 		for (j = 0; j <= C->nE; j++) fprintf(stderr, " %d", ord[j]);
 		fprintf(stderr, ": rank %d of %d, %d unknown(s) undetermined\n", np, nu, nund);
 	}
+	/* shifted export: a step with every unknown undetermined loses G(N) for
+	 * good (no G^{+k} at this step, so no PC value at the next): drop the order */
+	if (P->sh && nu > 0) {
+		int nund = 0; for (j = 0; j < nu; j++) nund += und[j];
+		if (nund == nu) sing = 1;
+	}
 	for (i = 0; i < nr * nu; i++) mpq_clear(B[i]);
 	free(B);
 	zfact* F = NULL;
@@ -459,12 +472,13 @@ static int zc_run(const zprob* P, const int* ord, mpq_t g0, mpq_t* g1, mpq_t** g
 	slot** hist = NULL; int nhist = 0; cset* Cprev = NULL;
 	slot *last = NULL, *last1 = NULL; cset* Clast = NULL;
 	int rc = 0, nfact = 0, ncorner = 0;
+	clock_t ck0 = clock(), ckf = 0;
 	mpq_t v, w; mpq_init(v); mpq_init(w);
 	mpz_t db, acc; mpz_init(db); mpz_init(acc);
 	for (idx = 0; idx < R && rc == 0; idx++) {
 		int r = ord[idx], nE = idx;
 		for (i = 0; i < nE; i++) NE[i] = P->N[ord[i]];
-		cset* C = cs_new(nE, M, NE);
+		cset* C = cs_new(nE, P->lev, NE);
 		int card = C->card, ring = 2;
 		slot* sl[2] = { sl_new(card, M), sl_new(card, M) };
 		/* t = 0 */
@@ -481,7 +495,7 @@ static int zc_run(const zprob* P, const int* ord, mpq_t g0, mpq_t* g1, mpq_t** g
 			for (k = 0; k < M; k++) { mpq_set(s0->X[k * card + i], h->X[k * Cprev->card + pi]); s0->kX[k * card + i] = h->kX[k * Cprev->card + pi]; }
 		}
 		/* keep the last M+1 steps for the next class (and two for the export) */
-		int keep = M + 1;
+		int keep = P->lev + 1;
 		slot** nh = (slot**) calloc(keep, sizeof(slot*));
 		if (P->N[r] < keep) { nh[P->N[r]] = sl_new(card, M); sl_copy(nh[P->N[r]], s0); }
 		int maxrows = card * (M + nE) + 1;
@@ -526,7 +540,9 @@ static int zc_run(const zprob* P, const int* ord, mpq_t g0, mpq_t* g1, mpq_t** g
 			if (!F || F->siglen != sl_len || memcmp(F->sig, sig, sl_len)) {
 				zf_free(F);
 				int nrows = list_rows(P, ord, r, C, cur, prev, rows);
+				clock_t ck1 = clock();
 				F = zf_build(P, ord, r, C, cur, prev, rows, nrows, cpos);
+				ckf += clock() - ck1;
 				if (!F) { free(sig); rc = 1; break; }
 				F->sig = sig; F->siglen = sl_len;
 				nfact++;
@@ -630,6 +646,30 @@ static int zc_run(const zprob* P, const int* ord, mpq_t g0, mpq_t* g1, mpq_t** g
 		}
 		(void) rl;
 	}
+	if (rc == 0 && P->sh) {
+		/* shifted export: G(N-b) is G_t(c) of the last class at t = N_r - b_r,
+		 * c = b over the earlier classes; that step is in the history while
+		 * b_r <= lev */
+		const zshift* sh = P->sh;
+		int nE = R - 1, rl = ord[R - 1], card = Clast->card, q, c[32];
+		for (q = 0; q < sh->n && rc == 0; q++) {
+			const int* b = sh->b + (size_t) q * R;
+			int sum = 0, j = b[rl];
+			for (i = 0; i < nE; i++) { c[i] = b[ord[i]]; sum += c[i]; }
+			slot* sv = j == 0 ? last : j == 1 ? last1 : (j <= P->lev ? hist[j] : NULL);
+			int ci = sum <= P->lev ? cs_find(Clast, c) : -1;
+			if (!sv || ci < 0) { if (zc_debug > 1) fprintf(stderr, "zc:   shift %d outside the basis\n", q); rc = 1; break; }
+			if (sh->needG[q]) {
+				if (!sv->kG[ci]) { if (zc_debug > 1) fprintf(stderr, "zc:   shift %d: G unknown\n", q); rc = 1; break; }
+				mpq_set(sh->G[q], sv->G[ci]);
+			}
+			for (k = 0; k < M; k++) {
+				if (!sh->needX[(size_t) q * M + k]) continue;
+				if (!sv->kX[k * card + ci]) { if (zc_debug > 1) fprintf(stderr, "zc:   shift %d: G^{+%d} unknown\n", q, k); rc = 1; break; }
+				mpq_set(sh->X[(size_t) q * M + k], sv->X[k * card + ci]);
+			}
+		}
+	}
 	if (last) sl_free(last);
 	if (last1) sl_free(last1);
 	if (Clast) cs_free(Clast);
@@ -637,7 +677,7 @@ static int zc_run(const zprob* P, const int* ord, mpq_t g0, mpq_t* g1, mpq_t** g
 	free(hist);
 	if (Cprev) cs_free(Cprev);
 	mpq_clear(v); mpq_clear(w); mpz_clear(db); mpz_clear(acc);
-	if (zc_debug && P->depth == 0) { fprintf(stderr, "zc: order run rc=%d, %d factorization(s), %d corner value(s), %ld sub-run(s)\n", rc, nfact, ncorner, zc_nsub); zc_nsub = 0; }
+	if (zc_debug && P->depth == 0) { fprintf(stderr, "zc: order run rc=%d, %d factorization(s), %d corner value(s), %ld sub-run(s), %.2f s (%.2f s factoring)\n", rc, nfact, ncorner, zc_nsub, (double) (clock() - ck0) / CLOCKS_PER_SEC, (double) ckf / CLOCKS_PER_SEC); zc_nsub = 0; }
 	return rc;
 }
 
@@ -680,7 +720,7 @@ int zc_solve(int R, int M, const int* N, mpq_t* Z, mpq_t** L, const int* mi,
 	for (r = 0; r < Rr; r++) mpq_init(h1[r]);
 	for (k = 0; k < M; k++) { hk[k] = (mpq_t*) malloc(Rr * sizeof(mpq_t)); for (r = 0; r < Rr; r++) mpq_init(hk[k][r]); }
 	zmemo* memo = NULL;
-	zprob P = { Rr, M, Nr, Zr, Lr, mi, &memo, 0 };
+	zprob P = { Rr, M, Nr, Zr, Lr, mi, &memo, 0, M, NULL };
 	/* class orders: the last one that worked on a problem with the same
 	 * classes first (derived networks of one model share their zero and
 	 * proportionality structure), then every permutation */
@@ -732,5 +772,77 @@ int zc_solve(int R, int M, const int* N, mpq_t* Z, mpq_t** L, const int* mi,
 	for (r = 0; r < Rr; r++) { mpq_clear(Zr[r]); mpq_clear(h1[r]); }
 	for (k = 0; k < M; k++) { for (r = 0; r < Rr; r++) { mpq_clear(Lr[k][r]); mpq_clear(hk[k][r]); } free(Lr[k]); free(hk[k]); }
 	free(Lr); free(h1); free(hk); mpq_clear(h0);
+	return rc;
+}
+
+/* Shifted export: for q < nb, G(N - b_q) into G[q] where needG[q], and
+ * G^{+k}(N - b_q) into X[q*M+k] where needX[q*M+k].  Every b_q <= N.  The
+ * basis level is max(M, the largest decrement over the earlier classes), so
+ * every shift is in the basis; 0 on success, nonzero if some needed value is
+ * undetermined in every class order tried. */
+int zc_solve_shift(int R, int M, const int* N, mpq_t* Z, mpq_t** L, const int* mi,
+                   int nb, const int* b, const char* needG, const char* needX,
+                   mpq_t* G, mpq_t* X, int* tries)
+{
+	int r, k, q, Rr = 0, map[32], dly[32], nd = 0, lev = M;
+	if (zc_check < 0) { if (getenv("OIMOM_ZC_NOFAILFAST")) zc_failfast = 0; if (getenv("OIMOM_ZC_SUBRUNS")) zc_budget = atol(getenv("OIMOM_ZC_SUBRUNS")); zc_check = getenv("OIMOM_ZCHECK") != NULL; zc_debug = getenv("OIMOM_DEBUG") ? atoi(getenv("OIMOM_DEBUG")) : 0; }
+	if (R > 30) return 1;
+	for (r = 0; r < R; r++) {
+		for (k = 0; k < M; k++) if (mpq_sgn(L[k][r])) break;
+		if (k < M) map[Rr++] = r;
+		else { if (!mpq_sgn(Z[r])) return 1; dly[nd++] = r; }
+	}
+	if (Rr == 0) return 1;
+	for (q = 0; q < nb; q++) {
+		int sum = 0;
+		for (r = 0; r < Rr; r++) sum += b[(size_t) q * R + map[r]];
+		if (sum > lev) lev = sum;
+	}
+	int Nr[32]; mpq_t Zr[32]; mpq_t** Lr = (mpq_t**) malloc(M * sizeof(mpq_t*));
+	for (r = 0; r < Rr; r++) { Nr[r] = N[map[r]]; mpq_init(Zr[r]); mpq_set(Zr[r], Z[map[r]]); }
+	for (k = 0; k < M; k++) { Lr[k] = (mpq_t*) malloc(Rr * sizeof(mpq_t)); for (r = 0; r < Rr; r++) { mpq_init(Lr[k][r]); mpq_set(Lr[k][r], L[k][map[r]]); } }
+	int* br = (int*) malloc(((size_t) nb * Rr + 1) * sizeof(int));
+	for (q = 0; q < nb; q++) for (r = 0; r < Rr; r++) br[(size_t) q * Rr + r] = b[(size_t) q * R + map[r]];
+	zshift sh = { nb, br, needG, needX, G, X };
+	zmemo* memo = NULL;
+	zprob P = { Rr, M, Nr, Zr, Lr, mi, &memo, 0, lev, &sh };
+	static int last_ord[32], last_R = 0;
+	int ord[32], rc = 1, n = 0;
+	if (last_R == Rr) { n++; zc_nsub = 0; rc = zc_run(&P, last_ord, NULL, NULL, NULL, NULL); zm_free(memo); memo = NULL; }
+	for (r = 0; r < Rr; r++) ord[r] = r;
+	if (rc != 0 && rc != 2) do {
+		if (last_R == Rr && !memcmp(ord, last_ord, Rr * sizeof(int))) continue;
+		n++;
+		zc_nsub = 0;
+		rc = zc_run(&P, ord, NULL, NULL, NULL, NULL);
+		zm_free(memo); memo = NULL;
+		if (rc == 0) { memcpy(last_ord, ord, Rr * sizeof(int)); last_R = Rr; }
+		if (rc == 2) break;
+	} while (rc != 0 && n < 120 && next_perm(ord, Rr));
+	if (tries) *tries = n;
+	if (rc == 0 && nd) {
+		/* delay-only classes: every value times prod Z_r^{N_r-b_r}/(N_r-b_r)! */
+		mpq_t df, t; mpq_init(df); mpq_init(t);
+		mpz_t f; mpz_init(f);
+		int i;
+		for (q = 0; q < nb; q++) {
+			mpq_set_ui(df, 1, 1);
+			for (i = 0; i < nd; i++) {
+				r = dly[i];
+				int e = N[r] - b[(size_t) q * R + r];
+				mpz_pow_ui(mpq_numref(t), mpq_numref(Z[r]), e);
+				mpz_pow_ui(mpq_denref(t), mpq_denref(Z[r]), e);
+				mpz_fac_ui(f, e); mpz_mul(mpq_denref(t), mpq_denref(t), f);
+				mpq_canonicalize(t);
+				mpq_mul(df, df, t);
+			}
+			if (needG[q]) mpq_mul(G[q], G[q], df);
+			for (k = 0; k < M; k++) if (needX[(size_t) q * M + k]) mpq_mul(X[(size_t) q * M + k], X[(size_t) q * M + k], df);
+		}
+		mpq_clear(df); mpq_clear(t); mpz_clear(f);
+	}
+	for (r = 0; r < Rr; r++) mpq_clear(Zr[r]);
+	for (k = 0; k < M; k++) { for (r = 0; r < Rr; r++) mpq_clear(Lr[k][r]); free(Lr[k]); }
+	free(Lr); free(br);
 	return rc;
 }

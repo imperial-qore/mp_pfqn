@@ -439,6 +439,330 @@ static oires* oi_solve_mom(oimodel* m)
 	return o;
 }
 
+/* ---- single basis: one load-independent network for the whole model ----
+ * Over a common denominator, F_j(z) = P_j(z) / D_j(z) with D_j = prod over
+ * the supports S of (1 - theta_S . z) and P_j a polynomial of degree |D_j|
+ * (each chain term is a monomial times the factors of the supports it
+ * skips).  Factors of D_j that divide P_j are cancelled.  With G' the
+ * normalizing constant of the network of the LI queues plus one queue per
+ * remaining support of every OI station, and p = prod_j P_j,
+ *   G(N)       = sum_a p_a G'(N-a)
+ *   G(N-e_r)   = sum_a p_a G'(N-a-e_r)
+ *   Q_kr G(N)  = m_k L_kr sum_a p_a G'^{+k}(N-a-e_r)                           LI queue k
+ *   Q_jr G(N)  = sum_a q^{jr}_a G'(N-a) + sum_{S in D_j} theta_{S,r} sum_a p_a G'^{+S}(N-a-e_r)
+ * with q^{jr} = (z_r d/dz_r P_j) prod_{i != j} P_i (the derivative of the
+ * numerator; the second sum is the derivative of the denominator).  One
+ * zero-aware CoMoM run on G' exports every shifted value (zc_solve_shift).
+ * Polynomials live on the box n_r <= min(N_r, sum_j |D_j|): coefficients
+ * past N_r multiply G' at a negative population. */
+int zc_solve_shift(int R, int M, const int* N, mpq_t* Z, mpq_t** L, const int* mi,
+                   int nb, const int* b, const char* needG, const char* needX,
+                   mpq_t* G, mpq_t* X, int* tries);
+static long sb_nq, sb_nshift, sb_tries, sb_deg, sb_cancel;   /* summary of the last single-basis solve */
+
+typedef struct { int R; int B[16]; long st[16]; long size; } sbox;
+
+static void bx_init(sbox* x, int R, const int* B)
+{
+	int r;
+	x->R = R; x->size = 1;
+	for (r = 0; r < R; r++) { x->B[r] = B[r]; x->st[r] = x->size; x->size *= B[r] + 1; }
+}
+static void bx_vec(const sbox* x, long i, int* n) { int r; for (r = 0; r < x->R; r++) n[r] = (int) (i / x->st[r] % (x->B[r] + 1)); }
+static long bx_idx(const sbox* x, const int* n) { long i = 0; int r; for (r = 0; r < x->R; r++) { if (n[r] < 0 || n[r] > x->B[r]) return -1; i += n[r] * x->st[r]; } return i; }
+
+/* P *= (1 - th . z), in place (descending: P[i - e_r] is still the old value) */
+static void px_linmul(const sbox* x, mpq_t* P, mpq_t* th)
+{
+	long i; int r, n[16]; mpq_t t; mpq_init(t);
+	for (i = x->size - 1; i >= 0; i--) {
+		bx_vec(x, i, n);
+		for (r = 0; r < x->R; r++)
+			if (n[r] && mpq_sgn(th[r]) && mpq_sgn(P[i - x->st[r]])) { mpq_mul(t, th[r], P[i - x->st[r]]); mpq_sub(P[i], P[i], t); }
+	}
+	mpq_clear(t);
+}
+/* P /= (1 - th . z) as a power series, in place (ascending) */
+static void px_lindiv(const sbox* x, mpq_t* P, mpq_t* th)
+{
+	long i; int r, n[16]; mpq_t t; mpq_init(t);
+	for (i = 0; i < x->size; i++) {
+		bx_vec(x, i, n);
+		for (r = 0; r < x->R; r++)
+			if (n[r] && mpq_sgn(th[r]) && mpq_sgn(P[i - x->st[r]])) { mpq_mul(t, th[r], P[i - x->st[r]]); mpq_add(P[i], P[i], t); }
+	}
+	mpq_clear(t);
+}
+/* C = A * B on the box (C distinct from A and B) */
+static void px_mul(const sbox* x, mpq_t* C, mpq_t* A, mpq_t* B)
+{
+	long i, j; int r, n[16], m2[16], s2[16]; mpq_t t; mpq_init(t);
+	for (i = 0; i < x->size; i++) mpq_set_ui(C[i], 0, 1);
+	for (i = 0; i < x->size; i++) {
+		if (!mpq_sgn(A[i])) continue;
+		bx_vec(x, i, n);
+		for (j = 0; j < x->size; j++) {
+			if (!mpq_sgn(B[j])) continue;
+			bx_vec(x, j, m2);
+			for (r = 0; r < x->R; r++) { s2[r] = n[r] + m2[r]; }
+			long k = bx_idx(x, s2);
+			if (k < 0) continue;
+			mpq_mul(t, A[i], B[j]); mpq_add(C[k], C[k], t);
+		}
+	}
+	mpq_clear(t);
+}
+
+static oires* oi_solve_single(oimodel* m)
+{
+	int R = m->R, Ra = 0, act[16], r, ra, j, k, S, i;
+	long ix;
+	for (r = 0; r < R; r++) if (m->N[r] > 0) act[Ra++] = r;
+	int nU = 1 << Ra;
+	/* supports of each OI station over the active classes it visits */
+	int* nD = (int*) calloc(m->K ? m->K : 1, sizeof(int));
+	char** inD = (char**) malloc((m->K ? m->K : 1) * sizeof(char*));
+	mpq_t*** th = (mpq_t***) malloc((m->K ? m->K : 1) * sizeof(mpq_t**));   /* th[j][U][ra] */
+	int dtot = 0;
+	for (j = 0; j < m->K; j++) {
+		int vis = 0;
+		for (ra = 0; ra < Ra; ra++) if (mpq_sgn(m->v[j][act[ra]])) vis |= 1 << ra;
+		inD[j] = (char*) calloc(nU, 1);
+		th[j] = (mpq_t**) calloc(nU, sizeof(mpq_t*));
+		for (S = 1; S < nU; S++) {
+			if (S & ~vis) continue;
+			int so = 0; for (ra = 0; ra < Ra; ra++) if (S >> ra & 1) so |= 1 << act[ra];
+			th[j][S] = sg_mpq_arr(Ra);
+			for (ra = 0; ra < Ra; ra++) if (S >> ra & 1) mpq_div(th[j][S][ra], m->v[j][act[ra]], m->mu[j][so]);
+			inD[j][S] = 1; nD[j]++;
+		}
+		dtot += nD[j];
+	}
+	int B[16], Na[16];
+	for (ra = 0; ra < Ra; ra++) { Na[ra] = m->N[act[ra]]; B[ra] = Na[ra] < dtot ? Na[ra] : dtot; }
+	sbox bx; bx_init(&bx, Ra, B);
+	/* P_j = D_j F_j on the box, F_j from the balance recursion */
+	mpq_t** Pj = (mpq_t**) malloc((m->K ? m->K : 1) * sizeof(mpq_t*));
+	mpq_t t, u; mpq_init(t); mpq_init(u);
+	int n[16], n2[16];
+	sb_cancel = 0;
+	for (j = 0; j < m->K; j++) {
+		mpq_t* P = Pj[j] = sg_mpq_arr(bx.size);
+		for (ix = 0; ix < bx.size; ix++) {
+			bx_vec(&bx, ix, n);
+			int sup = 0;
+			if (ix == 0) { mpq_set_ui(P[0], 1, 1); continue; }
+			for (ra = 0; ra < Ra; ra++) {
+				if (!n[ra]) continue;
+				sup |= 1 << act[ra];
+				mpq_mul(t, m->v[j][act[ra]], P[ix - bx.st[ra]]); mpq_add(P[ix], P[ix], t);
+			}
+			if (mpq_sgn(P[ix])) mpq_div(P[ix], P[ix], m->mu[j][sup]);
+		}
+		for (S = 1; S < nU; S++) if (inD[j][S]) px_linmul(&bx, P, th[j][S]);
+		/* cancel: (1 - theta_S z) divides P_j iff the quotient has degree < |D_j| */
+		mpq_t* Q = sg_mpq_arr(bx.size);
+		int changed = 1;
+		while (changed) {
+			changed = 0;
+			for (S = 1; S < nU; S++) {
+				if (!inD[j][S]) continue;
+				for (ix = 0; ix < bx.size; ix++) mpq_set(Q[ix], P[ix]);
+				px_lindiv(&bx, Q, th[j][S]);
+				int ok = 1;
+				for (ix = 0; ix < bx.size && ok; ix++) {
+					if (!mpq_sgn(Q[ix])) continue;
+					bx_vec(&bx, ix, n); int tot = 0; for (ra = 0; ra < Ra; ra++) tot += n[ra];
+					if (tot >= nD[j]) ok = 0;
+				}
+				if (!ok) continue;
+				for (ix = 0; ix < bx.size; ix++) mpq_set(P[ix], Q[ix]);
+				inD[j][S] = 0; nD[j]--; sb_cancel++; changed = 1;
+			}
+		}
+		sg_mpq_arr_free(Q, bx.size);
+	}
+	/* p = prod P_j, and prod_{i != j} P_i for the numerator derivatives */
+	mpq_t* p = sg_mpq_arr(bx.size);
+	mpq_t* tmp = sg_mpq_arr(bx.size);
+	mpq_t** others = (mpq_t**) malloc((m->K ? m->K : 1) * sizeof(mpq_t*));
+	mpq_set_ui(p[0], 1, 1);
+	for (j = 0; j < m->K; j++) {
+		others[j] = sg_mpq_arr(bx.size); mpq_set_ui(others[j][0], 1, 1);
+		for (i = 0; i < m->K; i++) {
+			if (i == j) continue;
+			px_mul(&bx, tmp, others[j], Pj[i]);
+			for (ix = 0; ix < bx.size; ix++) mpq_swap(others[j][ix], tmp[ix]);
+		}
+	}
+	if (m->K) px_mul(&bx, p, others[0], Pj[0]);
+	sb_deg = 0;
+	for (ix = 0; ix < bx.size; ix++) if (mpq_sgn(p[ix])) { bx_vec(&bx, ix, n); int tot = 0; for (ra = 0; ra < Ra; ra++) tot += n[ra]; if (tot > sb_deg) sb_deg = tot; }
+	/* q^{jr} = (z_r d/dz_r P_j) * others_j */
+	mpq_t*** q = (mpq_t***) malloc((m->K ? m->K : 1) * sizeof(mpq_t**));
+	for (j = 0; j < m->K; j++) {
+		q[j] = (mpq_t**) malloc(Ra * sizeof(mpq_t*));
+		for (ra = 0; ra < Ra; ra++) {
+			for (ix = 0; ix < bx.size; ix++) { bx_vec(&bx, ix, n); mpq_set_ui(t, n[ra], 1); mpq_mul(tmp[ix], Pj[j][ix], t); }
+			q[j][ra] = sg_mpq_arr(bx.size);
+			px_mul(&bx, q[j][ra], tmp, others[j]);
+		}
+	}
+	/* stations of G': LI queues and the remaining supports, identical rows merged */
+	int maxst = m->M + m->K * nU;
+	mpq_t** Ls = (mpq_t**) malloc((maxst ? maxst : 1) * sizeof(mpq_t*));
+	int* mis = (int*) calloc(maxst ? maxst : 1, sizeof(int));
+	int Mk = 0;
+	int* liat = (int*) malloc((m->M ? m->M : 1) * sizeof(int));
+	int** vqat = (int**) malloc((m->K ? m->K : 1) * sizeof(int*));
+	mpq_t* row = sg_mpq_arr(Ra);
+	for (k = 0; k < m->M + m->K * nU; k++) {
+		int add = 1;
+		if (k < m->M) { for (ra = 0; ra < Ra; ra++) mpq_set(row[ra], m->L[k][act[ra]]); add = m->mi[k]; }
+		else {
+			j = (k - m->M) / nU; S = (k - m->M) % nU;
+			if (S == 0) vqat[j] = (int*) malloc(nU * sizeof(int));
+			vqat[j][S] = -1;
+			if (!S || !inD[j][S]) continue;
+			for (ra = 0; ra < Ra; ra++) mpq_set(row[ra], th[j][S][ra]);
+		}
+		int nz = 0; for (ra = 0; ra < Ra; ra++) if (mpq_sgn(row[ra])) nz = 1;
+		int at = -1;
+		if (nz) {
+			for (i = 0; i < Mk && at < 0; i++) { for (ra = 0; ra < Ra; ra++) if (!mpq_equal(row[ra], Ls[i][ra])) break; if (ra == Ra) at = i; }
+			if (at < 0) { at = Mk++; Ls[at] = sg_mpq_arr(Ra); for (ra = 0; ra < Ra; ra++) mpq_set(Ls[at][ra], row[ra]); }
+			mis[at] += add;
+		}
+		if (k < m->M) liat[k] = at; else vqat[j][S] = at;
+	}
+	sb_nq = Mk;
+	/* live classes: served in G' or with a think time; a dead class (no
+	 * queue, no think time) keeps G' nonzero only at shifts b_r = N_r */
+	int live[16], nl = 0, dead[16];
+	for (ra = 0; ra < Ra; ra++) {
+		int sv = mpq_sgn(m->Z[act[ra]]) != 0;
+		for (i = 0; i < Mk && !sv; i++) if (mpq_sgn(Ls[i][ra])) sv = 1;
+		dead[ra] = !sv;
+		if (sv) live[nl++] = ra;
+	}
+	/* requests over the box widened by one */
+	int B2[16];
+	for (ra = 0; ra < Ra; ra++) B2[ra] = B[ra] + 1 <= Na[ra] ? B[ra] + 1 : Na[ra];
+	sbox bx2; bx_init(&bx2, Ra, B2);
+	long* rq = (long*) malloc(bx2.size * sizeof(long));
+	for (ix = 0; ix < bx2.size; ix++) rq[ix] = -1;
+	int nrq = 0, cap = 64;
+	int* rb = (int*) malloc((size_t) cap * Ra * sizeof(int));
+	char* nG = (char*) malloc(cap); char* nX = (char*) malloc((size_t) cap * (Mk ? Mk : 1));
+#define SB_REQ(vec, wantG, kk) do { \
+		long i2 = bx_idx(&bx2, vec), w2 = -1; int ok2 = i2 >= 0; \
+		for (int d2 = 0; d2 < Ra && ok2; d2++) if (dead[d2] && (vec)[d2] != Na[d2]) ok2 = 0; \
+		if (ok2) { \
+			if (rq[i2] < 0) { \
+				if (nrq == cap) { cap *= 2; rb = (int*) realloc(rb, (size_t) cap * Ra * sizeof(int)); nG = (char*) realloc(nG, cap); nX = (char*) realloc(nX, (size_t) cap * (Mk ? Mk : 1)); } \
+				rq[i2] = nrq; memcpy(rb + (size_t) nrq * Ra, vec, Ra * sizeof(int)); nG[nrq] = 0; memset(nX + (size_t) nrq * (Mk ? Mk : 1), 0, Mk ? Mk : 1); nrq++; \
+			} \
+			w2 = rq[i2]; \
+			if (wantG) nG[w2] = 1; \
+			if ((kk) >= 0) nX[w2 * (Mk ? Mk : 1) + (kk)] = 1; \
+		} } while (0)
+	for (ix = 0; ix < bx.size; ix++) {
+		int used = mpq_sgn(p[ix]) != 0;
+		for (j = 0; j < m->K && !used; j++) for (ra = 0; ra < Ra; ra++) if (mpq_sgn(q[j][ra][ix])) used = 1;
+		if (!used) continue;
+		bx_vec(&bx, ix, n);
+		SB_REQ(n, 1, -1);
+		if (!mpq_sgn(p[ix])) continue;
+		for (ra = 0; ra < Ra; ra++) {
+			if (n[ra] + 1 > Na[ra]) continue;
+			memcpy(n2, n, Ra * sizeof(int)); n2[ra]++;
+			SB_REQ(n2, 1, -1);
+			for (i = 0; i < Mk; i++) if (mpq_sgn(Ls[i][ra])) SB_REQ(n2, 0, i);
+		}
+	}
+#undef SB_REQ
+	sb_nshift = nrq;
+	mpq_t* gv = sg_mpq_arr(nrq ? nrq : 1);
+	mpq_t* xv = sg_mpq_arr((size_t) (nrq ? nrq : 1) * (Mk ? Mk : 1));
+	int rc = 0;
+	sb_tries = 0;
+	if (nl && Mk) {
+		/* G' over the live classes */
+		int Nl[16], tries = 0, l;
+		mpq_t* Zl = sg_mpq_arr(nl);
+		mpq_t** Ll = (mpq_t**) malloc(Mk * sizeof(mpq_t*));
+		for (l = 0; l < nl; l++) { Nl[l] = Na[live[l]]; mpq_set(Zl[l], m->Z[act[live[l]]]); }
+		for (i = 0; i < Mk; i++) { Ll[i] = sg_mpq_arr(nl); for (l = 0; l < nl; l++) mpq_set(Ll[i][l], Ls[i][live[l]]); }
+		int* bl = (int*) malloc(((size_t) nrq * nl + 1) * sizeof(int));
+		for (i = 0; i < nrq; i++) for (l = 0; l < nl; l++) bl[(size_t) i * nl + l] = rb[(size_t) i * Ra + live[l]];
+		rc = zc_solve_shift(nl, Mk, Nl, Zl, Ll, mis, nrq, bl, nG, nX, gv, xv, &tries);
+		sb_tries = tries;
+		free(bl);
+		for (i = 0; i < Mk; i++) sg_mpq_arr_free(Ll[i], nl);
+		free(Ll); sg_mpq_arr_free(Zl, nl);
+	} else {
+		/* no queue: G' is the delay alone over the live classes (no replicas needed) */
+		mpz_t f; mpz_init(f);
+		for (i = 0; i < nrq; i++) {
+			mpq_set_ui(gv[i], 1, 1);
+			for (int l = 0; l < nl; l++) {
+				int e = Na[live[l]] - rb[(size_t) i * Ra + live[l]];
+				mpq_t* z = &m->Z[act[live[l]]];
+				mpz_pow_ui(mpq_numref(t), mpq_numref(*z), e); mpz_pow_ui(mpq_denref(t), mpq_denref(*z), e);
+				mpz_fac_ui(f, e); mpz_mul(mpq_denref(t), mpq_denref(t), f); mpq_canonicalize(t);
+				mpq_mul(gv[i], gv[i], t);
+			}
+		}
+		mpz_clear(f);
+	}
+	oires* o = NULL;
+	if (rc == 0) {
+		int MK = Mk ? Mk : 1;
+		mpq_t G; mpq_init(G);
+		o = res_new(m);
+		for (ix = 0; ix < bx.size; ix++) {
+			bx_vec(&bx, ix, n);
+			long w = bx_idx(&bx2, n), g = w >= 0 ? rq[w] : -1;
+			if (g >= 0) {
+				if (mpq_sgn(p[ix])) { mpq_mul(t, p[ix], gv[g]); mpq_add(G, G, t); }
+				for (j = 0; j < m->K; j++) for (ra = 0; ra < Ra; ra++)
+					if (mpq_sgn(q[j][ra][ix])) { mpq_mul(t, q[j][ra][ix], gv[g]); mpq_add(o->Q[m->M + j][act[ra]], o->Q[m->M + j][act[ra]], t); }
+			}
+			if (!mpq_sgn(p[ix])) continue;
+			for (ra = 0; ra < Ra; ra++) {
+				if (n[ra] + 1 > Na[ra]) continue;
+				memcpy(n2, n, Ra * sizeof(int)); n2[ra]++;
+				long w1 = bx_idx(&bx2, n2), g1 = w1 >= 0 ? rq[w1] : -1;
+				if (g1 < 0) continue;
+				r = act[ra];
+				mpq_mul(t, p[ix], gv[g1]); mpq_add(o->X[r], o->X[r], t);
+				for (k = 0; k < m->M; k++) {
+					if (!mpq_sgn(m->L[k][r]) || liat[k] < 0) continue;
+					mpq_mul(t, p[ix], xv[g1 * MK + liat[k]]); mpq_mul(t, t, m->L[k][r]);
+					mpq_set_ui(u, m->mi[k], 1); mpq_mul(t, t, u);
+					mpq_add(o->Q[k][r], o->Q[k][r], t);
+				}
+				for (j = 0; j < m->K; j++) for (S = 1; S < nU; S++) {
+					if (!inD[j][S] || !(S >> ra & 1) || vqat[j][S] < 0) continue;
+					mpq_mul(t, p[ix], xv[g1 * MK + vqat[j][S]]); mpq_mul(t, t, th[j][S][ra]);
+					mpq_add(o->Q[m->M + j][r], o->Q[m->M + j][r], t);
+				}
+			}
+		}
+		if (mpq_sgn(G) == 0) { fprintf(stderr, "oimom: G(N) = 0 (a class with jobs has no station it can visit)\n"); o = NULL; }
+		else {
+			mpq_set(o->G, G);
+			for (r = 0; r < R; r++) mpq_div(o->X[r], o->X[r], G);
+			for (k = 0; k < m->M + m->K; k++) for (r = 0; r < R; r++) mpq_div(o->Q[k][r], o->Q[k][r], G);
+			o->nconf = 1; o->nsolve = 1; o->nzc = 1;
+		}
+		mpq_clear(G);
+	}
+	/* (buffers are left to process exit, as in oi_solve_mom) */
+	mpq_clear(t); mpq_clear(u);
+	return o;
+}
+
 /* ---- oracle: convolution of the station tables over the population lattice ---- */
 typedef struct { int R; int* N; int* rad; long size; } lat;
 
@@ -568,7 +892,7 @@ static int res_equal(oimodel* m, oires* a, oires* b)
 
 static void usage(const char* p)
 {
-	printf("USAGE: %s [-l|-e|-g|-t|-q|-d] [--conv] [--validate] [--comom-inner] [-j n] model.qnoi\n", p);
+	printf("USAGE: %s [-l|-e|-g|-t|-q|-d] [--conv] [--single] [--validate] [--comom-inner] [-j n] model.qnoi\n", p);
 	printf("  -l, --log      : log of the normalizing constant\n");
 	printf("  -e, --ex       : exact normalizing constant, numerator and denominator\n");
 	printf("  -g, --nc       : normalizing constant as double\n");
@@ -576,6 +900,7 @@ static void usage(const char* p)
 	printf("  -q, --qlen     : mean queue lengths, one row per station (LI queues, then OI stations)\n");
 	printf("  -d, --exact    : full report in exact rationals\n");
 	printf("  --conv         : solve by lattice convolution of the balance functions (oracle)\n");
+	printf("  --single       : one network over common denominators (one CoMoM basis) instead of the chain decomposition\n");
 	printf("  --validate     : solve both ways and check that every result agrees exactly\n");
 	printf("  --comom-inner  : solve every derived network with bin/comom's tiered route instead of\n");
 	printf("                   the zero-aware recursion (zc.c) that is tried first\n");
@@ -587,7 +912,7 @@ static void usage(const char* p)
 int main(int argc, char** argv)
 {
 	double t0 = oi_cputime();
-	bool lg = false, ex = false, nc = false, tp = false, ql = false, dbg = false, conv = false, val = false;
+	bool lg = false, ex = false, nc = false, tp = false, ql = false, dbg = false, conv = false, val = false, single = false;
 	char* file = NULL;
 	int i, r, s;
 	for (i = 1; i < argc; i++) {
@@ -599,6 +924,7 @@ int main(int argc, char** argv)
 		else if (!strcmp(argv[i], "-d") || !strcmp(argv[i], "--exact")) dbg = true;
 		else if (!strcmp(argv[i], "--conv")) conv = true;
 		else if (!strcmp(argv[i], "--validate")) val = true;
+		else if (!strcmp(argv[i], "--single")) single = true;
 		else if (!strcmp(argv[i], "--comom-inner")) oimom_zc = 0;
 		else if (!strcmp(argv[i], "-j") && i + 1 < argc) OIMOM_THREADS = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { usage(argv[0]); return 0; }
@@ -611,7 +937,13 @@ int main(int argc, char** argv)
 	int nt = 0; for (r = 0; r < m->R; r++) nt += m->N[r];
 	if (nt == 0) { fprintf(stderr, "oimom: empty network (all populations zero)\n"); return 1; }
 
-	oires* o = conv ? oi_solve_conv(m) : oi_solve_mom(m);
+	oires* o = NULL;
+	if (conv) o = oi_solve_conv(m);
+	else if (single) {
+		o = oi_solve_single(m);
+		if (!o) { fprintf(stderr, "oimom: single basis failed (a shifted value is undetermined), using the chain decomposition\n"); single = false; }
+	}
+	if (!o && !conv) o = oi_solve_mom(m);
 	if (!o) return 1;
 	if (val) {
 		oires* c = conv ? oi_solve_mom(m) : oi_solve_conv(m);
@@ -626,7 +958,8 @@ int main(int argc, char** argv)
 	else if (ql) for (s = 0; s < S; s++) { for (r = 0; r < m->R; r++) { put_d(o->Q[s][r]); if (r < m->R - 1) printf(" "); } printf("\n"); }
 	else {
 		printf("Model: R=%d, %d LI queue(s), %d OI station(s)\n", m->R, m->M, m->K);
-		if (!conv) printf("Virtual-queue decomposition: %ld chain configurations, %ld inner CoMoM solves (%ld zero-aware, %ld tiered)\n", o->nconf, o->nsolve, o->nzc, o->nsolve - o->nzc);
+		if (single) printf("Single basis: one network of %ld queue(s), %ld cancelled factor(s), numerator degree %ld, %ld shifted value(s), %ld class order(s)\n", sb_nq, sb_cancel, sb_deg, sb_nshift, sb_tries);
+		else if (!conv) printf("Virtual-queue decomposition: %ld chain configurations, %ld inner CoMoM solves (%ld zero-aware, %ld tiered)\n", o->nconf, o->nsolve, o->nzc, o->nsolve - o->nzc);
 		printf("\n========== Performance Metrics ==========\n");
 		if (dbg) gmp_printf("G = %Qd\n", o->G);
 		else { printf("G = "); put_d(o->G); printf("\nlog(G) = %.15e\n", mpq_log(o->G)); }

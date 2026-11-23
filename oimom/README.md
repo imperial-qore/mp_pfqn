@@ -87,12 +87,57 @@ the same two fallbacks).
 `OIMOM_DEBUG=1` reports the route of each inner solve; `OIMOM_DEBUG=2` also the rank and
 undetermined count of each factorization and the networks that fall back.
 
+## Single basis (`--single`)
+
+The chain decomposition runs one CoMoM recursion per combination of chains, `16^K` at R = 3. Over a
+common denominator the whole model is one load-independent network instead. Each OI station is
+
+    F_j(z) = P_j(z) / D_j(z),   D_j = prod_S (1 - theta_S . z),
+
+`S` over the nonempty supports of visited classes, `P_j` a polynomial of degree `|D_j|` (every chain
+term is a monomial times the factors of the supports it skips). `P_j` is computed as `D_j F_j` on the
+box `n_r <= min(N_r, sum_j |D_j|)`, `F_j` from the balance recursion, and every factor of `D_j` that
+divides `P_j` is cancelled (the quotient has degree below `|D_j|`). With `G'` the network of the LI queues
+plus one queue per remaining support of every OI station (identical rows merged into `mi`), and
+`p = prod_j P_j`:
+
+    G(N)       = sum_a p_a G'(N-a)
+    G(N-1_r)   = sum_a p_a G'(N-a-1_r)
+    Q_kr G(N)  = m_k L_kr sum_a p_a G'^{+k}(N-a-1_r)                                   LI queue k
+    Q_jr G(N)  = sum_a q^{jr}_a G'(N-a) + sum_{S in D_j} theta_{S,r} sum_a p_a G'^{+S}(N-a-1_r)
+
+with `q^{jr} = (z_r d/dz_r P_j) prod_{i != j} P_i`: the derivative of the numerator, then that of the
+denominator. One `zc.c` run on `G'` gives every shifted value (`zc_solve_shift`): the basis level is
+raised to the largest shift over the earlier classes when it exceeds `M`, and the last class keeps its
+steps `N_r - lev .. N_r`. An order is dropped as soon as one of its systems leaves every unknown
+undetermined. If a needed value stays undetermined in every class order, oimom says so and uses the
+chain decomposition.
+
+Exact on all nineteen models: `--validate` on the ten small ones, and output identical to the chain
+decomposition on the nine large ones and the five benchmarks. One large model (`r2k2_15`, R=2, two OI
+stations) falls back. Time (one core, `-d`):
+
+| model | `--single` | chains |
+|---|---|---|
+| R=3, 1 OI + 2 LI, N=(12,12,12) | 8.5 s | 2.1 s |
+| R=3, 1 OI + 2 LI, N=(24,24,24) | 9.0 s | 5.3 s |
+| R=3, 1 OI + 2 LI, N=(48,48,48) | 8.9 s | 27.7 s |
+| R=3, 2 OI + 1 LI, N=(8,8,8) | 55 s | 91 s |
+| R=3, 2 OI, zero think times, N=(8,8,8) (`z0_8`) | 9.4 s | 32 s |
+| R=3, `oi_partial`, N=9 | 22 s | 13 s |
+
+The single network is larger (8 queues at R = 3 with one OI station, 15 with two), and its class
+systems are factored exactly at about 360 unknowns, 0.5 to 0.9 s each. That cost does not depend on `N`,
+and the steps are cheap. So `--single` wins at large populations and with several OI stations, and
+loses at small `N` with one. Three of the four class orders fail on the R=3 benchmarks and cost half
+the run. A sparse or block-triangular factorization would help both modes.
+
 ## Usage
 
-    oimom [-l|-e|-g|-t|-q|-d] [--conv] [--validate] [--comom-inner] [-j n] model.qnoi
+    oimom [-l|-e|-g|-t|-q|-d] [--conv] [--single] [--validate] [--comom-inner] [-j n] model.qnoi
 
 Same output flags as the other solvers. `-q` prints one row per station: the LI queues first, then
-the OI stations in file order. `--comom-inner` skips `zc.c` and sends every derived network to the
+the OI stations in file order. `--single` solves the model as one network (above). `--comom-inner` skips `zc.c` and sends every derived network to the
 tiered CoMoM route (the previous behaviour). `-j` sets the threads of the interpolation tier of that
 route (see Cost).
 
