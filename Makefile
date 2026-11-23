@@ -29,8 +29,8 @@ LDFLAGS += $(DEP_LDFLAGS)
 
 #.SILENT:
 
-DIRS	= util gmpla zpla mva mvamx mom recal rndmodel ca comom routing2visits procomom gld comomld mvaldmx lcfsmva mommod comommod gmom safe_comom safe_mom safe_gmom promom safe_promom camarg binmom bincomom gcomom automom
-EXE	= ./bin/mom ./bin/mommod ./bin/comommod ./bin/gmom ./bin/comom ./bin/safe_comom ./bin/safe_mom ./bin/safe_gmom ./bin/procomom ./bin/promom ./bin/safe_promom ./bin/camarg ./bin/binmom ./bin/bincomom ./bin/gcomom ./bin/automom
+DIRS	= util gmpla zpla mva mvamx mom recal rndmodel ca comom routing2visits procomom gld comomld mvaldmx lcfsmva mommod comommod gmom safe_comom safe_mom safe_gmom promom safe_promom camarg binmom bincomom gcomom automom oica
+EXE	= ./bin/mom ./bin/mommod ./bin/comommod ./bin/gmom ./bin/comom ./bin/safe_comom ./bin/safe_mom ./bin/safe_gmom ./bin/procomom ./bin/promom ./bin/safe_promom ./bin/camarg ./bin/binmom ./bin/bincomom ./bin/gcomom ./bin/automom ./bin/oica
 LIBS	= -L. -lsub -lsuba -lsubsub
 
 all : check-deps $(EXE) 
@@ -100,6 +100,7 @@ $(EXE) :
 	cd bincomom; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	cd gcomom; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	cd automom; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
+	cd oica; $(MAKE) $(MFLAGS) PRJCFLAGS="$(PRJCFLAGS)" LDFLAGS="$(LDFLAGS)"; cd ..
 	@echo "Cleaning up .o files..."
 	@find . -name "*.o" -type f -not -path "./deps/*" -delete
 
