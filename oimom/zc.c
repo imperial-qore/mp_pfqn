@@ -140,10 +140,13 @@ typedef struct {
 	int* bstart; int* brow; int* bcol;
 	mpz_t** biz;             /* block inverse as integers: inv[t][u] = biz[b][t*bs+u] / bden[b][t] */
 	mpz_t** bden;
+	struct zlu_s** blu;       /* sparse LU of a large block instead of biz/bden, else NULL */
 	int* offn; int** offq; mpq_t** offc;   /* per row: coefficients on columns of earlier blocks */
 	int maxbs;
 	char* sig; size_t siglen;
 } zfact;
+
+static void zlu_free(struct zlu_s* L);
 
 static void zf_free(zfact* f)
 {
@@ -154,9 +157,10 @@ static void zf_free(zfact* f)
 		int bs = f->bstart[b + 1] - f->bstart[b];
 		if (f->biz && f->biz[b]) { for (q = 0; q < bs * bs; q++) mpz_clear(f->biz[b][q]); free(f->biz[b]); }
 		if (f->bden && f->bden[b]) { for (q = 0; q < bs; q++) mpz_clear(f->bden[b][q]); free(f->bden[b]); }
+		if (f->blu) zlu_free(f->blu[b]);
 	}
 	if (f->offn) for (i = 0; i < f->ncol; i++) { for (q = 0; q < f->offn[i]; q++) mpq_clear(f->offc[i][q]); free(f->offq[i]); free(f->offc[i]); }
-	free(f->biz); free(f->bden); free(f->bstart); free(f->brow); free(f->bcol); free(f->offn); free(f->offq); free(f->offc);
+	free(f->biz); free(f->bden); free(f->blu); free(f->bstart); free(f->brow); free(f->bcol); free(f->offn); free(f->offq); free(f->offc);
 	free(f->det); free(f->col); free(f->row); free(f->sig); free(f);
 }
 
@@ -344,6 +348,131 @@ static void bt_scc(bt_tarjan* T, int i)
 	}
 }
 
+/* Sparse LU of one diagonal block, by right-looking elimination with
+ * Markowitz pivoting (smallest (row count - 1)(column count - 1), then the
+ * smallest entry in bits).  Indices are local to the block: rows u and
+ * columns v in 0..n-1.  Step k pivots on (prow[k], pcol[k]) with value
+ * piv[k]; its L multipliers are li/lx[lp[k] .. lp[k+1]-1] (row, factor) and
+ * its U row uj/ux[up[k] .. up[k+1]-1] (column, value). */
+typedef struct zlu_s {
+	int n;
+	int* prow; int* pcol; mpq_t* piv;
+	int* lp; int* li; mpq_t* lx;
+	int* up; int* uj; mpq_t* ux;
+} zlu;
+
+static int zc_lumin = 24;   /* blocks of at least this size get a sparse LU, smaller ones a dense inverse (OIMOM_ZC_LUMIN) */
+
+static void zlu_free(zlu* L)
+{
+	int q;
+	if (!L) return;
+	for (q = 0; q < L->n; q++) mpq_clear(L->piv[q]);
+	for (q = 0; q < L->lp[L->n]; q++) mpq_clear(L->lx[q]);
+	for (q = 0; q < L->up[L->n]; q++) mpq_clear(L->ux[q]);
+	free(L->prow); free(L->pcol); free(L->piv); free(L->lp); free(L->li); free(L->lx); free(L->up); free(L->uj); free(L->ux); free(L);
+}
+
+/* append (j, v) to a growable list */
+static void zl_push(int** ix, mpq_t** vx, int* len, int* cap, int j, const mpq_t v)
+{
+	if (*len == *cap) {
+		int nc = *cap ? 2 * *cap : 8;
+		*ix = (int*) realloc(*ix, nc * sizeof(int));
+		*vx = (mpq_t*) realloc(*vx, nc * sizeof(mpq_t));
+		*cap = nc;
+	}
+	(*ix)[*len] = j; mpq_init((*vx)[*len]); mpq_set((*vx)[*len], v); (*len)++;
+}
+
+/* factor the n x n block given by sparse rows (rn[u] entries rc[u][]/rv[u][]),
+ * which it consumes; NULL if singular */
+static zlu* zlu_build(int n, int* rn, int** rc, mpq_t** rv)
+{
+	int u, v, q, k;
+	int* rcap = (int*) malloc(n * sizeof(int));
+	int* ccnt = (int*) calloc(n, sizeof(int));
+	char* ract = (char*) malloc(n); char* cact = (char*) malloc(n);
+	int* mark = (int*) malloc(n * sizeof(int));
+	int* wl = (int*) malloc(n * sizeof(int));
+	mpq_t* wk = (mpq_t*) malloc(n * sizeof(mpq_t));
+	for (u = 0; u < n; u++) { rcap[u] = rn[u]; ract[u] = cact[u] = 1; mark[u] = -1; mpq_init(wk[u]); }
+	for (u = 0; u < n; u++) for (q = 0; q < rn[u]; q++) ccnt[rc[u][q]]++;
+	zlu* L = (zlu*) calloc(1, sizeof(zlu));
+	L->n = n;
+	L->prow = (int*) malloc(n * sizeof(int)); L->pcol = (int*) malloc(n * sizeof(int));
+	L->piv = (mpq_t*) malloc(n * sizeof(mpq_t));
+	L->lp = (int*) calloc(n + 1, sizeof(int)); L->up = (int*) calloc(n + 1, sizeof(int));
+	int ln = 0, lcap = 0, un = 0, ucap = 0;
+	L->li = NULL; L->lx = NULL; L->uj = NULL; L->ux = NULL;
+	mpq_t f, t; mpq_init(f); mpq_init(t);
+	int ok = 1;
+	for (k = 0; k < n && ok; k++) {
+		/* Markowitz pivot over the active entries */
+		int bp = -1, bq = -1;
+		long bcost = -1; size_t bbits = 0;
+		for (u = 0; u < n; u++) {
+			if (!ract[u]) continue;
+			for (q = 0; q < rn[u]; q++) {
+				long cost = (long) (rn[u] - 1) * (ccnt[rc[u][q]] - 1);
+				if (bcost >= 0 && cost > bcost) continue;
+				size_t bits = mpz_sizeinbase(mpq_numref(rv[u][q]), 2) + mpz_sizeinbase(mpq_denref(rv[u][q]), 2);
+				if (bcost < 0 || cost < bcost || bits < bbits) { bcost = cost; bbits = bits; bp = u; bq = q; }
+			}
+		}
+		if (bp < 0) { ok = 0; break; }
+		int c = rc[bp][bq];
+		L->prow[k] = bp; L->pcol[k] = c;
+		mpq_init(L->piv[k]); mpq_set(L->piv[k], rv[bp][bq]);
+		/* the pivot row leaves: it is row k of U */
+		ract[bp] = 0; cact[c] = 0;
+		for (q = 0; q < rn[bp]; q++) {
+			ccnt[rc[bp][q]]--;
+			if (q != bq) zl_push(&L->uj, &L->ux, &un, &ucap, rc[bp][q], rv[bp][q]);
+		}
+		L->up[k + 1] = un;
+		/* eliminate column c from the other active rows */
+		for (u = 0; u < n; u++) {
+			if (!ract[u]) continue;
+			int qc = -1;
+			for (q = 0; q < rn[u]; q++) if (rc[u][q] == c) { qc = q; break; }
+			if (qc < 0) continue;
+			mpq_div(f, rv[u][qc], L->piv[k]);
+			zl_push(&L->li, &L->lx, &ln, &lcap, u, f);
+			/* scatter the row without column c */
+			int nw = 0;
+			for (q = 0; q < rn[u]; q++) {
+				if (q == qc) continue;
+				v = rc[u][q]; mark[v] = u; wl[nw++] = v; mpq_swap(wk[v], rv[u][q]);
+			}
+			ccnt[c]--;
+			for (q = 0; q < rn[bp]; q++) {
+				if (q == bq) continue;
+				v = rc[bp][q];
+				mpq_mul(t, f, rv[bp][q]);
+				if (mark[v] != u) { mark[v] = u; wl[nw++] = v; mpq_neg(wk[v], t); ccnt[v]++; }
+				else mpq_sub(wk[v], wk[v], t);
+			}
+			/* gather, dropping cancellations */
+			for (q = 0; q < rn[u]; q++) mpq_clear(rv[u][q]);
+			if (nw > rcap[u]) { rcap[u] = nw; rc[u] = (int*) realloc(rc[u], nw * sizeof(int)); rv[u] = (mpq_t*) realloc(rv[u], nw * sizeof(mpq_t)); }
+			int m = 0;
+			for (q = 0; q < nw; q++) {
+				v = wl[q]; mark[v] = -1;
+				if (!mpq_sgn(wk[v])) { ccnt[v]--; continue; }
+				rc[u][m] = v; mpq_init(rv[u][m]); mpq_swap(rv[u][m], wk[v]); m++;
+			}
+			rn[u] = m;
+		}
+		L->lp[k + 1] = ln;
+	}
+	mpq_clear(f); mpq_clear(t);
+	for (u = 0; u < n; u++) { for (q = 0; q < rn[u]; q++) mpq_clear(rv[u][q]); free(rc[u]); free(rv[u]); mpq_clear(wk[u]); rn[u] = 0; rc[u] = NULL; rv[u] = NULL; }
+	free(rcap); free(ccnt); free(ract); free(cact); free(mark); free(wl); free(wk);
+	if (!ok) { L->n = k; zlu_free(L); return NULL; }
+	return L;
+}
+
 /* Build and factor the system for the current pattern: pivot rows and columns,
  * the block triangular form of their square block with the inverse of each
  * diagonal block, and which pivot unknowns are determined. */
@@ -482,6 +611,7 @@ static zfact* zf_build(const zprob* P, const int* ord, int r, const cset* C, con
 		F->bcol = (int*) malloc((n ? n : 1) * sizeof(int));
 		F->biz = (mpz_t**) calloc(F->nblk ? F->nblk : 1, sizeof(mpz_t*));
 		F->bden = (mpz_t**) calloc(F->nblk ? F->nblk : 1, sizeof(mpz_t*));
+		F->blu = (zlu**) calloc(F->nblk ? F->nblk : 1, sizeof(zlu*));
 		F->offn = (int*) calloc(n ? n : 1, sizeof(int));
 		F->offq = (int**) calloc(n ? n : 1, sizeof(int*));
 		F->offc = (mpq_t**) calloc(n ? n : 1, sizeof(mpq_t*));
@@ -502,9 +632,11 @@ static zfact* zf_build(const zprob* P, const int* ord, int r, const cset* C, con
 				if (bs > F->maxbs) F->maxbs = bs;
 				for (u = 0; u < bs; u++) lpos[F->bcol[s0 + u]] = u;
 				/* off-block coefficients, and the dense diagonal block next to the identity */
-				int w2 = 2 * bs;
-				mpq_t* S = (mpq_t*) malloc((size_t) bs * w2 * sizeof(mpq_t));
-				for (u = 0; u < bs * w2; u++) mpq_init(S[u]);
+				int w2 = 2 * bs, lu = bs >= zc_lumin;
+				mpq_t* S = NULL;
+				int* rn = NULL; int** rc = NULL; mpq_t** rv = NULL;
+				if (lu) { rn = (int*) calloc(bs, sizeof(int)); rc = (int**) calloc(bs, sizeof(int*)); rv = (mpq_t**) calloc(bs, sizeof(mpq_t*)); }
+				else { S = (mpq_t*) malloc((size_t) bs * w2 * sizeof(mpq_t)); for (u = 0; u < bs * w2; u++) mpq_init(S[u]); }
 				for (u = 0; u < bs; u++) {
 					int w = F->brow[s0 + u], no = 0;
 					for (q = ap[w]; q < ap[w + 1]; q++) if (lpos[aj[q]] < 0) no++;
@@ -512,13 +644,21 @@ static zfact* zf_build(const zprob* P, const int* ord, int r, const cset* C, con
 					F->offq[w] = (int*) malloc((no ? no : 1) * sizeof(int));
 					F->offc[w] = (mpq_t*) malloc((no ? no : 1) * sizeof(mpq_t));
 					no = 0;
+					if (lu) { rc[u] = (int*) malloc((ap[w + 1] - ap[w] - F->offn[w] + 1) * sizeof(int)); rv[u] = (mpq_t*) malloc((ap[w + 1] - ap[w] - F->offn[w] + 1) * sizeof(mpq_t)); }
 					for (q = ap[w]; q < ap[w + 1]; q++) {
 						if (lpos[aj[q]] < 0) { F->offq[w][no] = aj[q]; mpq_init(F->offc[w][no]); mpq_set(F->offc[w][no], ax[q]); no++; }
+						else if (lu) { rc[u][rn[u]] = lpos[aj[q]]; mpq_init(rv[u][rn[u]]); mpq_set(rv[u][rn[u]], ax[q]); rn[u]++; }
 						else mpq_set(S[(size_t) u * w2 + lpos[aj[q]]], ax[q]);
 					}
-					mpq_set_ui(S[(size_t) u * w2 + bs + u], 1, 1);
+					if (!lu) mpq_set_ui(S[(size_t) u * w2 + bs + u], 1, 1);
 				}
 				for (u = 0; u < bs; u++) lpos[F->bcol[s0 + u]] = -1;
+				if (lu) {
+					F->blu[b2] = zlu_build(bs, rn, rc, rv);
+					free(rn); free(rc); free(rv);
+					if (!F->blu[b2]) { sing = 1; b2++; break; }
+					continue;
+				}
 				/* Gauss-Jordan on the block */
 				for (col = 0; col < bs && !sing; col++) {
 					int p = -1;
@@ -685,6 +825,22 @@ static int zc_run(const zprob* P, const int* ord, mpq_t g0, mpq_t* g1, mpq_t** g
 					int ro = F->brow[s0 + u];
 					for (q = 0; q < F->offn[ro]; q++) { mpq_mul(w, F->offc[ro][q], xs[F->offq[ro][q]]); mpq_sub(rhs[ro], rhs[ro], w); }
 				}
+				if (F->blu[bb]) {
+					/* sparse LU: forward on L, back on U */
+					const zlu* LU = F->blu[bb];
+					int kk;
+					for (kk = 0; kk < bs; kk++) {
+						const mpq_t* yp = &rhs[F->brow[s0 + LU->prow[kk]]];
+						if (!mpq_sgn(*yp)) continue;
+						for (q = LU->lp[kk]; q < LU->lp[kk + 1]; q++) { mpq_mul(w, LU->lx[q], *yp); mpq_sub(rhs[F->brow[s0 + LU->li[q]]], rhs[F->brow[s0 + LU->li[q]]], w); }
+					}
+					for (kk = bs - 1; kk >= 0; kk--) {
+						mpq_set(v, rhs[F->brow[s0 + LU->prow[kk]]]);
+						for (q = LU->up[kk]; q < LU->up[kk + 1]; q++) { mpq_mul(w, LU->ux[q], xs[F->bcol[s0 + LU->uj[q]]]); mpq_sub(v, v, w); }
+						mpq_div(xs[F->bcol[s0 + LU->pcol[kk]]], v, LU->piv[kk]);
+					}
+					continue;
+				}
 				mpz_set_ui(db, 1);
 				for (u = 0; u < bs; u++) mpz_lcm(db, db, mpq_denref(rhs[F->brow[s0 + u]]));
 				for (u = 0; u < bs; u++) { mpq_t* rr = &rhs[F->brow[s0 + u]]; mpz_divexact(bz[u], db, mpq_denref(*rr)); mpz_mul(bz[u], bz[u], mpq_numref(*rr)); }
@@ -834,7 +990,7 @@ int zc_solve(int R, int M, const int* N, mpq_t* Z, mpq_t** L, const int* mi,
              mpq_t g0, mpq_t* g1, mpq_t** gk, int* tries)
 {
 	int r, k, Rr = 0, map[32], dly[32], nd = 0;
-	if (zc_check < 0) { if (getenv("OIMOM_ZC_NOFAILFAST")) zc_failfast = 0; if (getenv("OIMOM_ZC_SUBRUNS")) zc_budget = atol(getenv("OIMOM_ZC_SUBRUNS")); zc_check = getenv("OIMOM_ZCHECK") != NULL; zc_debug = getenv("OIMOM_DEBUG") ? atoi(getenv("OIMOM_DEBUG")) : 0; }
+	if (zc_check < 0) { if (getenv("OIMOM_ZC_NOFAILFAST")) zc_failfast = 0; if (getenv("OIMOM_ZC_SUBRUNS")) zc_budget = atol(getenv("OIMOM_ZC_SUBRUNS")); zc_check = getenv("OIMOM_ZCHECK") != NULL; if (getenv("OIMOM_ZC_LUMIN")) zc_lumin = atoi(getenv("OIMOM_ZC_LUMIN")); zc_debug = getenv("OIMOM_DEBUG") ? atoi(getenv("OIMOM_DEBUG")) : 0; }
 	if (R > 30) return 1;
 	for (r = 0; r < R; r++) {
 		for (k = 0; k < M; k++) if (mpq_sgn(L[k][r])) break;
@@ -917,7 +1073,7 @@ int zc_solve_shift(int R, int M, const int* N, mpq_t* Z, mpq_t** L, const int* m
                    mpq_t* G, mpq_t* X, int* tries)
 {
 	int r, k, q, Rr = 0, map[32], dly[32], nd = 0, lev = M;
-	if (zc_check < 0) { if (getenv("OIMOM_ZC_NOFAILFAST")) zc_failfast = 0; if (getenv("OIMOM_ZC_SUBRUNS")) zc_budget = atol(getenv("OIMOM_ZC_SUBRUNS")); zc_check = getenv("OIMOM_ZCHECK") != NULL; zc_debug = getenv("OIMOM_DEBUG") ? atoi(getenv("OIMOM_DEBUG")) : 0; }
+	if (zc_check < 0) { if (getenv("OIMOM_ZC_NOFAILFAST")) zc_failfast = 0; if (getenv("OIMOM_ZC_SUBRUNS")) zc_budget = atol(getenv("OIMOM_ZC_SUBRUNS")); zc_check = getenv("OIMOM_ZCHECK") != NULL; if (getenv("OIMOM_ZC_LUMIN")) zc_lumin = atoi(getenv("OIMOM_ZC_LUMIN")); zc_debug = getenv("OIMOM_DEBUG") ? atoi(getenv("OIMOM_DEBUG")) : 0; }
 	if (R > 30) return 1;
 	for (r = 0; r < R; r++) {
 		for (k = 0; k < M; k++) if (mpq_sgn(L[k][r])) break;

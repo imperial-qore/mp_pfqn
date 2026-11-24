@@ -65,11 +65,14 @@ requiring the system to be square or nonsingular:
   null space of the remaining matrix is computed exactly: an unknown is used only if every null
   vector vanishes on it. The square block of pivot rows and pivot columns is put in block upper
   triangular form once per class: a perfect matching of rows to columns, then Tarjan's strongly
-  connected components of the dependency graph, sinks first. Only the diagonal blocks are inverted. A
-  step is a block back-substitution: subtract the sparse terms on the columns of blocks already
-  solved, then apply the block inverse as integer dot products over a common denominator. The forward
-  elimination stays sparse and costs little; the dense inverse of the whole block, which this replaces,
-  filled in and was most of the run.
+  connected components of the dependency graph, sinks first. A diagonal block of fewer than 24
+  unknowns is inverted densely; a larger one gets a sparse LU with Markowitz pivoting (least
+  `(row count - 1)(column count - 1)`, ties to the entry with fewest bits; `OIMOM_ZC_LUMIN` sets the
+  size). A step is a block back-substitution: subtract the sparse terms on the columns of blocks
+  already solved, then apply the block inverse as integer dot products over a common denominator,
+  or a forward and back solve on the LU. The forward elimination stays sparse and costs little; the
+  dense inverse of the whole block, and then the dense inverse of its largest diagonal block (about
+  390 unknowns on the two-OI single networks), filled in and were most of the run.
 - Two defects cause the null space, both at the deepest level `|c| = M`. One is "orphans":
   `G^{+k}(N_E - d)` with `d` supported on classes where `k` has zero demand, which no equation
   touches. The other is stations proportional on two or more earlier classes, which partial zeros
@@ -120,23 +123,24 @@ chain decomposition.
 
 Exact on all nineteen models: `--validate` on the ten small ones, and output identical to the chain
 decomposition on the nine large ones and the five benchmarks. One large model (`r2k2_15`, R=2, two OI
-stations) falls back. Time (one core, `-d`):
+stations) falls back. Time (one core, `-d`, both columns measured together on a busier host than the
+cost table below):
 
 | model | `--single` | chains |
 |---|---|---|
-| R=3, 1 OI + 2 LI, N=(12,12,12) | 4.5 s | 1.1 s |
-| R=3, 1 OI + 2 LI, N=(24,24,24) | 4.7 s | 3.7 s |
-| R=3, 1 OI + 2 LI, N=(48,48,48) | 5.1 s | 25.8 s |
-| R=3, 2 OI + 1 LI, N=(8,8,8) | 18.6 s | 37.8 s |
-| R=3, 2 OI + 1 LI, N=(7,7,7) (`r3k2_7`) | 8.0 s | 9.4 s |
-| R=3, 2 OI, zero think times, N=(8,8,8) (`z0_8`) | 3.3 s | 20.0 s |
-| R=3, `oi_partial`, N=9 | 9.4 s | 7.3 s |
+| R=3, 1 OI + 2 LI, N=(12,12,12) | 0.7 s | 1.2 s |
+| R=3, 1 OI + 2 LI, N=(24,24,24) | 0.7 s | 5.3 s |
+| R=3, 1 OI + 2 LI, N=(48,48,48) | 2.4 s | 34.5 s |
+| R=3, 2 OI + 1 LI, N=(8,8,8) | 1.6 s | 5.4 s |
+| R=3, 2 OI + 1 LI, N=(7,7,7) (`r3k2_7`) | 1.0 s | 4.0 s |
+| R=3, 2 OI, zero think times, N=(8,8,8) (`z0_8`) | 0.4 s | 22.2 s |
+| R=3, `oi_partial`, N=9 | 0.6 s | 4.5 s |
 
 The single network is larger (8 queues at R = 3 with one OI station, 15 with two), and its class
-systems have about 360 unknowns. Their block triangular form still has one diagonal block of about
-200, and its exact inverse is most of the run. That cost does not depend on `N`, and the steps are
-cheap. So `--single` wins at large populations and with several OI stations, and loses at small `N`
-with one. Three of the four class orders fail on the R=3 benchmarks and cost about half the run.
+systems have up to about 1200 unknowns, with one diagonal block of up to about 390. Its dense exact
+inverse was most of the run (31 s of 52 s on the N=(8,8,8) two-OI row); the sparse LU factors it in
+about 1 s. The cost hardly depends on `N`, and `--single` is now faster than the chains on every row.
+Three of the four class orders fail on the R=3 benchmarks.
 
 ## Usage
 
@@ -191,12 +195,13 @@ exact interpolation (`Ntot+1` modular solves), which dominated the run before `z
 | R=3, 1 OI + 2 LI, N=(12,12,12) | 1.1 s | 4.5 s | 4.4 s |
 | R=3, 1 OI + 2 LI, N=(16,16,16) | 1.6 s | 9.4 s | 21.7 s |
 | R=3, 1 OI + 2 LI, N=(24,24,24) | 3.7 s | 29.2 s | not run |
-| R=3, 2 OI + 1 LI, N=(8,8,8) | 38 s | 122 s | 0.3 s |
+| R=3, 2 OI + 1 LI, N=(8,8,8) | 6.2 s | 122 s | 0.3 s |
 
 In the R=3, one-OI rows 15 of the 16 inner solves go through `zc.c` and one falls back. Most of the
 remaining time is that fallback and the class orders tried on it. With two OI stations every inner
 solve goes through `zc.c`; the derived networks have up to 7 stations (about 250 unknowns). The
-block triangular factorization (above) took the `zc.c` share of these rows down by 1.2x to 3x. oimom wins at large populations with
+block triangular factorization (above) took the `zc.c` share of these rows down by 1.2x to 3x, and
+the sparse LU of its large blocks the two-OI row from 38 s to 6.2 s (re-measured on a busier host). oimom wins at large populations with
 one OI station. With two or more OI stations at small `N`, the 16^K inner solves make convolution
 the better choice.
 
@@ -209,8 +214,5 @@ the better choice.
 - Some derived networks still fall back (zero think times with several stations confined to two
   classes). The recursive sub-runs for the deep corners make them solvable but cost more than
   the fallback. A cheaper source for those normalizing constants would close the gap.
-- `zc.c` inverts each diagonal block of the block triangular form densely. On the larger networks one
-  block of about 200 unknowns remains; a sparse LU of that block would cut both its factorization and
-  the per-step product.
 - The chain combinations are independent and could run in parallel, but the inner CoMoM keeps
   global state, so they run one after another.
