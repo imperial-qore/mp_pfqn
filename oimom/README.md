@@ -81,7 +81,11 @@ requiring the system to be square or nonsingular:
   that the class-`r` PC cannot form (it needs an undetermined `G^{+k}`) becomes an unknown of the
   next system, determined through the `Z_s G` term of the earlier-class PCs when it is.
 - Classes that visit no station are factored out; class orders are tried, the last successful one
-  first.
+  first, then (R <= 5) the rest ranked by the number of station pairs proportional on two or more
+  classes of each proper prefix of the order (both nonzero there, same zero pattern). Such a pair
+  leaves values undetermined once its prefix is processed, and the order then fails one class later.
+  On the single networks below this picks a working order first every time (three of four orders
+  used to fail at R = 3).
 - Only a value needed for the output (`G(N)`, `G(N-1_r)`, `G^{+k}(N-1_r)` with `L_kr > 0`) being
   undetermined fails a class order. When every order fails, the network goes to the convolution
   (below), or to the tiered route if its lattice is too large.
@@ -103,7 +107,8 @@ the same two fallbacks).
 
 `OIMOM_ZCHECK=1` checks every usable equation, not only the pivot rows, at every step.
 `OIMOM_DEBUG=1` reports the route of each inner solve; `OIMOM_DEBUG=2` also the rank and
-undetermined count of each factorization and the networks that fall back.
+undetermined count of each factorization and the networks that fall back; `OIMOM_DEBUG=3` also
+prints the single network.
 
 ## Single basis (`--single`)
 
@@ -138,20 +143,19 @@ cost table below):
 
 | model | `--single` | chains |
 |---|---|---|
-| R=3, 1 OI + 2 LI, N=(12,12,12) | 0.8 s | 0.6 s |
-| R=3, 1 OI + 2 LI, N=(24,24,24) | 0.6 s | 0.7 s |
-| R=3, 1 OI + 2 LI, N=(48,48,48) | 1.2 s | 2.6 s |
-| R=3, 2 OI + 1 LI, N=(8,8,8) | 1.2 s | 6.1 s |
-| R=3, 2 OI + 1 LI, N=(7,7,7) (`r3k2_7`) | 0.9 s | 3.6 s |
-| R=3, 2 OI, zero think times, N=(8,8,8) (`z0_8`) | 0.3 s | 6.1 s |
-| R=3, `oi_partial`, N=9 | 0.7 s | 2.3 s |
+| R=3, 1 OI + 2 LI, N=(12,12,12) | 0.14 s | 0.27 s |
+| R=3, 1 OI + 2 LI, N=(24,24,24) | 0.23 s | 0.52 s |
+| R=3, 1 OI + 2 LI, N=(48,48,48) | 1.05 s | 2.0 s |
+| R=3, 2 OI + 1 LI, N=(8,8,8) | 0.88 s | 5.2 s |
+| R=3, 2 OI + 1 LI, N=(7,7,7) (`r3k2_7`) | 0.75 s | 3.7 s |
+| R=3, 2 OI, zero think times, N=(8,8,8) (`z0_8`) | 0.29 s | 4.9 s |
+| R=3, `oi_partial`, N=9 | 0.23 s | 1.8 s |
 
 The single network is larger (8 queues at R = 3 with one OI station, 15 with two), and its class
 systems have up to about 1200 unknowns, with one diagonal block of up to about 390. Its dense exact
 inverse was most of the run (31 s of 52 s on the N=(8,8,8) two-OI row); the sparse LU factors it in
-about 1 s. The cost hardly depends on `N`. With the convolution fallback the chains are close at
-one OI station and small `N`; `--single` wins with two OI stations and at large `N`.
-Three of the four class orders fail on the R=3 benchmarks.
+about 1 s. The cost hardly depends on `N`, every R = 3 row now succeeds on the first class order,
+and `--single` is 2x to 17x faster than the chains.
 
 ## Usage
 

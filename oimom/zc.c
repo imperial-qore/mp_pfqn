@@ -986,6 +986,53 @@ static int next_perm(int* a, int n)
  * rational Z and L.  0 on success, nonzero if every class order is singular
  * (the caller then uses CoMoM's tiered route).  *tries gets the number of
  * class orders tried. */
+/* Class orders to try, best first.  Two stations proportional on two or
+ * more classes of a prefix of the order (both nonzero there, same zero
+ * pattern) leave basis values undetermined once that prefix has been
+ * processed, and the order then usually fails one class later.  For R <= 5
+ * every permutation is scored by the number of such pairs over the proper
+ * prefixes of length >= 2 and the list is sorted by score (ties stay in
+ * lexicographic order); beyond that, lexicographic.  Returns the count. */
+static int ord_list(int R, int M, mpq_t** L, int* out, int max)
+{
+	int a[32], n = 0, r, i, j, p, q;
+	long sc[120];
+	mpq_t x, y; mpq_init(x); mpq_init(y);
+	for (r = 0; r < R; r++) a[r] = r;
+	do {
+		memcpy(out + (size_t) n * R, a, R * sizeof(int));
+		long s = 0;
+		if (R <= 5) for (p = 2; p < R; p++) for (i = 0; i < M; i++) for (j = i + 1; j < M; j++) {
+			int na = 0, r0 = -1, ok = 1;
+			for (q = 0; q < p && ok; q++) {
+				int c = a[q], zi = mpq_sgn(L[i][c]) != 0, zj = mpq_sgn(L[j][c]) != 0;
+				if (zi != zj) ok = 0;
+				else if (zi) { na++; if (r0 < 0) r0 = c; }
+			}
+			if (!ok || na < 2) continue;
+			for (q = 0; q < p && ok; q++) {
+				int c = a[q];
+				if (!mpq_sgn(L[i][c])) continue;
+				mpq_mul(x, L[i][c], L[j][r0]); mpq_mul(y, L[j][c], L[i][r0]);
+				if (!mpq_equal(x, y)) ok = 0;
+			}
+			if (ok) s++;
+		}
+		sc[n++] = s;
+	} while (n < max && next_perm(a, R));
+	/* stable insertion sort by score */
+	int* tmp = (int*) malloc(R * sizeof(int));
+	for (i = 1; i < n; i++) {
+		long s = sc[i];
+		memcpy(tmp, out + (size_t) i * R, R * sizeof(int));
+		for (j = i - 1; j >= 0 && sc[j] > s; j--) { sc[j + 1] = sc[j]; memcpy(out + (size_t) (j + 1) * R, out + (size_t) j * R, R * sizeof(int)); }
+		sc[j + 1] = s; memcpy(out + (size_t) (j + 1) * R, tmp, R * sizeof(int));
+	}
+	free(tmp);
+	mpq_clear(x); mpq_clear(y);
+	return n;
+}
+
 int zc_solve(int R, int M, const int* N, mpq_t* Z, mpq_t** L, const int* mi,
              mpq_t g0, mpq_t* g1, mpq_t** gk, int* tries)
 {
@@ -1020,16 +1067,19 @@ int zc_solve(int R, int M, const int* N, mpq_t* Z, mpq_t** L, const int* mi,
 		rc = zc_run(&P, last_ord, h0, h1, hk, NULL);
 		zm_free(memo); memo = NULL;
 	}
-	for (r = 0; r < Rr; r++) ord[r] = r;
-	if (rc != 0 && rc != 2) do {
-		if (last_R == Rr && !memcmp(ord, last_ord, Rr * sizeof(int))) continue;
+	int* ol = (int*) malloc((size_t) 120 * Rr * sizeof(int));
+	int nol = ord_list(Rr, M, Lr, ol, 120), io;
+	(void) ord;
+	for (io = 0; io < nol && rc != 0 && rc != 2; io++) {
+		int* od = ol + (size_t) io * Rr;
+		if (last_R == Rr && !memcmp(od, last_ord, Rr * sizeof(int))) continue;
 		n++;
 		zc_nsub = 0;
-		rc = zc_run(&P, ord, h0, h1, hk, NULL);
+		rc = zc_run(&P, od, h0, h1, hk, NULL);
 		zm_free(memo); memo = NULL;
-		if (rc == 0) { memcpy(last_ord, ord, Rr * sizeof(int)); last_R = Rr; }
-		if (rc == 2) break;
-	} while (rc != 0 && n < 120 && next_perm(ord, Rr));
+		if (rc == 0) { memcpy(last_ord, od, Rr * sizeof(int)); last_R = Rr; }
+	}
+	free(ol);
 	if (tries) *tries = n;
 	if (rc == 0) {
 		/* delay-only classes: G = prod Z_r^{N_r}/N_r! G_rest */
@@ -1091,22 +1141,32 @@ int zc_solve_shift(int R, int M, const int* N, mpq_t* Z, mpq_t** L, const int* m
 	for (k = 0; k < M; k++) { Lr[k] = (mpq_t*) malloc(Rr * sizeof(mpq_t)); for (r = 0; r < Rr; r++) { mpq_init(Lr[k][r]); mpq_set(Lr[k][r], L[k][map[r]]); } }
 	int* br = (int*) malloc(((size_t) nb * Rr + 1) * sizeof(int));
 	for (q = 0; q < nb; q++) for (r = 0; r < Rr; r++) br[(size_t) q * Rr + r] = b[(size_t) q * R + map[r]];
+	if (zc_debug > 2) {
+		fprintf(stderr, "zc: shifted network, level %d, N", lev);
+		for (r = 0; r < Rr; r++) fprintf(stderr, " %d", Nr[r]);
+		fprintf(stderr, ", Z"); for (r = 0; r < Rr; r++) gmp_fprintf(stderr, " %Qd", Zr[r]);
+		fprintf(stderr, "\n");
+		for (k = 0; k < M; k++) { fprintf(stderr, "zc:   %d x", mi[k]); for (r = 0; r < Rr; r++) gmp_fprintf(stderr, " %Qd", Lr[k][r]); fprintf(stderr, "\n"); }
+	}
 	zshift sh = { nb, br, needG, needX, G, X };
 	zmemo* memo = NULL;
 	zprob P = { Rr, M, Nr, Zr, Lr, mi, &memo, 0, lev, &sh };
 	static int last_ord[32], last_R = 0;
 	int ord[32], rc = 1, n = 0;
 	if (last_R == Rr) { n++; zc_nsub = 0; rc = zc_run(&P, last_ord, NULL, NULL, NULL, NULL); zm_free(memo); memo = NULL; }
-	for (r = 0; r < Rr; r++) ord[r] = r;
-	if (rc != 0 && rc != 2) do {
-		if (last_R == Rr && !memcmp(ord, last_ord, Rr * sizeof(int))) continue;
+	int* ol = (int*) malloc((size_t) 120 * Rr * sizeof(int));
+	int nol = ord_list(Rr, M, Lr, ol, 120), io;
+	(void) ord;
+	for (io = 0; io < nol && rc != 0 && rc != 2; io++) {
+		int* od = ol + (size_t) io * Rr;
+		if (last_R == Rr && !memcmp(od, last_ord, Rr * sizeof(int))) continue;
 		n++;
 		zc_nsub = 0;
-		rc = zc_run(&P, ord, NULL, NULL, NULL, NULL);
+		rc = zc_run(&P, od, NULL, NULL, NULL, NULL);
 		zm_free(memo); memo = NULL;
-		if (rc == 0) { memcpy(last_ord, ord, Rr * sizeof(int)); last_R = Rr; }
-		if (rc == 2) break;
-	} while (rc != 0 && n < 120 && next_perm(ord, Rr));
+		if (rc == 0) { memcpy(last_ord, od, Rr * sizeof(int)); last_R = Rr; }
+	}
+	free(ol);
 	if (tries) *tries = n;
 	if (rc == 0 && nd) {
 		/* delay-only classes: every value times prod Z_r^{N_r-b_r}/(N_r-b_r)! */
