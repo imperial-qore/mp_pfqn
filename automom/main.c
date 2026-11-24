@@ -36,6 +36,7 @@
 #include "util.h"
 #include "gbound.h"
 #include "calib.h"
+#include "calib_frac.h"   /* constants for fractional multiplicities (calibrate.py --frac) */
 
 enum { S_CA, S_MOM, S_COMOM, S_GCOMOM, S_GMOM, S_BINMOM, S_BINCOMOM, S_MOMMOD, S_COMOMMOD, S_GMOMB, NSOLV };
 static const char* NAME[NSOLV] = { "ca", "mom", "comom", "gcomom", "gmom", "binmom", "bincomom", "mommod", "comommod", "gmomb" };
@@ -224,7 +225,11 @@ static bool allowed(const feat* f, int s, bool dbg)
 
 static double predict(const feat* f, int s, int threads)
 {
-	double t = exp(CALIB[s].c0 + CALIB[s].c1 * log(fmax(f->W[s], 1.0)) + CALIB[s].c2 * f->logb);
+	/* fractional models: their own constants (larger coefficients, five
+	 * candidates); a row left at zero by the fit falls back to calib.h */
+	const calib_t* c = &CALIB[s];
+	if (f->frac && (CALIB_FRAC[s].c0 != 0 || CALIB_FRAC[s].c1 != 0)) c = &CALIB_FRAC[s];
+	double t = exp(c->c0 + c->c1 * log(fmax(f->W[s], 1.0)) + c->c2 * f->logb);
 	/* primes are independent; the sub-models of one level in gcomom/gmomb
 	 * scaled as about threads^0.6 on 8 threads (gmom's Bmax = 1 tree is a
 	 * chain and does not scale) */

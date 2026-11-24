@@ -88,5 +88,21 @@ within 1.5x, worst 2.9. Most misses are on runs of a few milliseconds,
 where process start-up and host load decide the order. Models are drawn
 from fixed seeds (`zlib.crc32`), so a rerun times the same grid.
 
+Fractional multiplicities have their own constants, `calib_frac.h`
+(`CALIB_FRAC`, same order as `calib.h`; a zero row falls back to it):
+
+```bash
+python3 automom/calibrate.py --frac --workdir /scratch/bitbucket/automom-cal-frac -p 8
+```
+
+The same grid with every station's multiplicity drawn from 1/2, 3/2, 2/3,
+5/4, 7/3, 1, 2 (at least one fractional), timing only mom, comom, gcomom,
+gmom and gmomb. Their rationals carry the denominators, so the integer
+constants mispriced them: on the 135 grid models with two or more finished
+runs (604 runs, picard09, 8 workers, load about 6) the integer constants
+picked the fastest on 57, picked/best 1.08 at the median, 2.52 at the 90th
+percentile, worst 7.5; the fractional ones pick it on 64, 1.03, 1.92, worst
+3.3. Median prediction error 1.5x (gmomb) to 1.9x (mom).
+
 The predictions assume a non-singular model: a singular one adds the cost
 of the chosen solver's exact fallback, which the model does not price.
