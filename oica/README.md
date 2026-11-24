@@ -25,9 +25,13 @@ per set of classes present, and a general `mu(n)` needs only a new input section
 
 On the ten `oimom/models/*.qnoi` and nine copies with populations 7 to 15, `oica -d` prints the
 same exact report as `oimom -d` (G, every X and every Q), and `--check` holds on all of them. This
-also checks the notes' formulas for `G`, `X` and `Q`.
+also checks the notes' formulas for `G`, `X` and `Q`. The same holds on seven models with three OI
+stations (R = 2 and 3, with and without LI queues and think times, a class not visiting each OI
+station; see `oimom/README.md`), against both oimom modes.
 
 ## Cost
 
 About `prod_r (N_r+1)(N_r+2)/2` table entries per OI station for `G`, and `prod_r (N_r+1)^2` per
 station and class for the `Q` deconvolution. R=3, N=(12,12,12): 1.3 s for `G`, 3.8 s with `Q`.
+R=3, three OI stations and one LI queue, N=(6,6,6): 0.5 s (oimom: 0.8 s with `--single`, 64 s with
+the chains, 0.15 s with `--conv`).

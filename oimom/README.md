@@ -137,8 +137,9 @@ undetermined. If a needed value stays undetermined in every class order, oimom s
 chain decomposition.
 
 Exact on all nineteen models: `--validate` on the ten small ones, and output identical to the chain
-decomposition on the nine large ones and the five benchmarks. One large model (`r2k2_15`, R=2, two OI
-stations) falls back. Time (one core, `-d`, both columns measured together on a busier host than the
+decomposition on the nine large ones and the five benchmarks. Two models fall back, both at R = 2 with
+several OI stations and the larger populations: `r2k2_15` (two OI stations, N=(15,14)) and a
+three-OI model at N=(15,12) (see Validation). Time (one core, `-d`, both columns measured together on a busier host than the
 cost table below):
 
 | model | `--single` | chains |
@@ -195,6 +196,17 @@ of the ten small models, and of the large ones all but 1 of 16 (R=3, K=1), 2 of 
 20 of 80 (`oi_partial`) and 62 of 192 (`oi_z0_onlyoi`: zero think times, two OI stations). Those
 go to the lattice convolution; none of the nineteen reaches the tiered route.
 
+Three OI stations (`K = 3`), seven models outside the repository: R = 2 at N=(6,5) and N=(15,12)
+with one LI queue, R = 2 with OI stations only and zero think times, R = 3 at N=(3,3,2) and
+N=(6,6,6) with one LI queue, R = 3 with OI stations only and zero think times, and R = 3 with one
+class not visiting each OI station. `--validate` with `OIMOM_ZCHECK=1` passes on all of them in both
+modes, and `oica -d` prints the same exact report as `oimom -d` and `oimom --single -d`.
+`--single` falls back to the chains on the R = 2, N=(15,12) one (still exact). At N=(6,6,6) (`-d`):
+chains 64 s (4096 combinations, 60 of them through the convolution, systems up to 210
+unknowns), `--single` 0.8 s (20 queues, numerator degree 16, systems up to 980 unknowns), `--conv`
+0.15 s, `oica` 0.5 s. At small populations fewer combinations exist
+(2765 at N=(3,3,2)): a chain whose shift exceeds `N` contributes nothing.
+
 ## Cost
 
 There are `sum_k R!/(R-k)!` chains per OI station (5 at R = 2, 16 at R = 3, 65 at R = 4), and one
@@ -223,6 +235,56 @@ block triangular factorization (above) took the `zc.c` share of these rows down 
 the sparse LU of its large blocks the two-OI row from 38 s to 5.5 s. oimom wins at large populations with
 one OI station. With two or more OI stations at small `N`, the 16^K inner solves make convolution
 the better choice.
+
+Asymptotically, in exact rational operations (each number has `O(Ntot log Ntot)` bits on top), with
+`K` OI stations fixed and `T(n) = O(R n^3 + Ntot n^2)` the cost of a `zc.c` run whose class systems
+have `n` unknowns (dense bound; the block triangular form and the sparse LU do better in practice,
+not in the bound):
+
+| | `Ntot` | `M` | `R` |
+|---|---|---|---|
+| chains | `O(Ntot)`, plus `O((Ntot/R)^R)` per network that goes to the convolution | `O(M^(3R))` | `O((R!)^(K+1) c^(3R))`, `c = (K+1)^(K+1)/K^K` |
+| `--single` | `O(Ntot)` | `O(M^(3R))` | `O(2^(3 R^2))` |
+| `--conv`, `oica` | `O(Ntot^(2R))` | `O(M)` | `O(N^(2R))` |
+
+The chains run `floor(e R!)^K` networks of at most `M + KR` stations (`n = O((M+KR)^R)`) and may
+try up to `R!` class orders each; `--single` runs one network of up to `M + K(2^R - 1)` queues at
+basis level up to that count (`n = O((M + K 2^R)^R)`) plus polynomial products on a box that stops
+growing once `N` exceeds the numerator degree. Both are linear in `Ntot` and of degree `3R` in `M`;
+they part in `R`, factorial for the chains and `2^(R^2)` for `--single`. So `--single` is the method
+at `R <= 3`, the chains the only one feasible at `R >= 4` with one OI station (the single network's
+systems reach about 19000 unknowns at R = 4 and 2 million at R = 5), and at small `N` and `R` the
+lattice beats both (whole-network convolution of the chain networks was 0.05 s against 5.5 s on
+`z0_8`; running it first below about 50000 lattice points is an open option).
+
+## OI stations directly in the basis (investigated, does not close)
+
+A decomposition-free alternative splits the normalizing constant by the station's current support,
+`G_S(n) = sum_{supp m = S} Phi(m) G_rest(n - m)`. The balance recursion gives, exactly,
+
+    mu_S G_S(n) = sum_{r in S} v_r [ G_S(n - e_r) + G_{S - r}(n - e_r) ],   G_{} = G_rest,
+
+a first-order recursion like an LI queue's CE, with `2^R - 1` coupled unknowns per OI station
+instead of one, and `W_{S,r}(n) = sum_{supp m = S} m_r Phi(m) G_rest(n - m)` obeys
+
+    mu_S W_{S,r}(n) = sum_{s in S} v_s [ W_{S,r}(n - e_s) + W_{S - s,r}(n - e_s) ]
+                      + v_r [ G_S(n - e_r) + G_{S - r}(n - e_r) ],
+
+which closes the PC: `n_r G = Z_r G(n - e_r) + sum_k L_kr G^{+k}(n - e_r) + sum_S W_{S,r}(n)`. All
+three identities were checked exactly against brute-force convolution (R = 3, one OI station).
+
+A prototype CoMoM recursion on these unknowns (Python, exact modulo a 31-bit prime; it reproduces
+CoMoM on LI-only networks, depth `M`, and every value it determines matches the convolution) does not
+close at any basis depth (R = 2, one OI station, zero to two LI queues, N=(10,9)). The rank stays short
+by a fixed amount whatever the depth: the PCs are implied by the `W` recursions, so the one surplus
+row per point that pays for CoMoM's depth is gone. Pinning `G_{}` with its own LI recursion and
+shifting `W` by `e_r` (so the PC refers to the previous step, like an LI queue's term) leave one free
+parameter per population step, even when all steps of a class are solved jointly: the depth recursion
+of the full-support component has no equation at the truncation. So the formulation lacks one
+independent equation per step. `--single` gets it from the extra-copy values `G'^{+S}` of the virtual
+queues. A counting argument would in any case put the depth at about one level per unknown kind,
+`M + K (2^R - 1 + R 2^(R-1))`, more than `--single`'s. The identities remain useful in lattice form,
+`O(R (M + K R 2^R) prod_r (N_r+1))` with no sum over chains.
 
 ## Scope and next steps
 
