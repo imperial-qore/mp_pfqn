@@ -8,7 +8,7 @@
 #   Closed + MU         -> gld, comomld
 #   Mixed (LAMBDA)      -> mvamx
 #   Mixed + MU          -> mvaldmx
-#   Fractional mi       -> mom, comom, gcomom, gmom, checked against gld (-e,-l)
+#   Fractional mi       -> mom, comom, gcomom, gmom, automom, checked against gld (-e,-l)
 #                          and mvaldmx (-t,-q) on the load-dependent companion
 #                          model, rates t/(t+e-1) (see CLAUDE.md)
 #
@@ -45,7 +45,7 @@ MVALDMX_SOLVER="./bin/mvaldmx"
 COMOMLD_SOLVER="./bin/comomld"
 
 # Solvers that accept fractional multiplicities (qn_allow_rational_mi)
-FRAC_SOLVERS=("./bin/mom" "./bin/comom" "./bin/gcomom" "./bin/gmom")
+FRAC_SOLVERS=("./bin/mom" "./bin/comom" "./bin/gcomom" "./bin/gmom" "./bin/automom")
 
 # Log file
 ERROR_LOG="test_errors_$(date +%Y%m%d_%H%M%S).log"

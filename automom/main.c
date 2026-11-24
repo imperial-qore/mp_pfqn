@@ -18,7 +18,8 @@
  * think times or a singular system, gmom -X on a singular system) or a
  * failure moves on to the next.  --race runs the first two at once when
  * their predictions are close and keeps the first to succeed.  Load-dependent and mixed models, outside the
- * MoM family, go to comomld/gld or mvaldmx/mvamx. */
+ * MoM family, go to comomld/gld or mvaldmx/mvamx; a fractional multiplicity
+ * (util.h qn_mult) only to mom, comom, gcomom and gmom/gmomb. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -65,80 +66,96 @@ static int fam_add(fam* F, const int* v)
 	return 1;
 }
 
+/* fractional multiplicity mi/mden (util.h): a never-removed base fb[k] =
+ * mi % mden plus vfull[k] = mi / mden removable copies, as in gcomom and
+ * gmom; integer models have fb = 0, vfull = mi */
+static void split_mi(qnmodel* q, int* fb, int* vfull)
+{
+	int d = qn_mden(q);
+	for (int k = 0; k < q->M; k++) { fb[k] = q->mi[k] % d; vfull[k] = q->mi[k] / d; }
+}
+
+static fam fam_new(int M)
+{
+	fam F = { M, 0, 1024, 4096, NULL, NULL };
+	F.v = malloc((size_t)F.cap*M*sizeof(int)); F.key = malloc(F.hcap*sizeof(int));
+	for (int z = 0; z < F.hcap; z++) F.key[z] = -1;
+	return F;
+}
+
 /* U[r] for r = 1..R; returns the family size, or -1 above cap */
 static long gcomom_unknowns(qnmodel* q, double* U, long cap)
 {
 	int M = q->M, R = q->R;
-	fam F = { M, 0, 1024, 4096, NULL, NULL };
-	F.v = malloc((size_t)F.cap*M*sizeof(int)); F.key = malloc(F.hcap*sizeof(int));
-	for (int z = 0; z < F.hcap; z++) F.key[z] = -1;
-	int* t = malloc(M*sizeof(int));
-	fam_add(&F, q->mi);
+	fam F = fam_new(M);
+	int* t = malloc(M*sizeof(int)); int* fb = malloc(M*sizeof(int)); int* vf = malloc(M*sizeof(int));
+	split_mi(q, fb, vf);
+	fam_add(&F, vf);
 	for (int r = 1; r <= R; r++) U[r] = 0;
 	long n = 0;
 	for (int id = 0; id < F.n; id++) {
 		if (F.n > cap) { n = -1; break; }
-		int* v = F.v + (size_t)id*M, nt = 0;
-		for (int k = 0; k < M; k++) if (v[k] > 0) nt++;
-		int D = nt >= R-1 ? 1 : (nt > 0 ? nt : 1);
+		int* v = F.v + (size_t)id*M, nt = 0, nrem = 0;
+		for (int k = 0; k < M; k++) { if (v[k] > 0 || fb[k] > 0) nt++; if (v[k] > 0) nrem++; }
+		int D = nrem >= R-1 ? 1 : (nt > 0 ? nt : 1);
 		for (int r = 1; r <= R; r++) U[r] += nt * nckd(D + r - 1, r - 1);
-		int nb = MIN(R-1, nt), seen = 0;
+		int nb = MIN(R-1, nrem), seen = 0;
 		for (int k = M-1; k >= 0 && seen < nb; k--) {
 			if (v[k] <= 0) continue;
 			seen++;
 			memcpy(t, F.v + (size_t)id*M, M*sizeof(int)); t[k]--;
-			int any = 0; for (int z = 0; z < M; z++) if (t[z]) { any = 1; break; }
+			int any = 0; for (int z = 0; z < M; z++) if (t[z] || fb[z]) { any = 1; break; }
 			if (any) fam_add(&F, t);
 			v = F.v + (size_t)id*M;   /* fam_add may move F.v */
 		}
 	}
 	if (n == 0) n = F.n;
-	free(F.v); free(F.key); free(t);
+	free(F.v); free(F.key); free(t); free(fb); free(vf);
 	return n;
 }
 
-/* ---- gmom model tree (gmom/main.c gtree_new): the full model, and for a
- * model with d >= 2 queues the children that drop one of its last
- * min(d, Bmax) queues; returns sum_{r>=2} sum_models colA^3 + N_r colA^2,
- * INFINITY above cap models or for M > 63 ---- */
+/* ---- gmom model tree (gmom/main.c gtree_new) on copy vectors: support d
+ * = stations with a copy or a fractional base; a copy is removable unless
+ * it is the last one of a one-station model without base; the GCEs remove
+ * one copy of each of the last ntag = min(Bmax, #removable) of them; basis
+ * level max(1, r - Bc), Bc = 1 for d = 1 else ntag.  Unit multiplicities
+ * give the distinct-queue tree.  Returns sum_{r>=2} sum_models colA^3 +
+ * N_r colA^2, INFINITY above cap models ---- */
 static double gmom_work(qnmodel* q, int bmax, long cap)
 {
 	int M = q->M, R = q->R;
-	if (M > 63 || R < 2) return INFINITY;
-	long n = 0, ncap = 1024, hcap = 4096;
-	uint64_t* m = calloc(ncap, sizeof(uint64_t));
-	long* key = malloc(hcap * sizeof(long));
-	for (long z = 0; z < hcap; z++) key[z] = -1;
+	if (R < 2) return INFINITY;
+	fam F = fam_new(M);
+	int* t = malloc(M*sizeof(int)); int* fb = malloc(M*sizeof(int)); int* vf = malloc(M*sizeof(int));
+	int* rem = malloc(M*sizeof(int));
+	split_mi(q, fb, vf);
+	fam_add(&F, vf);
 	double W = 0;
-	#define GW_ADD(mask) do { uint64_t mk_ = (mask), h_ = (mk_ * 0x9E3779B97F4A7C15ULL) & (hcap-1); int dup_ = 0; \
-		while (key[h_] >= 0) { if (m[key[h_]] == mk_) { dup_ = 1; break; } h_ = (h_+1) & (hcap-1); } \
-		if (!dup_) { if (n == ncap) { ncap *= 2; m = realloc(m, ncap * sizeof(uint64_t)); } m[n] = mk_; key[h_] = n++; \
-			if (2*n > hcap) { free(key); hcap *= 2; key = malloc(hcap * sizeof(long)); for (long z = 0; z < hcap; z++) key[z] = -1; \
-				for (long z = 0; z < n; z++) { uint64_t g_ = (m[z] * 0x9E3779B97F4A7C15ULL) & (hcap-1); while (key[g_] >= 0) g_ = (g_+1) & (hcap-1); key[g_] = z; } } } } while (0)
-	GW_ADD(M == 64 ? ~0ULL : ((1ULL << M) - 1));
-	for (long i = 0; i < n; i++) {
-		if (n > cap) { W = INFINITY; break; }
-		uint64_t mk = m[i];
-		int d = __builtin_popcountll(mk), B = d < bmax ? d : bmax;
+	for (int id = 0; id < F.n; id++) {
+		if (F.n > cap) { W = INFINITY; break; }
+		int* v = F.v + (size_t)id*M, d = 0, nrem = 0;
+		for (int k = 0; k < M; k++) if (v[k] > 0 || fb[k] > 0) d++;
+		for (int k = 0; k < M; k++)
+			if (v[k] >= 1 && (d >= 2 || v[k] >= 2 || fb[k])) rem[nrem++] = k;
+		int ntag = nrem < bmax ? nrem : bmax, Bc = (d == 1) ? 1 : ntag;
 		for (int r = 2; r <= R; r++) {
-			int l = r - B; if (l < 1) l = 1;
+			int l = r - Bc; if (l < 1) l = 1;
 			double colA = r * nckd(d + l - 1, l);
 			W += colA*colA*colA + (double)q->N[r-1] * colA*colA;
 		}
-		if (d < 2) continue;
-		int qs[64], c = 0;
-		for (int k = 0; k < M; k++) if (mk >> k & 1) qs[c++] = k;
-		for (int b = d - B; b < d; b++) GW_ADD(mk & ~(1ULL << qs[b]));
+		for (int c = 0; c < ntag; c++) {
+			memcpy(t, F.v + (size_t)id*M, M*sizeof(int)); t[rem[nrem - ntag + c]]--;
+			fam_add(&F, t);
+		}
 	}
-	#undef GW_ADD
-	free(m); free(key);
+	free(F.v); free(F.key); free(t); free(fb); free(vf); free(rem);
 	return W;
 }
 
 /* ---- model features ---- */
 typedef struct {
 	int M, R, Ntot; double logb;
-	bool ld, open, mi1, zmixed, distinct_rows;
+	bool ld, open, mi1, frac, zmixed, distinct_rows;
 	double W[NSOLV];          /* structural work, INFINITY = not estimated */
 	long famsize;
 } feat;
@@ -151,6 +168,7 @@ static void features(qnmodel* q, feat* f)
 	f->ld = q->isLD; f->open = q->hasOpen;
 	for (int r = 0; r < R; r++) { if (q->N[r] < 0) f->open = true; else f->Ntot += q->N[r]; }
 	f->mi1 = true; long smi = 0;
+	f->frac = qn_mden(q) > 1;
 	for (int k = 0; k < M; k++) { if (q->mi[k] != 1) f->mi1 = false; smi += q->mi[k]; }
 	int nz = 0, zz = 0; for (int r = 0; r < R; r++) { if (mpz_sgn(q->Z[r])) nz++; else zz++; }
 	f->zmixed = nz > 0 && zz > 0;
@@ -193,9 +211,11 @@ static void features(qnmodel* q, feat* f)
 static bool allowed(const feat* f, int s, bool dbg)
 {
 	if (!isfinite(f->W[s])) return false;
+	/* fractional multiplicities: only the solvers that accept them */
+	if (f->frac && s != S_MOM && s != S_COMOM && s != S_GCOMOM && s != S_GMOM && s != S_GMOMB) return false;
 	switch (s) {
-	case S_GMOM:   return f->R >= 2 && f->mi1 && !dbg;
-	case S_GMOMB:  return f->R >= 3 && f->mi1 && !dbg;
+	case S_GMOM:   return f->R >= 2 && !dbg;
+	case S_GMOMB:  return f->R >= 3 && !dbg;
 	case S_BINMOM: return !f->zmixed;
 	case S_MOMMOD: return !dbg;          /* no -d */
 	default:       return true;
@@ -345,6 +365,7 @@ int main(int argc, char** argv)
 	char self[PATH_MAX]; ssize_t L = readlink("/proc/self/exe", self, sizeof self - 1);
 	if (L > 0) { self[L] = 0; snprintf(BINDIR, sizeof BINDIR, "%s", dirname(self)); } else snprintf(BINDIR, sizeof BINDIR, "./bin");
 
+	qn_allow_rational_mi = 1;   /* fractional mi: routed to mom/comom/gcomom/gmom */
 	qnmodel* q = readmodel(file);
 	if (!q) { fprintf(stderr, "automom: cannot read %s\n", file); return 1; }
 	nckinit(MAXNCKTABLE - 1, MAXNCKTABLE - 1);

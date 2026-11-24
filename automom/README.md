@@ -49,10 +49,16 @@ denominator bound, `prod N_r!` over the classes with think time) and
 convert it to seconds (rational vs word arithmetic, coefficient growth in
 exact elimination, per-solver overheads).
 
-Domain filters: `gmom` only for R >= 2 and all `mi = 1` (`gmomb` from R = 3,
+Domain filters: `gmom` only for R >= 2 (`gmomb` from R = 3,
 where it differs from `gmom`), and always run with `-X` so that it fails
 rather than returning an approximate perturbation;
 `binmom` not with mixed zero/non-zero think times; `mommod` not with `-d`.
+A model with a fractional multiplicity (`3/2 L1 ... LR`) goes only to the
+solvers that accept one: `mom`, `comom`, `gcomom`, `gmom`/`gmomb`.  The
+gcomom family and the gmom tree are counted on copy vectors with a
+never-removed base `frac(mi)`, the same rule as those solvers, so `gmom` is
+also a candidate for integer `mi > 1` (it used to be excluded; no routing of
+the test models changed).
 The candidates are run in order of predicted time until one succeeds; a
 refusal (binmom or gmom on a singular system) moves on to the next, and the
 output of a failed attempt is discarded.
