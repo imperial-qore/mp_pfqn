@@ -170,9 +170,96 @@ typedef struct {
 	mpq_t w;
 	/* accumulators */
 	mpq_t G; mpq_t* GN1; mpq_t** QLI; mpq_t** QOI;
-	long nconf, nsolve, nzc;
+	long nconf, nsolve, nzc, nbz;
 	int err;
 } acc;
+
+/* Exact Buzen convolution of a load-independent network on the lattice
+ * n <= N, for the derived networks zc.c cannot solve (stations proportional
+ * on two or more classes defeat every class order).  Demands and think times
+ * are scaled per class to integers by D_r, and H(n) = G(n) prod_r n_r! D_r^n_r
+ * stays integer: H(n) = H_prev(n) + sum_r L_r n_r H(n - e_r) per station copy,
+ * H_0(n) = prod_r Z_r^n_r.  Same outputs as zc_solve.  1 if the lattice is
+ * larger than OIMOM_CONV_MAX points (default 2^21). */
+static int bz_solve(int R, int M, const int* N, mpq_t* Z, mpq_t** L, const int* mi,
+                    mpq_t g0, mpq_t* g1, mpq_t** gk)
+{
+	static long cmax = -1;
+	if (cmax < 0) cmax = getenv("OIMOM_CONV_MAX") ? atol(getenv("OIMOM_CONV_MAX")) : (1L << 21);
+	long st[16], np = 1, i;
+	int r, k, n[16];
+	for (r = 0; r < R; r++) { st[r] = np; np *= N[r] + 1; if (np > cmax) return 1; }
+	mpz_t* D = (mpz_t*) malloc(R * sizeof(mpz_t));
+	mpz_t* Zz = (mpz_t*) malloc(R * sizeof(mpz_t));
+	mpz_t** Lz = (mpz_t**) malloc(M * sizeof(mpz_t*));
+	mpq_t q; mpq_init(q);
+	for (r = 0; r < R; r++) {
+		mpz_init_set(D[r], mpq_denref(Z[r]));
+		for (k = 0; k < M; k++) mpz_lcm(D[r], D[r], mpq_denref(L[k][r]));
+		mpz_init(Zz[r]); mpq_set_z(q, D[r]); mpq_mul(q, q, Z[r]); mpz_set(Zz[r], mpq_numref(q));
+	}
+	for (k = 0; k < M; k++) {
+		Lz[k] = (mpz_t*) malloc(R * sizeof(mpz_t));
+		for (r = 0; r < R; r++) { mpz_init(Lz[k][r]); mpq_set_z(q, D[r]); mpq_mul(q, q, L[k][r]); mpz_set(Lz[k][r], mpq_numref(q)); }
+	}
+	mpz_t* H = (mpz_t*) malloc(np * sizeof(mpz_t));
+	mpz_t* H2 = (mpz_t*) malloc(np * sizeof(mpz_t));
+	mpz_t t; mpz_init(t);
+	for (i = 0; i < np; i++) { mpz_init(H[i]); mpz_init(H2[i]); }
+	/* delay: H_0(n) = Z_r H_0(n - e_r) for the first r with n_r > 0 */
+	mpz_set_ui(H[0], 1);
+	for (r = 0; r < R; r++) n[r] = 0;
+	for (i = 1; i < np; i++) {
+		for (r = 0; r < R && n[r] == N[r]; r++) n[r] = 0;
+		n[r]++;
+		for (r = 0; r < R && n[r] == 0; r++) ;
+		mpz_mul(H[i], Zz[r], H[i - st[r]]);
+	}
+	/* one pass of station k over a lattice array, in place */
+#define BZ_PASS(A, k) do { \
+		for (r = 0; r < R; r++) n[r] = 0; \
+		for (i = 1; i < np; i++) { \
+			int rr; \
+			for (rr = 0; rr < R && n[rr] == N[rr]; rr++) n[rr] = 0; \
+			n[rr]++; \
+			for (rr = 0; rr < R; rr++) if (n[rr] && mpz_sgn(Lz[k][rr])) { mpz_mul_ui(t, (A)[i - st[rr]], n[rr]); mpz_addmul((A)[i], t, Lz[k][rr]); } \
+		} } while (0)
+	int c;
+	for (k = 0; k < M; k++) for (c = 0; c < mi[k]; c++) BZ_PASS(H, k);
+	/* G(n) = H(n) / (prod n_r! D_r^n_r) */
+	long iN = np - 1;
+	mpz_t f; mpz_init(f);
+#define BZ_UNSCALE(out, A, idx, nv) do { \
+		mpz_set_ui(f, 1); \
+		for (r = 0; r < R; r++) { mpz_pow_ui(t, D[r], (nv)[r]); mpz_mul(f, f, t); mpz_fac_ui(t, (nv)[r]); mpz_mul(f, f, t); } \
+		mpz_set(mpq_numref(out), (A)[idx]); mpz_set(mpq_denref(out), f); mpq_canonicalize(out); } while (0)
+	int nv[16];
+	for (r = 0; r < R; r++) nv[r] = N[r];
+	BZ_UNSCALE(g0, H, iN, nv);
+	int r2;
+	for (r2 = 0; r2 < R; r2++) {
+		if (!N[r2]) { mpq_set_ui(g1[r2], 0, 1); continue; }
+		nv[r2]--; BZ_UNSCALE(g1[r2], H, iN - st[r2], nv); nv[r2]++;
+	}
+	int s;
+	for (s = 0; s < M; s++) {
+		for (i = 0; i < np; i++) mpz_set(H2[i], H[i]);
+		k = s; BZ_PASS(H2, k);
+		for (r2 = 0; r2 < R; r2++) {
+			if (!N[r2]) { mpq_set_ui(gk[s][r2], 0, 1); continue; }
+			nv[r2]--; BZ_UNSCALE(gk[s][r2], H2, iN - st[r2], nv); nv[r2]++;
+		}
+	}
+#undef BZ_PASS
+#undef BZ_UNSCALE
+	for (i = 0; i < np; i++) { mpz_clear(H[i]); mpz_clear(H2[i]); }
+	free(H); free(H2);
+	for (k = 0; k < M; k++) { for (r = 0; r < R; r++) mpz_clear(Lz[k][r]); free(Lz[k]); }
+	for (r = 0; r < R; r++) { mpz_clear(D[r]); mpz_clear(Zz[r]); }
+	free(Lz); free(D); free(Zz);
+	mpz_clear(t); mpz_clear(f); mpq_clear(q);
+	return 0;
+}
 
 /* Solve the derived network acc->st at population P (assumed served: every
  * class with jobs has a think time or a station with positive demand).
@@ -228,9 +315,13 @@ static int net_solve(acc* a, int* P, mpq_t g0, mpq_t* g1, mpq_t** gk)
 			mis[keep[s]] = a->st[s].virt ? 1 : m->mi[a->st[s].k];
 			for (ra = 0; ra < Ra; ra++) st_demand(m, &a->st[s], act[ra], Ls[keep[s]][ra]);
 		}
-		rc = Mk <= 64 ? zc_solve(Ra, Mk, Pa, Zs, Ls, mis, g0, h1, hk, &tries) : 1;
+		static int force_bz = -1;
+		if (force_bz < 0) force_bz = getenv("OIMOM_INNER_CONV") != NULL;
+		rc = Mk <= 64 && !force_bz ? zc_solve(Ra, Mk, Pa, Zs, Ls, mis, g0, h1, hk, &tries) : 1;
+		int bz = 0;
+		if (rc) { rc = bz_solve(Ra, Mk, Pa, Zs, Ls, mis, g0, h1, hk); bz = rc == 0; }
 		if (getenv("OIMOM_DEBUG")) {
-			fprintf(stderr, "oimom: zc R=%d M=%d: %s after %d class order(s)\n", Ra, Mk, rc ? "singular" : "solved", tries);
+			fprintf(stderr, "oimom: zc R=%d M=%d: %s after %d class order(s)%s\n", Ra, Mk, rc || bz ? "singular" : "solved", tries, bz ? ", solved by convolution" : "");
 			if (rc && getenv("OIMOM_DEBUG")[0] == '2') {
 				fprintf(stderr, "  N:"); for (ra = 0; ra < Ra; ra++) fprintf(stderr, " %d", Pa[ra]);
 				fprintf(stderr, "\n  Z:"); for (ra = 0; ra < Ra; ra++) gmp_fprintf(stderr, " %Qd", Zs[ra]);
@@ -243,7 +334,7 @@ static int net_solve(acc* a, int* P, mpq_t g0, mpq_t* g1, mpq_t** gk)
 				mpq_set(g1[act[ra]], h1[ra]);
 				for (s = 0; s < a->nst; s++) if (keep[s] >= 0) mpq_set(gk[s][act[ra]], hk[keep[s]][ra]);
 			}
-			a->nsolve++; a->nzc++;
+			a->nsolve++; if (bz) a->nbz++; else a->nzc++;
 		}
 		for (s = 0; s < Mk; s++) { sg_mpq_arr_free(Ls[s], Ra); sg_mpq_arr_free(hk[s], Ra); }
 		free(Ls); free(hk); sg_mpq_arr_free(Zs, Ra); sg_mpq_arr_free(h1, Ra);
@@ -372,7 +463,7 @@ static void enum_configs(acc* a, int j)
 }
 
 /* exact results: G, X[r], Q[s][r] for the M LI queues then the K OI stations */
-typedef struct { mpq_t G; mpq_t* X; mpq_t** Q; long nconf, nsolve, nzc; } oires;
+typedef struct { mpq_t G; mpq_t* X; mpq_t** Q; long nconf, nsolve, nzc, nbz; } oires;
 
 static oires* res_new(oimodel* m)
 {
@@ -435,7 +526,7 @@ static oires* oi_solve_mom(oimodel* m)
 	for (r = 0; r < R; r++) mpq_div(o->X[r], a.GN1[r], a.G);
 	for (k = 0; k < m->M; k++) for (r = 0; r < R; r++) mpq_div(o->Q[k][r], a.QLI[k][r], a.G);
 	for (j = 0; j < m->K; j++) for (r = 0; r < R; r++) mpq_div(o->Q[m->M + j][r], a.QOI[j][r], a.G);
-	o->nconf = a.nconf; o->nsolve = a.nsolve; o->nzc = a.nzc;
+	o->nconf = a.nconf; o->nsolve = a.nsolve; o->nzc = a.nzc; o->nbz = a.nbz;
 	return o;
 }
 
@@ -959,6 +1050,7 @@ int main(int argc, char** argv)
 	else {
 		printf("Model: R=%d, %d LI queue(s), %d OI station(s)\n", m->R, m->M, m->K);
 		if (single) printf("Single basis: one network of %ld queue(s), %ld cancelled factor(s), numerator degree %ld, %ld shifted value(s), %ld class order(s)\n", sb_nq, sb_cancel, sb_deg, sb_nshift, sb_tries);
+		else if (!conv && o->nbz) printf("Virtual-queue decomposition: %ld chain configurations, %ld inner solves (%ld zero-aware CoMoM, %ld convolution, %ld tiered)\n", o->nconf, o->nsolve, o->nzc, o->nbz, o->nsolve - o->nzc - o->nbz);
 		else if (!conv) printf("Virtual-queue decomposition: %ld chain configurations, %ld inner CoMoM solves (%ld zero-aware, %ld tiered)\n", o->nconf, o->nsolve, o->nzc, o->nsolve - o->nzc);
 		printf("\n========== Performance Metrics ==========\n");
 		if (dbg) gmp_printf("G = %Qd\n", o->G);

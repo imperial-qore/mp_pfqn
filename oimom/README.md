@@ -28,9 +28,10 @@ Each factor `1/(1 - theta_S . z)` is a load-independent queue. So `G(N)` is a we
 one chain per OI station, of normalizing constants of ordinary networks in which each OI station is
 replaced by one **virtual queue** per support of its chain, at population `N` minus one job of each
 class of the chain's last support. Each of those networks is solved exactly by a zero-aware CoMoM
-recursion (`zc.c`, below), or, when that fails, by `bin/comom`'s tiered route, linked in-process
-(`inner.c` includes `comom/main.c` with `main` renamed, as `bincomom` does). The constants they
-export give the rest:
+recursion (`zc.c`, below); when that fails, by an exact integer Buzen convolution over the
+population lattice if it has at most `OIMOM_CONV_MAX` points (default 2^21), else by `bin/comom`'s
+tiered route, linked in-process (`inner.c` includes `comom/main.c` with `main` renamed, as
+`bincomom` does). The constants they export give the rest:
 
     G(N-1_r)  = sum_c w_c G_c(P_c - 1_r)
     Q_kr G(N) = sum_c w_c m_k L_kr G_c^{+k}(P_c - 1_r)                         LI queue k
@@ -82,7 +83,16 @@ requiring the system to be square or nonsingular:
 - Classes that visit no station are factored out; class orders are tried, the last successful one
   first.
 - Only a value needed for the output (`G(N)`, `G(N-1_r)`, `G^{+k}(N-1_r)` with `L_kr > 0`) being
-  undetermined fails a class order. When every order fails, the network goes to the tiered route.
+  undetermined fails a class order. When every order fails, the network goes to the convolution
+  (below), or to the tiered route if its lattice is too large.
+
+The convolution scales demands and think times per class to integers `D_r` and keeps
+`H(n) = G(n) prod_r n_r! D_r^n_r`, which is integer: `H_0(n) = prod_r Z_r^n_r`, then per station copy
+`H(n) += sum_r L_r n_r H(n - e_r)` in place, and one more pass of station `k` on a copy for each
+`G^{+k}`. About `(sum mi + M) R prod_r (N_r+1)` integer multiply-adds. It replaces the exact
+interpolation the failing networks used to go to, `Ntot+1` perturbed solves per prime, which at
+N=(48,48,48) was about 28 s of a 30 s run (1.9 s with the convolution). `OIMOM_INNER_CONV=1` sends every derived network to it
+(an oracle for `zc.c`; `--validate` passes on the ten small models that way).
 
 A deep `G` that stays undetermined is still a plain normalizing constant: the network restricted to
 the classes processed so far, at population `(N_E - d, t)`. `OIMOM_ZC_SUBRUNS=b` lets `zc.c`
@@ -128,18 +138,19 @@ cost table below):
 
 | model | `--single` | chains |
 |---|---|---|
-| R=3, 1 OI + 2 LI, N=(12,12,12) | 0.7 s | 1.2 s |
-| R=3, 1 OI + 2 LI, N=(24,24,24) | 0.7 s | 5.3 s |
-| R=3, 1 OI + 2 LI, N=(48,48,48) | 2.4 s | 34.5 s |
-| R=3, 2 OI + 1 LI, N=(8,8,8) | 1.6 s | 5.4 s |
-| R=3, 2 OI + 1 LI, N=(7,7,7) (`r3k2_7`) | 1.0 s | 4.0 s |
-| R=3, 2 OI, zero think times, N=(8,8,8) (`z0_8`) | 0.4 s | 22.2 s |
-| R=3, `oi_partial`, N=9 | 0.6 s | 4.5 s |
+| R=3, 1 OI + 2 LI, N=(12,12,12) | 0.8 s | 0.6 s |
+| R=3, 1 OI + 2 LI, N=(24,24,24) | 0.6 s | 0.7 s |
+| R=3, 1 OI + 2 LI, N=(48,48,48) | 1.2 s | 2.6 s |
+| R=3, 2 OI + 1 LI, N=(8,8,8) | 1.2 s | 6.1 s |
+| R=3, 2 OI + 1 LI, N=(7,7,7) (`r3k2_7`) | 0.9 s | 3.6 s |
+| R=3, 2 OI, zero think times, N=(8,8,8) (`z0_8`) | 0.3 s | 6.1 s |
+| R=3, `oi_partial`, N=9 | 0.7 s | 2.3 s |
 
 The single network is larger (8 queues at R = 3 with one OI station, 15 with two), and its class
 systems have up to about 1200 unknowns, with one diagonal block of up to about 390. Its dense exact
 inverse was most of the run (31 s of 52 s on the N=(8,8,8) two-OI row); the sparse LU factors it in
-about 1 s. The cost hardly depends on `N`, and `--single` is now faster than the chains on every row.
+about 1 s. The cost hardly depends on `N`. With the convolution fallback the chains are close at
+one OI station and small `N`; `--single` wins with two OI stations and at large `N`.
 Three of the four class orders fail on the R=3 benchmarks.
 
 ## Usage
@@ -149,7 +160,8 @@ Three of the four class orders fail on the R=3 benchmarks.
 Same output flags as the other solvers. `-q` prints one row per station: the LI queues first, then
 the OI stations in file order. `--single` solves the model as one network (above). `--comom-inner` skips `zc.c` and sends every derived network to the
 tiered CoMoM route (the previous behaviour). `-j` sets the threads of the interpolation tier of that
-route (see Cost).
+route (see Cost), which now runs only for derived networks whose lattice exceeds
+`OIMOM_CONV_MAX`.
 
 File format: a `.qn` file, then `OI K` and one row per OI station with `R` visit weights and the
 `2^R - 1` rates `mu_S`, `S = 1 .. 2^R-1` as a bitmask (bit `r-1` set when class `r` is present).
@@ -176,7 +188,8 @@ These models have `N <= M` in places, where the deepest corners of the basis are
 (`c_s > N_s`) and the defects above do not show. Nine copies with populations 7 to 15 exercise
 them. `--validate` with `OIMOM_ZCHECK=1` passes on all nineteen. `zc.c` solves every derived network
 of the ten small models, and of the large ones all but 1 of 16 (R=3, K=1), 2 of 25 (R=2, K=2),
-20 of 80 (`oi_partial`) and 62 of 192 (`oi_z0_onlyoi`: zero think times, two OI stations).
+20 of 80 (`oi_partial`) and 62 of 192 (`oi_z0_onlyoi`: zero think times, two OI stations). Those
+go to the lattice convolution; none of the nineteen reaches the tiered route.
 
 ## Cost
 
@@ -191,17 +204,19 @@ exact interpolation (`Ntot+1` modular solves), which dominated the run before `z
 
 | model | oimom | `--comom-inner` | convolution (`--conv`) |
 |---|---|---|---|
-| R=2, 1 OI + 2 LI, N=(40,40) | 0.04 s | 0.08 s | 5.3 s |
-| R=3, 1 OI + 2 LI, N=(12,12,12) | 1.1 s | 4.5 s | 4.4 s |
-| R=3, 1 OI + 2 LI, N=(16,16,16) | 1.6 s | 9.4 s | 21.7 s |
-| R=3, 1 OI + 2 LI, N=(24,24,24) | 3.7 s | 29.2 s | not run |
-| R=3, 2 OI + 1 LI, N=(8,8,8) | 6.2 s | 122 s | 0.3 s |
+| R=2, 1 OI + 2 LI, N=(40,40) | 0.03 s | 0.08 s | 5.3 s |
+| R=3, 1 OI + 2 LI, N=(12,12,12) | 0.4 s | 4.5 s | 4.4 s |
+| R=3, 1 OI + 2 LI, N=(16,16,16) | 0.5 s | 9.4 s | 21.7 s |
+| R=3, 1 OI + 2 LI, N=(24,24,24) | 0.6 s | 29.2 s | not run |
+| R=3, 2 OI + 1 LI, N=(8,8,8) | 5.5 s | 122 s | 0.3 s |
 
-In the R=3, one-OI rows 15 of the 16 inner solves go through `zc.c` and one falls back. Most of the
-remaining time is that fallback and the class orders tried on it. With two OI stations every inner
+In the R=3, one-OI rows 15 of the 16 inner solves go through `zc.c` and one (two virtual queues
+proportional on two classes) goes to the lattice convolution; it used to go to interpolation and was
+most of the run. The oimom column was re-measured with that fallback on a busier host than the other
+columns. With two OI stations every inner
 solve goes through `zc.c`; the derived networks have up to 7 stations (about 250 unknowns). The
 block triangular factorization (above) took the `zc.c` share of these rows down by 1.2x to 3x, and
-the sparse LU of its large blocks the two-OI row from 38 s to 6.2 s (re-measured on a busier host). oimom wins at large populations with
+the sparse LU of its large blocks the two-OI row from 38 s to 5.5 s. oimom wins at large populations with
 one OI station. With two or more OI stations at small `N`, the 16^K inner solves make convolution
 the better choice.
 
@@ -211,8 +226,9 @@ the better choice.
   one pole per saturation region and shifts up to `tau`, but are not implemented. Rates that never
   saturate have no finite decomposition.
 - Closed networks only.
-- Some derived networks still fall back (zero think times with several stations confined to two
-  classes). The recursive sub-runs for the deep corners make them solvable but cost more than
-  the fallback. A cheaper source for those normalizing constants would close the gap.
+- Some derived networks defeat every class order of `zc.c` (stations proportional on two or more
+  classes, zero think times with several stations confined to two classes). They go to the lattice
+  convolution, whose cost grows as `prod_r (N_r+1)`; at R >= 4 with large populations the lattice
+  passes `OIMOM_CONV_MAX` and they go back to the tiered route.
 - The chain combinations are independent and could run in parallel, but the inner CoMoM keeps
   global state, so they run one after another.
