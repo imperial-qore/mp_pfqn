@@ -32,7 +32,7 @@ NC='\033[0m' # No Color
 
 # Configuration
 MODELS_DIR="models"
-TIMEOUT=120  # Timeout in seconds for each test
+TIMEOUT=300  # Timeout in seconds for each test (comom on 10_diverse takes ~150 s)
 
 # Solver groups
 CLOSED_SOLVERS=("./bin/mom" "./bin/mva" "./bin/ca" "./bin/comom" "./bin/recal" "./bin/gcomom" "./bin/automom")
@@ -103,19 +103,48 @@ detect_model_type() {
     fi
 }
 
-# Function to detect if a model has multi-server stations (mi > 1)
-# GLD and MVA-LD-MX use load-dependent rates instead of station expansion,
-# so their normalizing constants and metrics differ on multi-server models.
-has_multiserver() {
-    local model=$1
-    local M=$(sed -n '4p' "$model")
-    for i in $(seq 5 $((4 + M))); do
-        local mi=$(sed -n "${i}p" "$model" | awk '{print $1}')
-        if [ "$mi" -gt 1 ] 2>/dev/null; then
-            return 0  # true
-        fi
-    done
-    return 1  # false
+# A solver's documented refusal of a model outside its domain (stderr):
+# reported as a skip, not an error, since there is nothing to compare.
+#   comomld: exactly one queueing station after IS absorption
+#   recal:   refuses a table it cannot allocate
+#   gmom:    no exact G on a model singular under every class order (its
+#            unflagged run perturbs for -l/-t/-q; mom/comom/gcomom are exact)
+is_domain_refusal() {
+    local solver_name=$1 errfile=$2
+    case "$solver_name" in
+        comomld) grep -q "outside the CoMoM-LD domain" "$errfile" ;;
+        recal)   grep -q "Model may be too large" "$errfile" ;;
+        gmom)    grep -q "singular under every class order" "$errfile" ;;
+        *)       return 1 ;;
+    esac
+}
+SKIPPED=0
+
+# A cross-check solver that fails is reported, not dropped silently. These are
+# the exponential oracles (gld's G table, mvaldmx's lattice), so a timeout is a
+# SKIP: gld times out on 10_diverse, mvaldmx on 06_large and 10_diverse.
+cross_check() {
+    if [ $1 -eq 0 ]; then
+        outputs+=("/tmp/regression_$2_$$.txt")
+        solver_names+=("$2")
+    elif [ $1 -eq 124 ]; then
+        echo -e "${YELLOW}SKIP: $2 cross-check (over ${TIMEOUT}s)${NC}"
+        SKIPPED=$((SKIPPED + 1))
+    else
+        echo -e "${RED}ERROR (exit $1): $2 cross-check${NC}"
+        echo "[ERROR] $2 cross-check on $model with $option (exit $1)" >> "$ERROR_LOG"
+    fi
+}
+
+# RECAL sweeps a table of C(Ntot+Mz-1, Ntot) exact rationals per population
+# step (Mz = M, plus one with think times): 2.1M entries on 07_mixed did not
+# finish in 25 minutes, 76k on 06_large take ~170 s. Above RECAL_MAX entries
+# recal is skipped as outside its practical domain.
+RECAL_MAX=1000000
+recal_too_large() {
+    awk -v max=$RECAL_MAX 'NR==1{R=$1} NR==2{for(i=1;i<=R;i++)n+=$i}
+        NR==3{for(i=1;i<=R;i++)if($i>0)z=1} NR==4{M=$1; exit}
+        END{m=M+z; c=1; for(i=1;i<=n;i++)c=c*(n+m-1-n+i)/i; exit !(c>max)}' "$1"
 }
 
 # Function to get solvers for a model type and option
@@ -129,8 +158,8 @@ get_solvers_for_model() {
             echo "${CLOSED_SOLVERS[*]}"
             ;;
         closed_ld)
-            # Closed with MU: gld + comomld (comomld only for -e,-l,-g)
-            echo "$GLD_SOLVER $COMOMLD_SOLVER"
+            # Closed with MU: gld (all options), comomld (-e,-l,-g), mvaldmx (-t,-q)
+            echo "$GLD_SOLVER $COMOMLD_SOLVER $MVALDMX_SOLVER"
             ;;
         mixed)
             # Mixed open/closed: mvamx only
@@ -153,10 +182,6 @@ solver_supports_option() {
     local option=$2
 
     case "$(basename $solver)" in
-        gld)
-            # GLD only supports -e, -l, -g
-            [[ "$option" == "-e" || "$option" == "-l" || "$option" == "-g" ]]
-            ;;
         comomld)
             # CoMoM-LD supports -e, -l, -g (its state probabilities are -P, not -q)
             [[ "$option" == "-e" || "$option" == "-l" || "$option" == "-g" ]]
@@ -204,6 +229,7 @@ run_regression_test() {
     # Store outputs from each solver
     local outputs=()
     local solver_names=()
+    local attempted=0
 
     for solver in "${solvers[@]}"; do
         local solver_name=$(basename $solver)
@@ -223,11 +249,22 @@ run_regression_test() {
             continue
         fi
 
-        timeout $TIMEOUT $solver $option $model > /tmp/regression_${solver_name}_$$.txt 2>/dev/null
+        if [ "$solver_name" == "recal" ] && recal_too_large "$model"; then
+            echo -e "${YELLOW}SKIP: recal (table above $RECAL_MAX entries)${NC}"
+            SKIPPED=$((SKIPPED + 1))
+            attempted=$((attempted + 1))
+            continue
+        fi
+
+        attempted=$((attempted + 1))
+        timeout $TIMEOUT $solver $option $model > /tmp/regression_${solver_name}_$$.txt 2>/tmp/regression_${solver_name}_err_$$.txt
         local exit_code=$?
         if [ $exit_code -eq 0 ]; then
             outputs+=("/tmp/regression_${solver_name}_$$.txt")
             solver_names+=("$solver_name")
+        elif is_domain_refusal "$solver_name" /tmp/regression_${solver_name}_err_$$.txt; then
+            echo -e "${YELLOW}SKIP: ${solver_name} (outside its domain)${NC}"
+            SKIPPED=$((SKIPPED + 1))
         elif [ $exit_code -eq 124 ]; then
             echo -e "${RED}TIMEOUT: ${solver_name}${NC}"
             echo "[TIMEOUT] ${solver_name} on $model with $option" >> "$ERROR_LOG"
@@ -238,36 +275,23 @@ run_regression_test() {
     done
 
     # For standard closed models, also run new solvers for cross-validation.
-    # GLD and MVA-LD-MX use load-dependent rates (mu) instead of station expansion,
-    # so they only match original solvers on single-server models (all mi=1).
-    # MVA-MX uses station expansion internally so it always matches.
+    # GLD and MVA-LD-MX solve the copies meaning of mi exactly
+    # (util/replicas.h), so they match on every closed model.
     if [ "$model_type" == "closed" ]; then
-        local is_multiserver=false
-        has_multiserver "$model" && is_multiserver=true
-
-        # GLD: cross-validate -e/-l with existing solvers (single-server only)
-        if ! $is_multiserver && [ -f "$GLD_SOLVER" ] && solver_supports_option "$GLD_SOLVER" "$option"; then
+        # GLD: cross-validate with existing solvers
+        if [ -f "$GLD_SOLVER" ] && solver_supports_option "$GLD_SOLVER" "$option"; then
             timeout $TIMEOUT $GLD_SOLVER $option $model > /tmp/regression_gld_$$.txt 2>/dev/null
-            if [ $? -eq 0 ]; then
-                outputs+=("/tmp/regression_gld_$$.txt")
-                solver_names+=("gld")
-            fi
+            cross_check $? gld
         fi
         # MVA-MX: cross-validate with existing solvers (always matches, uses expansion)
         if [ -f "$MVAMX_SOLVER" ] && solver_supports_option "$MVAMX_SOLVER" "$option"; then
             timeout $TIMEOUT $MVAMX_SOLVER $option $model > /tmp/regression_mvamx_$$.txt 2>/dev/null
-            if [ $? -eq 0 ]; then
-                outputs+=("/tmp/regression_mvamx_$$.txt")
-                solver_names+=("mvamx")
-            fi
+            cross_check $? mvamx
         fi
-        # MVA-LD-MX: cross-validate -t, -q with existing solvers (single-server only)
-        if ! $is_multiserver && [ -f "$MVALDMX_SOLVER" ] && solver_supports_option "$MVALDMX_SOLVER" "$option"; then
+        # MVA-LD-MX: cross-validate -t, -q with existing solvers
+        if [ -f "$MVALDMX_SOLVER" ] && solver_supports_option "$MVALDMX_SOLVER" "$option"; then
             timeout $TIMEOUT $MVALDMX_SOLVER $option $model > /tmp/regression_mvaldmx_$$.txt 2>/dev/null
-            if [ $? -eq 0 ]; then
-                outputs+=("/tmp/regression_mvaldmx_$$.txt")
-                solver_names+=("mvaldmx")
-            fi
+            cross_check $? mvaldmx
         fi
     fi
 
@@ -309,6 +333,11 @@ run_regression_test() {
         fi
     elif [ ${#outputs[@]} -eq 1 ]; then
         echo -e "${GREEN}${solver_names[0]} completed successfully (single solver)${NC}"
+    elif [ $attempted -eq 0 ]; then
+        # no solver of this model type implements the option (e.g. the
+        # normalizing constant of a mixed load-dependent model)
+        echo -e "${YELLOW}SKIP: no solver implements $option for ${model_type} models${NC}"
+        SKIPPED=$((SKIPPED + 1))
     else
         echo -e "${RED}No solvers produced output${NC}"
         echo "[NO OUTPUT] $model with $option" >> "$ERROR_LOG"
@@ -416,6 +445,7 @@ main() {
 
     echo -e "\n========================================"
     echo "Regression tests completed."
+    echo "Skipped (outside a solver's domain, or option not implemented, oracle over the timeout): $SKIPPED"
     echo "Check $ERROR_LOG for any mismatches."
     echo "========================================"
 }

@@ -44,11 +44,17 @@ a few percent of runs. See `mommod/README.md`.
 ./run_unit_tests.sh models/02_bottleneck.qn -- -e -l
 ```
 
-The test script runs all 5 solvers (mva, ca, recal, mom, comom) with options `-e`, `-l`, `-t`, `-q` on each `.qn` model file, then diffs outputs for parity. Timeout is 120s per test. Errors are logged to `test_errors_*.log`.
+The test script runs all 5 solvers (mva, ca, recal, mom, comom) with options `-e`, `-l`, `-t`, `-q` on each `.qn` model file, then diffs outputs for parity. Timeout is 300s per test. Errors are logged to `test_errors_*.log`.
+Runs outside a solver's domain are counted as SKIP, not errors: a refusal recognised by its message (`comomld`
+outside the CoMoM-LD domain, `gmom` singular under every class order), `recal` when its table
+`C(Ntot+Mz-1, Ntot)` exceeds `RECAL_MAX` (1M entries; 07, 09, 10), and an option no solver implements for the
+model type (`-e`/`-l` on mixed LD models), and a cross-check oracle over the timeout (`gld` on 10, `mvaldmx` on 06
+and 10), which used to be dropped from the comparison without a word. Closed LD models run on `gld`, `comomld` and `mvaldmx`; `gld -t`/`-q`
+give X and Q from the same G table (`gld_table`, one station left out per Q row).
 Models with a fractional multiplicity on a station line (`models/2[5-9]_frac_*.qn`) run on `mom`, `comom`,
 `gcomom`, `gmom` (gmom only when R >= 2) and `automom` and are diffed against `gld` (`-e`, `-l`) and `mvaldmx` (`-t`, `-q`) on
 the equivalent load-dependent model, MU rates `t/(t+e-1)`, which the script writes on the fly. `gmom -e`
-refusing `28_frac_singular` is expected: its unflagged run refuses an exact G on a singular model.
+refusing `28_frac_singular` is expected (a SKIP): its unflagged run refuses an exact G on a singular model.
 
 ## Architecture
 

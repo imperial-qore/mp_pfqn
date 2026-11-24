@@ -21,13 +21,16 @@ int main(int argc, char **argv)
 	bool log_output = false;
 	bool normconst_output = false;
 	bool normconst_g_output = false;
+	bool tput_output = false, qlen_output = false;
 	char *model_file = NULL;
 
 	if (argc < 2) {
-		printf("USAGE: %s [-l] [-e] [-g] [-h] model.qn\n", argv[0]);
+		printf("USAGE: %s [-l] [-e] [-g] [-t] [-q] [-h] model.qn\n", argv[0]);
 		printf("  -l : log of normalizing constant\n");
 		printf("  -e : exact normalizing constant (num/den)\n");
 		printf("  -g : normalizing constant as double\n");
+		printf("  -t : throughputs X_r = G(N-1_r)/G(N), one per row\n");
+		printf("  -q : mean queue lengths, one row per station\n");
 		return -1;
 	}
 
@@ -38,14 +41,18 @@ int main(int argc, char **argv)
 			normconst_output = true;
 		else if (strcmp(argv[i], "-g") == 0)
 			normconst_g_output = true;
+		else if (strcmp(argv[i], "-t") == 0)
+			tput_output = true;
+		else if (strcmp(argv[i], "-q") == 0)
+			qlen_output = true;
 		else if (strcmp(argv[i], "-h") == 0) {
-			printf("USAGE: %s [-l] [-e] [-g] [-h] model.qn\n", argv[0]);
+			printf("USAGE: %s [-l] [-e] [-g] [-t] [-q] [-h] model.qn\n", argv[0]);
 			return 0;
 		} else if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "-s") == 0) {
 			/* perturbation options of mom/comom: accepted and ignored */
 			if (i + 1 < argc) i++;
 		} else if (argv[i][0] == '-') {
-			fprintf(stderr, "%s: unsupported option '%s' (gld computes the normalizing constant only: use -l, -e or -g)\n", argv[0], argv[i]);
+			fprintf(stderr, "%s: unsupported option '%s' (use -l, -e, -g, -t or -q)\n", argv[0], argv[i]);
 			return 1;
 		} else {
 			model_file = argv[i];
@@ -59,12 +66,65 @@ int main(int argc, char **argv)
 
 	qnmodel *qn = readmodel(model_file);
 	qn_require_closed(qn, "gld", 1);
-	if (!log_output && !normconst_output && !normconst_g_output)
+	if (!log_output && !normconst_output && !normconst_g_output && !tput_output && !qlen_output)
 		printmodel(qn);
 
 	/* mi copies of a station as one load-dependent station (util/replicas.h) */
 	if (qn_replica_mu(qn))
 		return 1;
+
+	if (tput_output || qlen_output) {
+		/* exact measures from the convolution tables:
+		 *   X_r    = G(N - 1_r) / G(N)
+		 *   Q_{m,r} = sum_{k <= N} k_r Y_m(k) G_{-m}(N - k) / G(N),
+		 * G_{-m} the table without station m; a folded station's Q is the
+		 * total over its copies, as in every other solver */
+		int R = qn->R, M = qn->M, r, m;
+		long int P = gld_boxsize(qn->N, R), i, *stride = malloc(R * sizeof(long int));
+		stride[0] = 1;
+		for (r = 1; r < R; r++) stride[r] = stride[r-1] * (qn->N[r-1] + 1);
+		mpq_t *T = malloc(P * sizeof(mpq_t)), *Tm = malloc(P * sizeof(mpq_t)), *Y = malloc(P * sizeof(mpq_t));
+		for (i = 0; i < P; i++) { mpq_init(T[i]); mpq_init(Tm[i]); mpq_init(Y[i]); }
+		gld_table(T, qn->L, qn->N, qn->mu, qn->Z, M, R, qn->Nt, -1);
+		mpq_t v, acc;
+		mpq_init(v); mpq_init(acc);
+		if (mpq_sgn(T[P-1]) == 0) { fprintf(stderr, "gld: G(N) = 0\n"); return 1; }
+		if (tput_output) {
+			for (r = 0; r < R; r++) {
+				if (qn->N[r] > 0) mpq_div(v, T[P-1-stride[r]], T[P-1]); else mpq_set_ui(v, 0, 1);
+				printf("%.15e\n", mpq_get_d(v));
+			}
+		} else {
+			int* k = calloc(R, sizeof(int));
+			for (m = 0; m < M; m++) {
+				gld_table(Tm, qn->L, qn->N, qn->mu, qn->Z, M, R, qn->Nt, m);
+				gld_station_factor(Y, qn->L[m], qn->mu[m], qn->N, R, qn->Nt);
+				for (r = 0; r < R; r++) {
+					mpq_set_ui(acc, 0, 1);
+					for (int s = 0; s < R; s++) k[s] = 0;
+					for (i = 0; i < P; i++) {
+						if (k[r] > 0 && mpq_sgn(Y[i])) {
+							mpq_mul(v, Y[i], Tm[P-1-i]);   /* index of N - k is P-1-i */
+							mpz_mul_ui(mpq_numref(v), mpq_numref(v), k[r]);
+							mpq_canonicalize(v);
+							mpq_add(acc, acc, v);
+						}
+						for (int s = 0; s < R; s++) { if (k[s] < qn->N[s]) { k[s]++; break; } k[s] = 0; }
+					}
+					mpq_div(acc, acc, T[P-1]);
+					printf("%.15e", mpq_get_d(acc));
+					if (r < R - 1) printf(" ");
+				}
+				printf("\n");
+			}
+			free(k);
+		}
+		mpq_clear(v); mpq_clear(acc);
+		for (i = 0; i < P; i++) { mpq_clear(T[i]); mpq_clear(Tm[i]); mpq_clear(Y[i]); }
+		free(T); free(Tm); free(Y); free(stride);
+		freemodel(qn);
+		return 0;
+	}
 
 	mpq_t G;
 	mpq_init(G);

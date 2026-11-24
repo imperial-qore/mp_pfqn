@@ -31,9 +31,106 @@
  * time exponential in the total population (it hung on models with large Nt).
  */
 
+long int gld_boxsize(int *N, int R)
+{
+	long int P = 1;
+	for (int r = 0; r < R; r++)
+		P *= (long int)(N[r] + 1);
+	return P;
+}
+
+/* Y[i], i over the box 0 <= k <= N in mixed radix: the balance factor of a
+ * queueing station with demands dem and rates mu (mu_m != NULL), or of the
+ * delay station with demands dem = Z (mu_m == NULL). */
+void gld_station_factor(mpq_t *Y, mpz_t *dem, mpq_t *mu_m, int *N, int R, int Nt)
+{
+	int r, j, is_delay = (mu_m == NULL);
+	long int i, P = gld_boxsize(N, R);
+	int *k = (int *)malloc(R * sizeof(int));
+	mpz_t num, den, powv;
+	mpz_init(num);
+	mpz_init(den);
+	mpz_init(powv);
+	mpq_t Yq, tmp;
+	mpq_init(Yq);
+	mpq_init(tmp);
+	mpq_t *muprod = NULL;
+	if (!is_delay) {
+		/* muprod[j] = prod_{i=0}^{j-1} mu[m][i] */
+		muprod = (mpq_t *)malloc((Nt + 1) * sizeof(mpq_t));
+		mpq_init(muprod[0]);
+		mpq_set_ui(muprod[0], 1, 1);
+		for (j = 1; j <= Nt; j++) {
+			mpq_init(muprod[j]);
+			mpq_mul(muprod[j], muprod[j - 1], mu_m[j - 1]);
+		}
+	}
+	for (r = 0; r < R; r++)
+		k[r] = 0;
+	for (i = 0; i < P; i++) {
+		j = 0;
+		for (r = 0; r < R; r++)
+			j += k[r];
+
+		/* num = j! * prod_r dem[r]^{k_r} for a queueing station;
+		 * num = prod_r Z[r]^{k_r} for the delay station (no j! factor,
+		 * since its mu-product j! cancels the multinomial's j!). */
+		int iszero = 0;
+		if (is_delay)
+			mpz_set_ui(num, 1);
+		else
+			mpz_fac_ui(num, j);
+		for (r = 0; r < R; r++) {
+			if (k[r] > 0) {
+				if (mpz_sgn(dem[r]) == 0) {
+					iszero = 1;
+					break;
+				}
+				mpz_pow_ui(powv, dem[r], k[r]);
+				mpz_mul(num, num, powv);
+			}
+		}
+		if (iszero) {
+			mpq_set_ui(Y[i], 0, 1);
+		} else {
+			/* den = prod_r k_r! */
+			mpz_set_ui(den, 1);
+			for (r = 0; r < R; r++) {
+				mpz_fac_ui(powv, k[r]);
+				mpz_mul(den, den, powv);
+			}
+			mpq_set_z(Yq, num);
+			mpq_set_z(tmp, den);
+			mpq_div(Yq, Yq, tmp);
+			if (!is_delay)
+				mpq_div(Yq, Yq, muprod[j]);
+			mpq_set(Y[i], Yq);
+		}
+
+		for (r = 0; r < R; r++) {
+			if (k[r] < N[r]) {
+				k[r]++;
+				break;
+			}
+			k[r] = 0;
+		}
+	}
+	if (!is_delay) {
+		for (j = 0; j <= Nt; j++)
+			mpq_clear(muprod[j]);
+		free(muprod);
+	}
+	mpz_clear(num);
+	mpz_clear(den);
+	mpz_clear(powv);
+	mpq_clear(Yq);
+	mpq_clear(tmp);
+	free(k);
+}
+
 void gld_multi(mpq_t G, mpz_t **L, int *N, mpq_t **mu, mpz_t *Z, int M, int R, int Nt)
 {
-	int m, r, j;
+	int r;
 	long int i;
 
 	/* Base case: all populations zero */
@@ -52,6 +149,32 @@ void gld_multi(mpq_t G, mpz_t **L, int *N, mpq_t **mu, mpz_t *Z, int M, int R, i
 		mpq_set_ui(G, 0, 1);
 		return;
 	}
+	long int P = gld_boxsize(N, R);
+	mpq_t *Gv = (mpq_t *)malloc(P * sizeof(mpq_t));
+	for (i = 0; i < P; i++)
+		mpq_init(Gv[i]);
+	gld_table(Gv, L, N, mu, Z, M, R, Nt, -1);
+	/* idx(N) = sum_r N_r * stride_r = P - 1 */
+	mpq_set(G, Gv[P - 1]);
+	for (i = 0; i < P; i++)
+		mpq_clear(Gv[i]);
+	free(Gv);
+}
+
+/* G(n) for every n in the box 0 <= n <= N, into Gv[P] (initialized by the
+ * caller), mixed-radix index sum_r n_r prod_{s<r} (N_s+1); station skip
+ * (-1: none) is left out, which gives the complement tables of the queue
+ * lengths. */
+void gld_table(mpq_t *Gv, mpz_t **L, int *N, mpq_t **mu, mpz_t *Z, int M, int R, int Nt, int skip)
+{
+	int m, r, j;
+	long int i;
+	int hasZ = 0;
+	for (r = 0; r < R; r++)
+		if (mpz_sgn(Z[r]) > 0) {
+			hasZ = 1;
+			break;
+		}
 
 	/* Mixed-radix strides over the box 0 <= n_r <= N_r.
 	 * P = prod_r (N_r + 1) is the number of population vectors. */
@@ -73,9 +196,8 @@ void gld_multi(mpq_t G, mpz_t **L, int *N, mpq_t **mu, mpz_t *Z, int M, int R, i
 	int need_scratch = has_ld || hasZ;
 
 	/* Running normalizing constant table G_m; starts at G_0 = delta_0 */
-	mpq_t *Gv = (mpq_t *)malloc(P * sizeof(mpq_t));
 	for (i = 0; i < P; i++)
-		mpq_init(Gv[i]);
+		mpq_set_ui(Gv[i], 0, 1);
 	mpq_set_ui(Gv[0], 1, 1);
 
 	/* Scratch buffers only needed for full convolutions */
@@ -105,6 +227,8 @@ void gld_multi(mpq_t G, mpz_t **L, int *N, mpq_t **mu, mpz_t *Z, int M, int R, i
 
 	for (m = 0; m < Mtot; m++) {
 		int is_delay = (m == M); /* the appended delay station */
+		if (m == skip)
+			continue;
 
 		if (!is_delay) {
 			/* Is this queueing station load-independent (single server)? */
@@ -140,69 +264,7 @@ void gld_multi(mpq_t G, mpz_t **L, int *N, mpq_t **mu, mpz_t *Z, int M, int R, i
 		}
 
 		/* Full convolution: build the station factor table Y[.] */
-		mpq_t *muprod = NULL;
-		if (!is_delay) {
-			/* muprod[j] = prod_{i=0}^{j-1} mu[m][i] */
-			muprod = (mpq_t *)malloc((Nt + 1) * sizeof(mpq_t));
-			mpq_init(muprod[0]);
-			mpq_set_ui(muprod[0], 1, 1);
-			for (j = 1; j <= Nt; j++) {
-				mpq_init(muprod[j]);
-				mpq_mul(muprod[j], muprod[j - 1], mu[m][j - 1]);
-			}
-		}
-
-		for (r = 0; r < R; r++)
-			k[r] = 0;
-		for (i = 0; i < P; i++) {
-			j = 0;
-			for (r = 0; r < R; r++)
-				j += k[r];
-
-			/* num = j! * prod_r dem[r]^{k_r} for a queueing station;
-			 * num = prod_r Z[r]^{k_r} for the delay station (no j! factor,
-			 * since its mu-product j! cancels the multinomial's j!). */
-			int iszero = 0;
-			if (is_delay)
-				mpz_set_ui(num, 1);
-			else
-				mpz_fac_ui(num, j);
-			for (r = 0; r < R; r++) {
-				if (k[r] > 0) {
-					mpz_ptr dem = is_delay ? Z[r] : L[m][r];
-					if (mpz_sgn(dem) == 0) {
-						iszero = 1;
-						break;
-					}
-					mpz_pow_ui(powv, dem, k[r]);
-					mpz_mul(num, num, powv);
-				}
-			}
-			if (iszero) {
-				mpq_set_ui(Y[i], 0, 1);
-			} else {
-				/* den = prod_r k_r! */
-				mpz_set_ui(den, 1);
-				for (r = 0; r < R; r++) {
-					mpz_fac_ui(powv, k[r]);
-					mpz_mul(den, den, powv);
-				}
-				mpq_set_z(Yq, num);
-				mpq_set_z(tmp, den);
-				mpq_div(Yq, Yq, tmp);
-				if (!is_delay)
-					mpq_div(Yq, Yq, muprod[j]);
-				mpq_set(Y[i], Yq);
-			}
-
-			for (r = 0; r < R; r++) {
-				if (k[r] < N[r]) {
-					k[r]++;
-					break;
-				}
-				k[r] = 0;
-			}
-		}
+		gld_station_factor(Y, is_delay ? Z : L[m], is_delay ? NULL : mu[m], N, R, Nt);
 
 		/* Gs(n) = sum_{0 <= kk <= n} Y[kk] * Gv[n - kk] */
 		for (r = 0; r < R; r++)
@@ -244,16 +306,7 @@ void gld_multi(mpq_t G, mpz_t **L, int *N, mpq_t **mu, mpz_t *Z, int M, int R, i
 
 		for (i = 0; i < P; i++)
 			mpq_set(Gv[i], Gs[i]);
-
-		if (!is_delay) {
-			for (j = 0; j <= Nt; j++)
-				mpq_clear(muprod[j]);
-			free(muprod);
-		}
 	}
-
-	/* idx(N) = sum_r N_r * stride_r = P - 1 */
-	mpq_set(G, Gv[P - 1]);
 
 	/* Cleanup */
 	mpz_clear(num);
@@ -262,9 +315,6 @@ void gld_multi(mpq_t G, mpz_t **L, int *N, mpq_t **mu, mpz_t *Z, int M, int R, i
 	mpq_clear(Yq);
 	mpq_clear(tmp);
 	mpq_clear(Lq);
-	for (i = 0; i < P; i++)
-		mpq_clear(Gv[i]);
-	free(Gv);
 	if (need_scratch) {
 		for (i = 0; i < P; i++) {
 			mpq_clear(Gs[i]);
