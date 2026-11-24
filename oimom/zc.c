@@ -132,9 +132,16 @@ typedef struct {
 	int* col;                /* column ids: X: k*card+c ; G: M*card + c */
 	zrow* row;               /* chosen rows */
 	char* det;               /* col[i] is uniquely determined by the system */
-	mpq_t* inv;              /* ncol x ncol */
-	mpz_t* iz;               /* inv as integers: inv[i][j] = iz[i][j] / den[i] */
-	mpz_t* den;
+	/* block upper triangular form of the square block (rows matched to
+	 * columns, diagonal blocks the strongly connected components, in solve
+	 * order): block b holds rows brow[bstart[b] .. bstart[b+1]-1], matched
+	 * to columns bcol[...] (indices into row[] and col[]) */
+	int nblk;
+	int* bstart; int* brow; int* bcol;
+	mpz_t** biz;             /* block inverse as integers: inv[t][u] = biz[b][t*bs+u] / bden[b][t] */
+	mpz_t** bden;
+	int* offn; int** offq; mpq_t** offc;   /* per row: coefficients on columns of earlier blocks */
+	int maxbs;
 	char* sig; size_t siglen;
 } zfact;
 
@@ -142,9 +149,15 @@ static void zf_free(zfact* f)
 {
 	int i;
 	if (!f) return;
-	for (i = 0; i < f->ncol * f->ncol; i++) { mpq_clear(f->inv[i]); mpz_clear(f->iz[i]); }
-	for (i = 0; i < f->ncol; i++) mpz_clear(f->den[i]);
-	free(f->inv); free(f->iz); free(f->den); free(f->det); free(f->col); free(f->row); free(f->sig); free(f);
+	int b, q;
+	for (b = 0; b < f->nblk; b++) {
+		int bs = f->bstart[b + 1] - f->bstart[b];
+		if (f->biz && f->biz[b]) { for (q = 0; q < bs * bs; q++) mpz_clear(f->biz[b][q]); free(f->biz[b]); }
+		if (f->bden && f->bden[b]) { for (q = 0; q < bs; q++) mpz_clear(f->bden[b][q]); free(f->bden[b]); }
+	}
+	if (f->offn) for (i = 0; i < f->ncol; i++) { for (q = 0; q < f->offn[i]; q++) mpq_clear(f->offc[i][q]); free(f->offq[i]); free(f->offc[i]); }
+	free(f->biz); free(f->bden); free(f->bstart); free(f->brow); free(f->bcol); free(f->offn); free(f->offq); free(f->offc);
+	free(f->det); free(f->col); free(f->row); free(f->sig); free(f);
 }
 
 /* memo of corner traces: G(n_1..n_{R'-1}, t), t = 0..n_{R'}, of the network
@@ -295,8 +308,45 @@ static int list_rows(const zprob* P, const int* ord, int r, const cset* C, const
 	return n;
 }
 
+/* maximum matching of rows to columns on the pattern of an n x n matrix
+ * (Kuhn's augmenting paths) */
+static int bt_aug(int i, const int* ap, const int* aj, int* mcol, int* mrow, char* seen)
+{
+	int q;
+	for (q = ap[i]; q < ap[i + 1]; q++) {
+		int j = aj[q];
+		if (seen[j]) continue;
+		seen[j] = 1;
+		if (mrow[j] < 0 || bt_aug(mrow[j], ap, aj, mcol, mrow, seen)) { mcol[i] = j; mrow[j] = i; return 1; }
+	}
+	return 0;
+}
+
+/* Tarjan's strongly connected components on rows: i -> i' when row i has a
+ * term on the column matched to i'.  Components come out sinks first, which
+ * is the solve order. */
+typedef struct { const int* ap; const int* aj; const int* mrow; int* idx; int* low; int* stk; char* on; int ns, cnt; int* comp; int ncomp; int* order; int no; } bt_tarjan;
+static void bt_scc(bt_tarjan* T, int i)
+{
+	int q;
+	T->idx[i] = T->low[i] = T->cnt++;
+	T->stk[T->ns++] = i; T->on[i] = 1;
+	for (q = T->ap[i]; q < T->ap[i + 1]; q++) {
+		int w = T->mrow[T->aj[q]];
+		if (w == i) continue;
+		if (T->idx[w] < 0) { bt_scc(T, w); if (T->low[w] < T->low[i]) T->low[i] = T->low[w]; }
+		else if (T->on[w] && T->idx[w] < T->low[i]) T->low[i] = T->idx[w];
+	}
+	if (T->low[i] == T->idx[i]) {
+		int w;
+		do { w = T->stk[--T->ns]; T->on[w] = 0; T->comp[w] = T->ncomp; T->order[T->no++] = w; } while (w != i);
+		T->ncomp++;
+	}
+}
+
 /* Build and factor the system for the current pattern: pivot rows and columns,
- * the inverse of their block, and which pivot unknowns are determined. */
+ * the block triangular form of their square block with the inverse of each
+ * diagonal block, and which pivot unknowns are determined. */
 static zfact* zf_build(const zprob* P, const int* ord, int r, const cset* C, const slot* cur, const slot* prev,
                        zrow* rows, int nrows, int* cpos)
 {
@@ -396,51 +446,119 @@ static zfact* zf_build(const zprob* P, const int* ord, int r, const cset* C, con
 		F->det = (char*) malloc(n ? n : 1);
 		F->row = (zrow*) malloc((n ? n : 1) * sizeof(zrow));
 		for (i = 0; i < n; i++) { F->col[i] = ucid[pivc[i]]; F->det[i] = !und[pivc[i]]; }
-		/* square block: the pivot rows over the pivot columns (free ones at 0) */
-		mpq_t* S = (mpq_t*) malloc((size_t) (n ? n : 1) * n * 2 * sizeof(mpq_t));
-		int w2 = 2 * n;
+		/* square block: the pivot rows over the pivot columns (free ones at 0),
+		 * sparse by rows */
+		int nu_save = nu;
+		int* ap = (int*) calloc(n + 1, sizeof(int));
 		for (i = 0; i < n; i++) {
 			int ri = rid[rperm[i]];
 			F->row[i] = rows[ri];
-			for (j = 0; j < w2; j++) mpq_init(S[(size_t) i * w2 + j]);
-			for (j = 0; j < nc; j++) if (upos[j] >= 0 && ppos[upos[j]] >= 0) mpq_set(S[(size_t) i * w2 + ppos[upos[j]]], A[(size_t) ri * nc + j]);
-			mpq_set_ui(S[(size_t) i * w2 + n + i], 1, 1);
+			ap[i + 1] = ap[i];
+			for (j = 0; j < nc; j++) if (upos[j] >= 0 && ppos[upos[j]] >= 0 && mpq_sgn(A[(size_t) ri * nc + j])) ap[i + 1]++;
 		}
-		int nu_save = nu; nu = n;
-		for (col = 0; col < nu && !sing; col++) {
-			int p = -1;
-			for (i = col; i < nu; i++) if (mpq_sgn(S[(size_t) i * w2 + col])) { p = i; break; }
-			if (p < 0) { sing = 1; break; }
-			if (p != col) for (j = 0; j < w2; j++) mpq_swap(S[(size_t) p * w2 + j], S[(size_t) col * w2 + j]);
-			mpq_t* pr = S + (size_t) col * w2;
-			mpq_inv(f, pr[col]);
-			for (j = 0; j < w2; j++) if (mpq_sgn(pr[j])) mpq_mul(pr[j], pr[j], f);
-			for (i = 0; i < nu; i++) {
-				if (i == col) continue;
-				mpq_t* ri = S + (size_t) i * w2;
-				if (!mpq_sgn(ri[col])) continue;
-				mpq_set(f, ri[col]);
-				for (j = 0; j < w2; j++) if (mpq_sgn(pr[j])) { mpq_mul(t, f, pr[j]); mpq_sub(ri[j], ri[j], t); }
+		int* aj = (int*) malloc((ap[n] ? ap[n] : 1) * sizeof(int));
+		mpq_t* ax = (mpq_t*) malloc((ap[n] ? ap[n] : 1) * sizeof(mpq_t));
+		for (i = 0; i < n; i++) {
+			int ri = rid[rperm[i]], q = ap[i];
+			for (j = 0; j < nc; j++) if (upos[j] >= 0 && ppos[upos[j]] >= 0 && mpq_sgn(A[(size_t) ri * nc + j])) {
+				aj[q] = ppos[upos[j]]; mpq_init(ax[q]); mpq_set(ax[q], A[(size_t) ri * nc + j]); q++;
 			}
 		}
-		/* the chosen rows of the row-swapped block keep their order: the
-		 * inverse maps the rhs of F->row[i] (i in the original order) */
-		F->inv = (mpq_t*) malloc((size_t) (nu ? nu : 1) * nu * sizeof(mpq_t));
-		for (i = 0; i < nu; i++) for (j = 0; j < nu; j++) { mpq_init(F->inv[(size_t) i * nu + j]); mpq_set(F->inv[(size_t) i * nu + j], S[(size_t) i * w2 + nu + j]); }
-		for (i = 0; i < nu * w2; i++) mpq_clear(S[i]);
-		free(S);
-		F->iz = (mpz_t*) malloc((size_t) (nu ? nu : 1) * nu * sizeof(mpz_t));
-		F->den = (mpz_t*) malloc((nu ? nu : 1) * sizeof(mpz_t));
-		for (i = 0; i < nu; i++) {
-			mpz_init_set_ui(F->den[i], 1);
-			for (j = 0; j < nu; j++) mpz_lcm(F->den[i], F->den[i], mpq_denref(F->inv[(size_t) i * nu + j]));
-			for (j = 0; j < nu; j++) {
-				mpz_t* z = &F->iz[(size_t) i * nu + j];
-				mpz_init(*z);
-				mpz_divexact(*z, F->den[i], mpq_denref(F->inv[(size_t) i * nu + j]));
-				mpz_mul(*z, *z, mpq_numref(F->inv[(size_t) i * nu + j]));
+		/* perfect matching (the block is nonsingular), then components */
+		int* mcol = (int*) malloc((n ? n : 1) * sizeof(int));
+		int* mrow = (int*) malloc((n ? n : 1) * sizeof(int));
+		char* seen = (char*) malloc(n ? n : 1);
+		for (i = 0; i < n; i++) mcol[i] = mrow[i] = -1;
+		for (i = 0; i < n && !sing; i++) { memset(seen, 0, n); if (!bt_aug(i, ap, aj, mcol, mrow, seen)) sing = 1; }
+		bt_tarjan T = { ap, aj, mrow, NULL, NULL, NULL, NULL, 0, 0, NULL, 0, NULL, 0 };
+		T.idx = (int*) malloc((n ? n : 1) * sizeof(int)); T.low = (int*) malloc((n ? n : 1) * sizeof(int));
+		T.stk = (int*) malloc((n ? n : 1) * sizeof(int)); T.on = (char*) calloc(n ? n : 1, 1);
+		T.comp = (int*) malloc((n ? n : 1) * sizeof(int)); T.order = (int*) malloc((n ? n : 1) * sizeof(int));
+		for (i = 0; i < n; i++) T.idx[i] = -1;
+		if (!sing) for (i = 0; i < n; i++) if (T.idx[i] < 0) bt_scc(&T, i);
+		F->nblk = sing ? 0 : T.ncomp;
+		F->bstart = (int*) calloc(F->nblk + 1, sizeof(int));
+		F->brow = (int*) malloc((n ? n : 1) * sizeof(int));
+		F->bcol = (int*) malloc((n ? n : 1) * sizeof(int));
+		F->biz = (mpz_t**) calloc(F->nblk ? F->nblk : 1, sizeof(mpz_t*));
+		F->bden = (mpz_t**) calloc(F->nblk ? F->nblk : 1, sizeof(mpz_t*));
+		F->offn = (int*) calloc(n ? n : 1, sizeof(int));
+		F->offq = (int**) calloc(n ? n : 1, sizeof(int*));
+		F->offc = (mpq_t**) calloc(n ? n : 1, sizeof(mpq_t*));
+		F->maxbs = 0;
+		if (!sing) {
+			/* T.order lists rows component by component, sinks first */
+			int b2 = 0;
+			for (i = 0; i < n; i++) {
+				int w = T.order[i];
+				F->brow[i] = w; F->bcol[i] = mcol[w];
+				if (i == 0 || T.comp[w] != T.comp[T.order[i - 1]]) F->bstart[b2++] = i;
 			}
+			F->bstart[F->nblk] = n;
+			int* lpos = (int*) malloc((n ? n : 1) * sizeof(int));   /* column -> position in its block, -1 outside */
+			for (j = 0; j < n; j++) lpos[j] = -1;
+			for (b2 = 0; b2 < F->nblk && !sing; b2++) {
+				int s0 = F->bstart[b2], bs = F->bstart[b2 + 1] - s0, u, q;
+				if (bs > F->maxbs) F->maxbs = bs;
+				for (u = 0; u < bs; u++) lpos[F->bcol[s0 + u]] = u;
+				/* off-block coefficients, and the dense diagonal block next to the identity */
+				int w2 = 2 * bs;
+				mpq_t* S = (mpq_t*) malloc((size_t) bs * w2 * sizeof(mpq_t));
+				for (u = 0; u < bs * w2; u++) mpq_init(S[u]);
+				for (u = 0; u < bs; u++) {
+					int w = F->brow[s0 + u], no = 0;
+					for (q = ap[w]; q < ap[w + 1]; q++) if (lpos[aj[q]] < 0) no++;
+					F->offn[w] = no;
+					F->offq[w] = (int*) malloc((no ? no : 1) * sizeof(int));
+					F->offc[w] = (mpq_t*) malloc((no ? no : 1) * sizeof(mpq_t));
+					no = 0;
+					for (q = ap[w]; q < ap[w + 1]; q++) {
+						if (lpos[aj[q]] < 0) { F->offq[w][no] = aj[q]; mpq_init(F->offc[w][no]); mpq_set(F->offc[w][no], ax[q]); no++; }
+						else mpq_set(S[(size_t) u * w2 + lpos[aj[q]]], ax[q]);
+					}
+					mpq_set_ui(S[(size_t) u * w2 + bs + u], 1, 1);
+				}
+				for (u = 0; u < bs; u++) lpos[F->bcol[s0 + u]] = -1;
+				/* Gauss-Jordan on the block */
+				for (col = 0; col < bs && !sing; col++) {
+					int p = -1;
+					for (i = col; i < bs; i++) if (mpq_sgn(S[(size_t) i * w2 + col])) { p = i; break; }
+					if (p < 0) { sing = 1; break; }
+					if (p != col) for (j = 0; j < w2; j++) mpq_swap(S[(size_t) p * w2 + j], S[(size_t) col * w2 + j]);
+					mpq_t* pr = S + (size_t) col * w2;
+					mpq_inv(f, pr[col]);
+					for (j = 0; j < w2; j++) if (mpq_sgn(pr[j])) mpq_mul(pr[j], pr[j], f);
+					for (i = 0; i < bs; i++) {
+						if (i == col) continue;
+						mpq_t* ri = S + (size_t) i * w2;
+						if (!mpq_sgn(ri[col])) continue;
+						mpq_set(f, ri[col]);
+						for (j = 0; j < w2; j++) if (mpq_sgn(pr[j])) { mpq_mul(t, f, pr[j]); mpq_sub(ri[j], ri[j], t); }
+					}
+				}
+				/* inverse as integer rows over one denominator each */
+				F->biz[b2] = (mpz_t*) malloc((size_t) bs * bs * sizeof(mpz_t));
+				F->bden[b2] = (mpz_t*) malloc(bs * sizeof(mpz_t));
+				for (i = 0; i < bs; i++) {
+					mpz_init_set_ui(F->bden[b2][i], 1);
+					for (j = 0; j < bs; j++) mpz_lcm(F->bden[b2][i], F->bden[b2][i], mpq_denref(S[(size_t) i * w2 + bs + j]));
+					for (j = 0; j < bs; j++) {
+						mpz_t* z = &F->biz[b2][(size_t) i * bs + j];
+						mpz_init(*z);
+						mpz_divexact(*z, F->bden[b2][i], mpq_denref(S[(size_t) i * w2 + bs + j]));
+						mpz_mul(*z, *z, mpq_numref(S[(size_t) i * w2 + bs + j]));
+					}
+				}
+				for (u = 0; u < bs * w2; u++) mpq_clear(S[u]);
+				free(S);
+			}
+			if (sing) F->nblk = b2;   /* zf_free clears the blocks built so far */
+			free(lpos);
 		}
+		if (zc_debug > 1 && P->depth == 0 && !sing) fprintf(stderr, "zc:   %d unknown(s) in %d block(s), largest %d\n", n, F->nblk, F->maxbs);
+		for (i = 0; i < ap[n]; i++) mpq_clear(ax[i]);
+		free(ap); free(aj); free(ax); free(mcol); free(mrow); free(seen);
+		free(T.idx); free(T.low); free(T.stk); free(T.on); free(T.comp); free(T.order);
 		nu = nu_save;
 		if (sing) { zf_free(F); F = NULL; }
 	}
@@ -502,7 +620,7 @@ static int zc_run(const zprob* P, const int* ord, mpq_t g0, mpq_t* g1, mpq_t** g
 		zrow* rows = (zrow*) malloc(maxrows * sizeof(zrow));
 		int* cpos = (int*) malloc((size_t) card * (M + 1) * sizeof(int));
 		zfact* F = NULL;
-		mpq_t* rhs = NULL; mpz_t* bz = NULL; int nrhs = 0;
+		mpq_t* rhs = NULL; mpq_t* xs = NULL; mpz_t* bz = NULL; int nrhs = 0;
 		mpq_t** corner = (mpq_t**) calloc(card, sizeof(mpq_t*));   /* borrowed from the memo */
 		int c0 = -1;
 		if (trace && idx == R - 1) {
@@ -547,30 +665,44 @@ static int zc_run(const zprob* P, const int* ord, mpq_t g0, mpq_t* g1, mpq_t** g
 				F->sig = sig; F->siglen = sl_len;
 				nfact++;
 				if (F->ncol > nrhs) {
-					for (i = 0; i < nrhs; i++) { mpq_clear(rhs[i]); mpz_clear(bz[i]); }
-					free(rhs); free(bz); nrhs = F->ncol;
+					for (i = 0; i < nrhs; i++) { mpq_clear(rhs[i]); mpq_clear(xs[i]); mpz_clear(bz[i]); }
+					free(rhs); free(xs); free(bz); nrhs = F->ncol;
 					rhs = (mpq_t*) malloc((nrhs ? nrhs : 1) * sizeof(mpq_t));
 					bz = (mpz_t*) malloc((nrhs ? nrhs : 1) * sizeof(mpz_t));
-					for (i = 0; i < nrhs; i++) { mpq_init(rhs[i]); mpz_init(bz[i]); }
+					xs = (mpq_t*) malloc((nrhs ? nrhs : 1) * sizeof(mpq_t));
+					for (i = 0; i < nrhs; i++) { mpq_init(rhs[i]); mpq_init(xs[i]); mpz_init(bz[i]); }
 				}
 			} else free(sig);
 			int n = F->ncol, j;
 			for (i = 0; i < n; i++) row_rhs(P, ord, r, C, cur, prev, &F->row[i], rhs[i]);
-			/* x = inv * rhs as integer dot products over common denominators */
-			mpz_set_ui(db, 1);
-			for (j = 0; j < n; j++) mpz_lcm(db, db, mpq_denref(rhs[j]));
-			for (j = 0; j < n; j++) { mpz_divexact(bz[j], db, mpq_denref(rhs[j])); mpz_mul(bz[j], bz[j], mpq_numref(rhs[j])); }
+			/* block back-substitution: per block, subtract the terms on the
+			 * columns of earlier blocks, then apply the block inverse as
+			 * integer dot products over a common denominator */
+			int bb;
+			for (bb = 0; bb < F->nblk; bb++) {
+				int s0 = F->bstart[bb], bs = F->bstart[bb + 1] - s0, u, q;
+				for (u = 0; u < bs; u++) {
+					int ro = F->brow[s0 + u];
+					for (q = 0; q < F->offn[ro]; q++) { mpq_mul(w, F->offc[ro][q], xs[F->offq[ro][q]]); mpq_sub(rhs[ro], rhs[ro], w); }
+				}
+				mpz_set_ui(db, 1);
+				for (u = 0; u < bs; u++) mpz_lcm(db, db, mpq_denref(rhs[F->brow[s0 + u]]));
+				for (u = 0; u < bs; u++) { mpq_t* rr = &rhs[F->brow[s0 + u]]; mpz_divexact(bz[u], db, mpq_denref(*rr)); mpz_mul(bz[u], bz[u], mpq_numref(*rr)); }
+				for (u = 0; u < bs; u++) {
+					mpz_set_ui(acc, 0);
+					const mpz_t* row = F->biz[bb] + (size_t) u * bs;
+					for (j = 0; j < bs; j++) if (mpz_sgn(bz[j]) && mpz_sgn(row[j])) mpz_addmul(acc, row[j], bz[j]);
+					mpq_t* xv = &xs[F->bcol[s0 + u]];
+					mpz_set(mpq_numref(*xv), acc);
+					mpz_mul(mpq_denref(*xv), F->bden[bb][u], db);
+					mpq_canonicalize(*xv);
+				}
+			}
 			for (i = 0; i < n; i++) {
-				mpz_set_ui(acc, 0);
-				const mpz_t* row = F->iz + (size_t) i * n;
-				for (j = 0; j < n; j++) if (mpz_sgn(bz[j]) && mpz_sgn(row[j])) mpz_addmul(acc, row[j], bz[j]);
-				mpz_set(mpq_numref(v), acc);
-				mpz_mul(mpq_denref(v), F->den[i], db);
-				mpq_canonicalize(v);
 				if (!F->det[i]) continue;
 				int id = F->col[i];
-				if (id >= M * card) { mpq_set(cur->G[id - M * card], v); cur->kG[id - M * card] = 1; }
-				else { mpq_set(cur->X[id], v); cur->kX[id] = 1; }
+				if (id >= M * card) { mpq_set(cur->G[id - M * card], xs[i]); cur->kG[id - M * card] = 1; }
+				else { mpq_set(cur->X[id], xs[i]); cur->kX[id] = 1; }
 			}
 			if (zc_check) {
 				/* every usable row must hold (the chosen ones do by construction) */
@@ -612,8 +744,8 @@ static int zc_run(const zprob* P, const int* ord, mpq_t g0, mpq_t* g1, mpq_t** g
 		}
 		free(corner);
 		zf_free(F);
-		for (i = 0; i < nrhs; i++) { mpq_clear(rhs[i]); mpz_clear(bz[i]); }
-		free(rhs); free(bz); free(rows); free(cpos);
+		for (i = 0; i < nrhs; i++) { mpq_clear(rhs[i]); mpq_clear(xs[i]); mpz_clear(bz[i]); }
+		free(rhs); free(xs); free(bz); free(rows); free(cpos);
 		if (idx == R - 1 && rc == 0) {
 			Clast = C;
 			last = nh[0]; nh[0] = NULL;
